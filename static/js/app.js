@@ -458,7 +458,7 @@ function updatePanel() {
             <div class="vessel-name">
                 ${v.name || 'MMSI ' + v.mmsi}
                 <span class="vessel-type-badge ${typeClass}">${v.ship_category || 'Unknown'}</span>
-                <button class="vessel-toggle ${isVisible ? '' : 'toggled-off'}" data-mmsi="${v.mmsi}" title="${isVisible ? 'Hide from map' : 'Show on map'}">
+                <button class="vessel-toggle ${isVisible ? '' : 'toggled-off'}" data-mmsi="${v.mmsi}" title="${isVisible ? 'Hide from map' : 'Show on map'}" aria-pressed="${isVisible}" aria-label="${isVisible ? 'Hide' : 'Show'} ${v.name || 'MMSI ' + v.mmsi} on map">
                     ${isVisible ? '&#9673;' : '&#9675;'}
                 </button>
             </div>
