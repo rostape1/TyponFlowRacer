@@ -10,6 +10,7 @@ from fastapi.responses import FileResponse
 from database import get_all_vessels, get_vessel_detail, get_vessel_track, get_avg_speed, get_stats
 from currents import get_all_currents
 from sfbofs import get_current_field
+from wind import get_wind_field
 
 logger = logging.getLogger(__name__)
 
@@ -43,6 +44,12 @@ app.mount("/static", StaticFiles(directory=static_dir), name="static")
 @app.get("/")
 async def index():
     return FileResponse(static_dir / "index.html")
+
+
+@app.get("/sw.js")
+async def service_worker():
+    """Serve SW from root so it can control the whole site."""
+    return FileResponse(static_dir / "sw.js", media_type="application/javascript")
 
 
 @app.get("/api/vessels")
@@ -86,6 +93,14 @@ async def api_current_field():
     if field:
         return field
     return {"error": "SFBOFS data not available"}
+
+
+@app.get("/api/wind-field")
+async def api_wind_field():
+    field = await get_wind_field()
+    if field:
+        return field
+    return {"error": "Wind data not available"}
 
 
 @app.websocket("/ws")

@@ -4,6 +4,11 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>AIS Tracker</title>
+    <link rel="manifest" href="/static/manifest.json">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="theme-color" content="#0a1628">
+    <link rel="apple-touch-icon" href="/static/icons/icon-192.png">
     <!-- Try local Leaflet first, fall back to CDN -->
     <link rel="stylesheet" href="/static/lib/leaflet.css"
           onerror="this.onerror=null;this.href='https://unpkg.com/leaflet@1.9.4/dist/leaflet.css'" />
@@ -18,6 +23,7 @@
         <span id="vessel-count">0 vessels</span>
         <span id="message-count">0 messages</span>
         <button id="flow-toggle" title="Toggle tidal flow animation">Flow: ON</button>
+        <button id="wind-toggle" title="Toggle wind overlay">Wind: OFF</button>
     </div>
 
     <!-- Current flow legend -->
@@ -30,12 +36,23 @@
         <div class="flow-legend-source" id="flow-legend-source"></div>
     </div>
 
+    <!-- Wind speed legend -->
+    <div id="wind-legend">
+        <div class="wind-legend-title">Wind Speed (kn)</div>
+        <div class="wind-legend-bar" id="wind-legend-bar"></div>
+        <div class="wind-legend-labels">
+            <span>0</span><span>8</span><span>15</span><span>25</span><span>35+</span>
+        </div>
+        <div class="wind-legend-source" id="wind-legend-source"></div>
+    </div>
+
     <!-- Own vessel arrow legend -->
     <div id="arrow-legend">
         <div class="arrow-legend-title">OWN VESSEL</div>
         <div class="arrow-legend-row"><span class="arrow-swatch" style="background:#ffffff"></span> Heading</div>
         <div class="arrow-legend-row"><span class="arrow-swatch" style="background:#2ecc71"></span> COG</div>
         <div class="arrow-legend-row"><span class="arrow-swatch" style="background:#00d4ff"></span> Tide</div>
+        <div class="arrow-legend-row"><span class="arrow-swatch" style="background:#aa46be"></span> Wind</div>
     </div>
 
     <!-- Side panel -->
@@ -70,7 +87,13 @@
 
         loadScript('/static/lib/leaflet.js', 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.js')
             .then(() => loadScript('/static/js/tidal-flow.js'))
+            .then(() => loadScript('/static/js/wind-overlay.js'))
             .then(() => loadScript('/static/js/app.js'));
+
+        // Register service worker for PWA
+        if ('serviceWorker' in navigator) {
+            navigator.serviceWorker.register('/sw.js');
+        }
     </script>
 </body>
 </html>

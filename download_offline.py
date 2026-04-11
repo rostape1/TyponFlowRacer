@@ -176,6 +176,7 @@ def main():
     download_leaflet()
     download_tiles(bounds, zoom_min, zoom_max)
     download_currents()
+    download_wind()
 
     print(f"\nOffline assets saved to: {STATIC_DIR}")
     print("The app will automatically use local tiles when available.")
@@ -233,3 +234,121 @@ def download_currents():
 
 if __name__ == "__main__":
     main()
+
+
+# --- Wind data offline cache ---
+
+WIND_GRID_NX = 7
+WIND_GRID_NY = 8
+WIND_BOUNDS = (37.40, -122.65, 38.05, -122.10)  # south, west, north, east
+
+OPEN_METEO_URL = (
+    "https://api.open-meteo.com/v1/forecast"
+    "?latitude={lat}&longitude={lon}"
+    "&current=wind_speed_10m,wind_direction_10m,wind_gusts_10m"
+    "&models=gfs_seamless"
+    "&wind_speed_unit=kn"
+)
+
+NDBC_STATIONS_OFFLINE = {
+    "FTPC1": {"name": "Fort Point", "lat": 37.8060, "lon": -122.4659},
+    "RCMC1": {"name": "Richmond", "lat": 37.9228, "lon": -122.4098},
+    "AAMC1": {"name": "Alameda", "lat": 37.7717, "lon": -122.2992},
+    "OKXC1": {"name": "Oakland", "lat": 37.8067, "lon": -122.3340},
+    "PPXC1": {"name": "Point Potrero", "lat": 37.9078, "lon": -122.3728},
+}
+
+NDBC_REALTIME_URL = "https://www.ndbc.noaa.gov/data/realtime2/{station}.txt"
+
+
+def download_wind():
+    """Download wind grid from Open-Meteo and NDBC station data for offline use."""
+    import math
+
+    data_dir = os.path.join(STATIC_DIR, "data")
+    os.makedirs(data_dir, exist_ok=True)
+
+    # --- Grid from Open-Meteo ---
+    print("\nDownloading wind grid from Open-Meteo (HRRR)...")
+    south, west, north, east = WIND_BOUNDS
+    lats = [south + i * (north - south) / (WIND_GRID_NY - 1) for i in range(WIND_GRID_NY)]
+    lons = [west + i * (east - west) / (WIND_GRID_NX - 1) for i in range(WIND_GRID_NX)]
+
+    u_grid = [[0.0] * WIND_GRID_NX for _ in range(WIND_GRID_NY)]
+    v_grid = [[0.0] * WIND_GRID_NX for _ in range(WIND_GRID_NY)]
+    gust_grid = [[0.0] * WIND_GRID_NX for _ in range(WIND_GRID_NY)]
+    success = 0
+
+    for iy, lat in enumerate(lats):
+        for ix, lon in enumerate(lons):
+            url = OPEN_METEO_URL.format(lat=lat, lon=lon)
+            try:
+                req = urllib.request.Request(url, headers={"User-Agent": "AIS-Tracker-Offline/1.0"})
+                with urllib.request.urlopen(req, timeout=15) as resp:
+                    data = json.loads(resp.read().decode("utf-8"))
+                current = data.get("current", {})
+                speed_kn = current.get("wind_speed_10m", 0) or 0
+                direction = current.get("wind_direction_10m", 0) or 0
+                gust_kn = current.get("wind_gusts_10m", 0) or 0
+
+                dir_rad = direction * math.pi / 180
+                u_grid[iy][ix] = round(-speed_kn * math.sin(dir_rad), 2)
+                v_grid[iy][ix] = round(-speed_kn * math.cos(dir_rad), 2)
+                gust_grid[iy][ix] = round(gust_kn, 1)
+                success += 1
+            except Exception:
+                pass
+
+    if success > 0:
+        grid_data = {
+            "bounds": {"south": south, "north": north, "west": west, "east": east},
+            "nx": WIND_GRID_NX, "ny": WIND_GRID_NY,
+            "model": "HRRR 3km",
+            "source": "Open-Meteo (NOAA HRRR)",
+            "fetched_at": time.strftime("%Y-%m-%d %H:%M UTC", time.gmtime()),
+            "u": u_grid, "v": v_grid, "gusts": gust_grid,
+        }
+        dest = os.path.join(data_dir, "wind_field.json")
+        with open(dest, "w") as f:
+            json.dump(grid_data, f)
+        print(f"  ✓ Wind grid: {success}/{WIND_GRID_NX * WIND_GRID_NY} points")
+    else:
+        print("  ✗ Wind grid: no data retrieved")
+
+    # --- NDBC stations ---
+    print("Downloading NDBC station observations...")
+    stations = []
+    for station_id, info in NDBC_STATIONS_OFFLINE.items():
+        url = NDBC_REALTIME_URL.format(station=station_id)
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": "AIS-Tracker-Offline/1.0"})
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                text = resp.read().decode("utf-8")
+            lines = text.strip().split("\n")
+            if len(lines) < 3:
+                continue
+            header = lines[0].replace("#", "").split()
+            data_line = lines[2].split()
+            col = {h: i for i, h in enumerate(header)}
+            wspd = data_line[col["WSPD"]]
+            wdir = data_line[col["WDIR"]]
+            gst = data_line[col.get("GST", -1)] if "GST" in col else "MM"
+            if wspd == "MM" or wdir == "MM":
+                continue
+            stations.append({
+                "id": station_id, "name": info["name"],
+                "lat": info["lat"], "lon": info["lon"],
+                "speed_kn": round(float(wspd) * 1.94384, 1),
+                "gust_kn": round(float(gst) * 1.94384, 1) if gst != "MM" else None,
+                "direction": float(wdir),
+                "timestamp": time.strftime("%Y-%m-%dT%H:%MZ", time.gmtime()),
+            })
+            print(f"  ✓ {info['name']} ({station_id})")
+        except Exception as e:
+            print(f"  ✗ {info['name']} ({station_id}): {e}")
+
+    if stations:
+        dest = os.path.join(data_dir, "wind_stations.json")
+        with open(dest, "w") as f:
+            json.dump(stations, f, indent=2)
+        print(f"  {len(stations)} stations saved")

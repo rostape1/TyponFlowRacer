@@ -115,8 +115,14 @@ class TidalFlowOverlay {
     _initCanvas() {
         this.canvas = document.createElement('canvas');
         this.canvas.id = 'tidal-flow-canvas';
-        this.canvas.style.cssText = 'position:absolute;top:0;left:0;z-index:400;pointer-events:none;opacity:0.8;';
-        this.map.getContainer().appendChild(this.canvas);
+        this.canvas.style.cssText = 'position:absolute;top:0;left:0;pointer-events:none;opacity:0.8;';
+        // Place inside Leaflet's overlay pane so it sits below markers/popups
+        const pane = this.map.getPane('overlayPane');
+        if (pane) {
+            pane.appendChild(this.canvas);
+        } else {
+            this.map.getContainer().appendChild(this.canvas);
+        }
         this.ctx = this.canvas.getContext('2d');
         this._resize();
     }

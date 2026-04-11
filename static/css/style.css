@@ -12,6 +12,15 @@ body {
     height: 100vh;
 }
 
+/* Ensure popups render above wind/tidal canvases */
+.leaflet-popup-pane {
+    z-index: 800 !important;
+}
+
+.leaflet-tooltip-pane {
+    z-index: 801 !important;
+}
+
 /* Map fills the entire viewport */
 #map {
     position: absolute;
@@ -72,7 +81,6 @@ body {
     padding: 2px 8px;
     border-radius: 3px;
     cursor: pointer;
-    margin-left: auto;
     transition: all 0.2s;
 }
 
@@ -81,6 +89,27 @@ body {
 }
 
 #flow-toggle.flow-off {
+    background: rgba(100, 100, 100, 0.2);
+    border-color: rgba(100, 100, 100, 0.3);
+    color: #7a8fa6;
+}
+
+#wind-toggle {
+    background: rgba(170, 70, 190, 0.2);
+    border: 1px solid rgba(170, 70, 190, 0.3);
+    color: #bb8fce;
+    font-size: 11px;
+    padding: 2px 8px;
+    border-radius: 3px;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+#wind-toggle:hover {
+    background: rgba(170, 70, 190, 0.3);
+}
+
+#wind-toggle.wind-off {
     background: rgba(100, 100, 100, 0.2);
     border-color: rgba(100, 100, 100, 0.3);
     color: #7a8fa6;
@@ -322,11 +351,67 @@ body {
     padding-top: 4px;
 }
 
+/* Wind speed legend */
+#wind-legend {
+    position: fixed;
+    bottom: 120px;
+    left: 12px;
+    z-index: 1000;
+    background: rgba(10, 22, 40, 0.88);
+    backdrop-filter: blur(8px);
+    border: 1px solid rgba(170, 70, 190, 0.2);
+    border-radius: 6px;
+    padding: 8px 10px;
+    font-size: 10px;
+    color: #7a8fa6;
+    display: none;
+}
+
+#wind-legend.visible {
+    display: block;
+}
+
+.wind-legend-title {
+    font-size: 10px;
+    color: #bb8fce;
+    margin-bottom: 4px;
+    font-weight: 600;
+}
+
+.wind-legend-bar {
+    width: 160px;
+    height: 10px;
+    border-radius: 3px;
+    margin-bottom: 3px;
+}
+
+.wind-legend-labels {
+    display: flex;
+    justify-content: space-between;
+    font-size: 9px;
+    color: #5a7a9a;
+    width: 160px;
+}
+
+.wind-legend-source {
+    margin-top: 5px;
+    font-size: 9px;
+    color: #4a6a8a;
+    border-top: 1px solid rgba(170, 70, 190, 0.1);
+    padding-top: 4px;
+}
+
+/* Wind station icons */
+.wind-station-icon {
+    background: none !important;
+    border: none !important;
+}
+
 /* Own vessel arrow legend */
 #arrow-legend {
     position: fixed;
     bottom: 36px;
-    left: 200px;
+    left: 202px;
     z-index: 1000;
     background: rgba(10, 22, 40, 0.88);
     backdrop-filter: blur(8px);
@@ -365,6 +450,10 @@ body {
 }
 
 /* Vessel popup styling */
+.vessel-popup {
+    z-index: 10000 !important;
+}
+
 .vessel-popup .leaflet-popup-content-wrapper {
     background: rgba(10, 22, 40, 0.95);
     color: #c8d6e5;
@@ -466,6 +555,11 @@ body {
     }
 
     #flow-toggle {
+        font-size: 12px;
+        padding: 6px 10px;
+    }
+
+    #wind-toggle {
         font-size: 12px;
         padding: 6px 10px;
     }

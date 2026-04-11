@@ -172,6 +172,17 @@ function createVesselIcon(vessel) {
         }
     }
 
+    // Get wind at own vessel position
+    let windDeg = null;
+    let windSpeed = 0;
+    if (windOverlay && vessel.lat != null) {
+        const w = windOverlay.interpolateAt(vessel.lat, vessel.lon);
+        if (w && w.speed > 0.5) {
+            windDeg = w.dir;
+            windSpeed = w.speed;
+        }
+    }
+
     // Arrow line builder: from center outward at given angle
     const arrowLen = 55;
     function arrowAt(deg, len) {
@@ -203,6 +214,11 @@ function createVesselIcon(vessel) {
     if (tideDeg != null) {
         const tideLen = Math.min(arrowLen, Math.max(25, tideSpeed * 20));
         arrows += `<g class="own-arrow-tide" stroke="#00d4ff" fill="#00d4ff" stroke-width="1.5" opacity="0.85">${arrowAt(tideDeg, tideLen)}</g>`;
+    }
+    // 4. Wind arrow (purple, dashed) — wind direction
+    if (windDeg != null) {
+        const windLen = Math.min(arrowLen, Math.max(25, windSpeed * 2.5));
+        arrows += `<g class="own-arrow-wind" stroke="#aa46be" fill="#aa46be" stroke-width="1.5" stroke-dasharray="4 2" opacity="0.8">${arrowAt(windDeg, windLen)}</g>`;
     }
 
     const svg = `<svg width="${ownSize}" height="${ownSize}" viewBox="0 0 ${ownSize} ${ownSize}" xmlns="http://www.w3.org/2000/svg">
@@ -330,6 +346,18 @@ function buildPopupHtml(v) {
         }
     }
 
+    // Get wind at vessel position (for all vessels)
+    let windStr = '—';
+    if (windOverlay && v.lat != null) {
+        const w = windOverlay.interpolateAt(v.lat, v.lon);
+        if (w && w.speed > 0.5) {
+            windStr = w.speed.toFixed(1) + ' kn / ' + w.dir.toFixed(0) + '°';
+            if (w.gust > w.speed + 1) {
+                windStr += ' (G' + w.gust.toFixed(0) + ')';
+            }
+        }
+    }
+
     return `<div class="popup-content">
         <h3>${v.name || 'MMSI ' + v.mmsi}${v.mmsi === OWN_MMSI ? ' (You)' : ''}</h3>
         <div class="popup-row"><span class="popup-label">MMSI</span><span class="popup-value">${v.mmsi}</span></div>
@@ -337,6 +365,7 @@ function buildPopupHtml(v) {
         <div class="popup-row"><span class="popup-label">SOG</span><span class="popup-value">${v.sog != null ? v.sog.toFixed(1) + ' kn' : '—'}</span></div>
         <div class="popup-row"><span class="popup-label">COG</span><span class="popup-value">${v.cog != null ? v.cog.toFixed(0) + '°' : '—'}</span></div>
         ${v.mmsi === OWN_MMSI ? `<div class="popup-row"><span class="popup-label">Tide</span><span class="popup-value" style="color:#00d4ff">${tideStr}</span></div>` : ''}
+        <div class="popup-row"><span class="popup-label">Wind</span><span class="popup-value" style="color:#aa46be">${windStr}</span></div>
         <div class="popup-row"><span class="popup-label">Avg Speed</span><span class="popup-value">${v.avg_speed != null ? v.avg_speed + ' kn' : '—'}</span></div>
         <div class="popup-row"><span class="popup-label">Distance</span><span class="popup-value">${dist}</span></div>
         <div class="popup-row"><span class="popup-label">Bearing</span><span class="popup-value">${bearing}</span></div>
@@ -391,8 +420,8 @@ function buildSpeedChart(points, color) {
     }
 
     // Time labels
-    const startLabel = new Date(minTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-    const endLabel = new Date(maxTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    const startLabel = new Date(minTime).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Los_Angeles' });
+    const endLabel = new Date(maxTime).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Los_Angeles' });
 
     return `<svg width="${W}" height="${H + 14}" viewBox="0 0 ${W} ${H + 14}">
         <!-- Grid lines -->
@@ -820,7 +849,7 @@ async function loadCurrentField() {
         if (legend) legend.classList.add('visible');
         if (source) {
             const src = data.source || 'NOAA Stations';
-            const time = data.fetched_at || '';
+            const time = data.fetched_at ? new Date(data.fetched_at.replace(' UTC', 'Z')).toLocaleString('en-US', { hour: '2-digit', minute: '2-digit', timeZoneName: 'short', timeZone: 'America/Los_Angeles' }) : '';
             source.textContent = `${src} · ${time}`;
         }
     } catch (e) {
@@ -848,3 +877,91 @@ document.getElementById('flow-toggle').addEventListener('click', () => {
         if (legend) legend.classList.add('visible');
     }
 });
+
+// --- Wind Overlay ---
+let windOverlay = null;
+let windStationMarkers = null;
+
+if (typeof WindOverlay !== 'undefined') {
+    windOverlay = new WindOverlay(map, {
+        particleCount: 800,
+        particleAge: 120,
+        speedFactor: 0.001,
+        fadeOpacity: 0.96,
+        lineWidth: 1.5,
+    });
+    // Start OFF by default — wind is opt-in
+}
+
+if (typeof WindStationMarkers !== 'undefined') {
+    windStationMarkers = new WindStationMarkers(map);
+}
+
+// Wind legend gradient
+function initWindLegend() {
+    const bar = document.getElementById('wind-legend-bar');
+    if (bar) {
+        bar.style.background = 'linear-gradient(to right, rgb(100,100,140), rgb(130,90,170), rgb(170,70,190), rgb(210,110,200), rgb(235,180,215), rgb(255,255,255))';
+    }
+}
+initWindLegend();
+
+async function loadWindField() {
+    try {
+        const res = await fetch('/api/wind-field');
+        if (!res.ok) return;
+        const data = await res.json();
+        if (data.error) {
+            console.log('Wind data not available:', data.error);
+            return;
+        }
+
+        // Feed grid to wind overlay
+        if (windOverlay && data.grid) {
+            windOverlay.setGrid(data.grid);
+        }
+
+        // Feed stations to markers
+        if (windStationMarkers && data.stations) {
+            windStationMarkers.setStations(data.stations);
+        }
+
+        // Update wind legend source text
+        const source = document.getElementById('wind-legend-source');
+        if (source && data.grid) {
+            const src = data.grid.source || 'HRRR';
+            const time = data.grid.fetched_at ? new Date(data.grid.fetched_at.replace(' UTC', 'Z')).toLocaleString('en-US', { hour: '2-digit', minute: '2-digit', timeZoneName: 'short', timeZone: 'America/Los_Angeles' }) : '';
+            const stationCount = data.stations ? data.stations.length : 0;
+            source.textContent = `${src} · ${time} · ${stationCount} stations`;
+        }
+    } catch (e) {
+        console.log('Wind field fetch failed (optional)');
+    }
+}
+
+// Load wind data on startup and refresh every 5 minutes
+loadWindField();
+setInterval(loadWindField, 300000);
+
+// Wind toggle button
+const windToggleBtn = document.getElementById('wind-toggle');
+if (windToggleBtn) {
+    windToggleBtn.classList.add('wind-off');  // Start OFF
+    windToggleBtn.addEventListener('click', () => {
+        const legend = document.getElementById('wind-legend');
+        const isOn = windOverlay && windOverlay.animating;
+        if (isOn) {
+            if (windOverlay) windOverlay.stop();
+            if (windStationMarkers) windStationMarkers.hide();
+            windToggleBtn.textContent = 'Wind: OFF';
+            windToggleBtn.classList.add('wind-off');
+            if (legend) legend.classList.remove('visible');
+        } else {
+            if (windOverlay) windOverlay.start();
+            if (windStationMarkers) windStationMarkers.show();
+            windToggleBtn.textContent = 'Wind: ON';
+            windToggleBtn.classList.remove('wind-off');
+            if (legend) legend.classList.add('visible');
+        }
+    });
+}
