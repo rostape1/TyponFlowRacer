@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AIS Tracker</title>
+    <!-- Try local Leaflet first, fall back to CDN -->
+    <link rel="stylesheet" href="/static/lib/leaflet.css"
+          onerror="this.onerror=null;this.href='https://unpkg.com/leaflet@1.9.4/dist/leaflet.css'" />
+    <link rel="stylesheet" href="/static/css/style.css" />
+</head>
+<body>
+    <div id="map"></div>
+
+    <!-- Status bar -->
+    <div id="status-bar">
+        <span id="connection-status" class="status-disconnected">Disconnected</span>
+        <span id="vessel-count">0 vessels</span>
+        <span id="message-count">0 messages</span>
+        <button id="flow-toggle" title="Toggle tidal flow animation">Flow: ON</button>
+    </div>
+
+    <!-- Side panel -->
+    <div id="panel">
+        <div id="panel-header">
+            <h2>Vessels</h2>
+            <button id="panel-toggle" title="Collapse">&lsaquo;</button>
+        </div>
+        <div id="vessel-list"></div>
+    </div>
+
+    <!-- Try local Leaflet first, fall back to CDN -->
+    <script>
+        function loadScript(src, fallback) {
+            return new Promise((resolve) => {
+                const s = document.createElement('script');
+                s.src = src;
+                s.onload = resolve;
+                s.onerror = () => {
+                    if (fallback) {
+                        const f = document.createElement('script');
+                        f.src = fallback;
+                        f.onload = resolve;
+                        document.head.appendChild(f);
+                    } else {
+                        resolve();
+                    }
+                };
+                document.head.appendChild(s);
+            });
+        }
+
+        loadScript('/static/lib/leaflet.js', 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.js')
+            .then(() => loadScript('/static/js/tidal-flow.js'))
+            .then(() => loadScript('/static/js/app.js'));
+    </script>
+</body>
+</html>

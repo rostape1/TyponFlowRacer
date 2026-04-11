@@ -1,0 +1,369 @@
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+    background: #0a1628;
+    color: #c8d6e5;
+    overflow: hidden;
+    height: 100vh;
+}
+
+/* Map fills the entire viewport */
+#map {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 1;
+}
+
+/* Status bar at bottom */
+#status-bar {
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    z-index: 1000;
+    display: flex;
+    gap: 20px;
+    padding: 6px 16px;
+    background: rgba(10, 22, 40, 0.92);
+    backdrop-filter: blur(8px);
+    border-top: 1px solid rgba(100, 150, 200, 0.15);
+    font-size: 12px;
+    color: #7a8fa6;
+}
+
+#status-bar span {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.status-connected::before,
+.status-disconnected::before {
+    content: '';
+    display: inline-block;
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+}
+
+.status-connected::before {
+    background: #27ae60;
+    box-shadow: 0 0 6px #27ae60;
+}
+
+.status-disconnected::before {
+    background: #e74c3c;
+    box-shadow: 0 0 6px #e74c3c;
+}
+
+#flow-toggle {
+    background: rgba(60, 160, 220, 0.2);
+    border: 1px solid rgba(60, 160, 220, 0.3);
+    color: #5dade2;
+    font-size: 11px;
+    padding: 2px 8px;
+    border-radius: 3px;
+    cursor: pointer;
+    margin-left: auto;
+    transition: all 0.2s;
+}
+
+#flow-toggle:hover {
+    background: rgba(60, 160, 220, 0.3);
+}
+
+#flow-toggle.flow-off {
+    background: rgba(100, 100, 100, 0.2);
+    border-color: rgba(100, 100, 100, 0.3);
+    color: #7a8fa6;
+}
+
+/* Side panel */
+#panel {
+    position: fixed;
+    top: 0;
+    right: 0;
+    width: 340px;
+    height: 100vh;
+    z-index: 1000;
+    background: rgba(10, 22, 40, 0.94);
+    backdrop-filter: blur(12px);
+    border-left: 1px solid rgba(100, 150, 200, 0.12);
+    display: flex;
+    flex-direction: column;
+    transition: transform 0.3s ease;
+    padding-bottom: 32px;
+}
+
+#panel.collapsed {
+    transform: translateX(300px);
+}
+
+#panel-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 16px;
+    border-bottom: 1px solid rgba(100, 150, 200, 0.1);
+}
+
+#panel-header h2 {
+    font-size: 15px;
+    font-weight: 600;
+    color: #e2e8f0;
+    letter-spacing: 0.5px;
+    text-transform: uppercase;
+}
+
+#panel-toggle {
+    background: none;
+    border: 1px solid rgba(100, 150, 200, 0.2);
+    color: #7a8fa6;
+    font-size: 16px;
+    cursor: pointer;
+    padding: 4px 8px;
+    border-radius: 4px;
+    transition: all 0.2s;
+}
+
+#panel-toggle:hover {
+    background: rgba(100, 150, 200, 0.1);
+    color: #e2e8f0;
+}
+
+#vessel-list {
+    flex: 1;
+    overflow-y: auto;
+    padding: 8px;
+}
+
+/* Vessel card */
+.vessel-card {
+    padding: 10px 12px;
+    margin-bottom: 4px;
+    border-radius: 6px;
+    cursor: pointer;
+    transition: background 0.15s;
+    border-left: 3px solid transparent;
+}
+
+.vessel-card:hover {
+    background: rgba(100, 150, 200, 0.08);
+}
+
+.vessel-card.own-vessel {
+    border-left-color: #f39c12;
+    background: rgba(243, 156, 18, 0.06);
+}
+
+.vessel-card.stale {
+    opacity: 0.45;
+}
+
+.vessel-name {
+    font-size: 13px;
+    font-weight: 600;
+    color: #e2e8f0;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.vessel-type-badge {
+    font-size: 9px;
+    font-weight: 500;
+    padding: 1px 5px;
+    border-radius: 3px;
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+}
+
+/* Vessel visibility toggle */
+.vessel-toggle {
+    margin-left: auto;
+    background: none;
+    border: 1px solid rgba(100, 150, 200, 0.2);
+    color: #5dade2;
+    font-size: 14px;
+    line-height: 1;
+    width: 22px;
+    height: 22px;
+    border-radius: 4px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.2s;
+    flex-shrink: 0;
+}
+
+.vessel-toggle:hover {
+    background: rgba(100, 150, 200, 0.15);
+    border-color: rgba(100, 150, 200, 0.4);
+}
+
+.vessel-toggle.toggled-off {
+    color: #4a5568;
+    border-color: rgba(100, 100, 100, 0.2);
+}
+
+.vessel-card.vessel-hidden {
+    opacity: 0.5;
+}
+
+.vessel-card.vessel-hidden .vessel-name,
+.vessel-card.vessel-hidden .vessel-meta {
+    text-decoration: line-through;
+    text-decoration-color: rgba(100, 150, 200, 0.3);
+}
+
+.vessel-meta {
+    display: flex;
+    gap: 14px;
+    margin-top: 4px;
+    font-size: 11px;
+    color: #5a7a9a;
+}
+
+.vessel-meta span {
+    display: flex;
+    align-items: center;
+    gap: 3px;
+}
+
+.vessel-cpa {
+    margin-top: 3px;
+    font-size: 10px;
+    color: #5a7a9a;
+}
+
+/* CPA/TCPA warning colors */
+.cpa-warn {
+    color: #f39c12 !important;
+    font-weight: 600;
+}
+
+.cpa-danger {
+    color: #e74c3c !important;
+    font-weight: 700;
+    text-transform: uppercase;
+    animation: cpa-blink 1s ease-in-out infinite;
+}
+
+@keyframes cpa-blink {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.5; }
+}
+
+/* Type badge colors */
+.type-sailing { background: rgba(52, 152, 219, 0.2); color: #5dade2; }
+.type-cargo { background: rgba(46, 204, 113, 0.2); color: #58d68d; }
+.type-tanker { background: rgba(231, 76, 60, 0.2); color: #ec7063; }
+.type-passenger { background: rgba(155, 89, 182, 0.2); color: #bb8fce; }
+.type-fishing { background: rgba(241, 196, 15, 0.2); color: #f4d03f; }
+.type-other { background: rgba(149, 165, 166, 0.2); color: #aab7b8; }
+.type-unknown { background: rgba(149, 165, 166, 0.15); color: #85929e; }
+
+/* Vessel popup styling */
+.vessel-popup .leaflet-popup-content-wrapper {
+    background: rgba(10, 22, 40, 0.95);
+    color: #c8d6e5;
+    border-radius: 8px;
+    border: 1px solid rgba(100, 150, 200, 0.2);
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+}
+
+.vessel-popup .leaflet-popup-tip {
+    background: rgba(10, 22, 40, 0.95);
+    border: 1px solid rgba(100, 150, 200, 0.2);
+}
+
+.popup-content {
+    font-size: 12px;
+    min-width: 220px;
+}
+
+.popup-chart {
+    margin-top: 8px;
+    padding-top: 8px;
+    border-top: 1px solid rgba(100, 150, 200, 0.12);
+}
+
+.popup-chart-label {
+    font-size: 10px;
+    color: #5a7a9a;
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+    margin-bottom: 4px;
+}
+
+.popup-chart-loading,
+.popup-chart-empty {
+    font-size: 10px;
+    color: #4a6a8a;
+    font-style: italic;
+    padding: 8px 0;
+}
+
+/* Current arrow icons */
+.current-icon {
+    background: none !important;
+    border: none !important;
+}
+
+.popup-content h3 {
+    font-size: 14px;
+    color: #e2e8f0;
+    margin-bottom: 6px;
+    padding-bottom: 6px;
+    border-bottom: 1px solid rgba(100, 150, 200, 0.15);
+}
+
+.popup-row {
+    display: flex;
+    justify-content: space-between;
+    padding: 2px 0;
+}
+
+.popup-label {
+    color: #5a7a9a;
+}
+
+.popup-value {
+    color: #c8d6e5;
+    font-weight: 500;
+}
+
+/* Scrollbar */
+#vessel-list::-webkit-scrollbar {
+    width: 4px;
+}
+
+#vessel-list::-webkit-scrollbar-thumb {
+    background: rgba(100, 150, 200, 0.2);
+    border-radius: 2px;
+}
+
+/* Responsive */
+@media (max-width: 600px) {
+    #panel {
+        width: 100%;
+        height: 40vh;
+        top: auto;
+        bottom: 32px;
+        border-left: none;
+        border-top: 1px solid rgba(100, 150, 200, 0.12);
+    }
+
+    #panel.collapsed {
+        transform: translateY(calc(40vh - 48px));
+    }
+}

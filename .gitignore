@@ -1,0 +1,14 @@
+# Map tiles (large offline cache)
+static/tiles/
+
+# Database files
+*.db
+*.db-shm
+*.db-wal
+
+# Python
+__pycache__/
+*.pyc
+
+# Claude Code
+.claude/
