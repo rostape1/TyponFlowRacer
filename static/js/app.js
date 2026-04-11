@@ -2,6 +2,7 @@
 const OWN_MMSI = 338361814;
 const TRACK_HOURS = 2;
 const STALE_MINUTES = 10;
+const MAX_VESSELS = 50;
 
 // --- State ---
 const vessels = new Map();       // mmsi → vessel data
@@ -243,38 +244,106 @@ const map = L.map('map', {
     zoomControl: true,
 });
 
+// Click anywhere on map to see tide, wind, distance info
+map.on('click', (e) => {
+    const lat = e.latlng.lat;
+    const lon = e.latlng.lng;
+    let rows = `<div class="popup-row"><span class="popup-label">Position</span><span class="popup-value">${lat.toFixed(5)}°, ${lon.toFixed(5)}°</span></div>`;
+
+    // Tidal current
+    if (typeof tidalFlow !== 'undefined' && tidalFlow) {
+        const tc = tidalFlow._interpolateAt(lat, lon);
+        if (tc && tc.speed > 0.01) {
+            const dir = (Math.atan2(tc.vx, tc.vy) * 180 / Math.PI + 360) % 360;
+            rows += `<div class="popup-row"><span class="popup-label">Current</span><span class="popup-value">${tc.speed.toFixed(2)} kn / ${dir.toFixed(0)}°</span></div>`;
+        } else {
+            rows += `<div class="popup-row"><span class="popup-label">Current</span><span class="popup-value">—</span></div>`;
+        }
+    }
+
+    // Wind
+    if (windOverlay) {
+        const w = windOverlay.interpolateAt(lat, lon);
+        if (w) {
+            const gustStr = w.gust > 0 ? ` (gust ${w.gust.toFixed(0)})` : '';
+            rows += `<div class="popup-row"><span class="popup-label">Wind</span><span class="popup-value">${w.speed.toFixed(1)} kn / ${w.dir.toFixed(0)}°${gustStr}</span></div>`;
+        } else {
+            rows += `<div class="popup-row"><span class="popup-label">Wind</span><span class="popup-value">—</span></div>`;
+        }
+    }
+
+    // Distance & ETA from own vessel
+    if (ownPosition) {
+        const dist = haversineNm(ownPosition.lat, ownPosition.lon, lat, lon);
+        const brg = bearingTo(ownPosition.lat, ownPosition.lon, lat, lon);
+        rows += `<div class="popup-row"><span class="popup-label">Distance</span><span class="popup-value">${dist.toFixed(2)} nm / ${brg.toFixed(0)}°</span></div>`;
+
+        if (ownVessel && ownVessel.sog > 0.5) {
+            const hours = dist / ownVessel.sog;
+            const h = Math.floor(hours);
+            const m = Math.round((hours - h) * 60);
+            rows += `<div class="popup-row"><span class="popup-label">ETA</span><span class="popup-value">${h}h ${m}m @ ${ownVessel.sog.toFixed(1)} kn</span></div>`;
+        }
+    }
+
+    L.popup({ className: 'vessel-popup', maxWidth: 240 })
+        .setLatLng(e.latlng)
+        .setContent(`<div class="popup-content"><h3>Map Info</h3>${rows}</div>`)
+        .openOn(map);
+});
+
 // Tile layers — local tiles with online fallback
-// Local tiles served at /static/tiles/{source}/{z}/{x}/{y}.png
-const osmLayer = L.tileLayer('/static/tiles/osm/{z}/{x}/{y}.png', {
-    attribution: '&copy; OpenStreetMap contributors',
-    maxZoom: 19,
-    errorTileUrl: '',
-});
-
-const darkLayer = L.tileLayer('/static/tiles/dark/{z}/{x}/{y}.png', {
-    attribution: '&copy; CartoDB',
-    maxZoom: 19,
-    errorTileUrl: '',
-});
-
-// Fallback online layers (used if no local tiles exist)
-const osmOnline = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-    attribution: '&copy; OpenStreetMap contributors',
-    maxZoom: 19,
-});
-
+// Tile layers — auto-fallback: try online, switch to offline if no internet
 const darkOnline = L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
     attribution: '&copy; CartoDB',
     maxZoom: 19,
 });
 
-const seaLayer = L.tileLayer('/static/tiles/sea/{z}/{x}/{y}.png', {
+const darkOffline = L.tileLayer('/static/tiles/dark/{z}/{x}/{y}.png', {
+    attribution: '&copy; CartoDB',
+    maxZoom: 19,
+    errorTileUrl: '',
+});
+
+const osmOnline = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    attribution: '&copy; OpenStreetMap contributors',
+    maxZoom: 19,
+});
+
+const osmOffline = L.tileLayer('/static/tiles/osm/{z}/{x}/{y}.png', {
+    attribution: '&copy; OpenStreetMap contributors',
+    maxZoom: 19,
+    errorTileUrl: '',
+});
+
+// Auto-detect: try online tile, fall back to offline if it fails
+let darkLayer, osmLayer;
+function initTileLayers() {
+    return new Promise((resolve) => {
+        const testImg = new Image();
+        testImg.onload = () => {
+            darkLayer = darkOnline;
+            osmLayer = osmOnline;
+            resolve('online');
+        };
+        testImg.onerror = () => {
+            darkLayer = darkOffline;
+            osmLayer = osmOffline;
+            resolve('offline');
+        };
+        testImg.src = 'https://a.basemaps.cartocdn.com/dark_all/10/163/395.png';
+        // Timeout after 3s — assume offline
+        setTimeout(() => { testImg.src = ''; testImg.onerror(); }, 3000);
+    });
+}
+
+const seaOffline = L.tileLayer('/static/tiles/sea/{z}/{x}/{y}.png', {
     attribution: '&copy; OpenSeaMap',
     maxZoom: 18,
     opacity: 0.8,
 });
 
-const seaOnline = L.tileLayer('https://tiles.openseamap.org/seamark/{z}/{x}/{y}.png', {
+const seaLayer = L.tileLayer('https://tiles.openseamap.org/seamark/{z}/{x}/{y}.png', {
     attribution: '&copy; OpenSeaMap',
     maxZoom: 18,
     opacity: 0.8,
@@ -294,25 +363,29 @@ const noaaChartOffline = L.tileLayer('/static/tiles/noaa/{z}/{x}/{y}.png', {
     errorTileUrl: '',
 });
 
-// Default: dark base + sea overlay
-darkLayer.addTo(map);
-seaLayer.addTo(map);
-
 // Current arrows layer group
 currentLayer = L.layerGroup().addTo(map);
 
-L.control.layers({
-    'Dark': darkLayer,
-    'Dark (online)': darkOnline,
-    'NOAA Chart': noaaChart,
-    'NOAA Chart (offline)': noaaChartOffline,
-    'Street': osmLayer,
-    'Street (online)': osmOnline,
-}, {
-    'Nautical Marks': seaLayer,
-    'Nautical Marks (online)': seaOnline,
-    'Currents': currentLayer,
-}, { position: 'topleft' }).addTo(map);
+// Default: dark base + sea overlay (added after auto-detect resolves)
+initTileLayers().then((mode) => {
+    console.log(`Tile mode: ${mode}`);
+    darkLayer.addTo(map);
+    const seaActive = mode === 'online' ? seaLayer : seaOffline;
+    seaActive.addTo(map);
+
+    L.control.layers({
+        'Dark': darkLayer,
+        'Dark (offline)': darkOffline,
+        'NOAA Chart': noaaChart,
+        'NOAA Chart (offline)': noaaChartOffline,
+        'Street': osmLayer,
+        'Street (offline)': osmOffline,
+    }, {
+        'Nautical Marks': seaActive,
+        'Nautical Marks (offline)': seaOffline,
+        'Currents': currentLayer,
+    }, { position: 'topleft' }).addTo(map);
+});
 
 // --- Popup content ---
 function buildPopupHtml(v) {
@@ -550,6 +623,18 @@ function updatePanel() {
         const db = haversineNm(ownPosition.lat, ownPosition.lon, b.lat, b.lon);
         return da - db;
     });
+
+    // Prune vessels beyond MAX_VESSELS — remove farthest from map and data
+    if (vesselArray.length > MAX_VESSELS) {
+        const toPrune = vesselArray.splice(MAX_VESSELS);
+        for (const v of toPrune) {
+            const marker = markers.get(v.mmsi);
+            if (marker) { map.removeLayer(marker); markers.delete(v.mmsi); }
+            const track = trackLines.get(v.mmsi);
+            if (track) { map.removeLayer(track.line); trackLines.delete(v.mmsi); }
+            vessels.delete(v.mmsi);
+        }
+    }
 
     list.innerHTML = vesselArray.map(v => {
         const isOwn = v.mmsi === OWN_MMSI;
@@ -894,17 +979,42 @@ if (typeof WindOverlay !== 'undefined') {
 }
 
 if (typeof WindStationMarkers !== 'undefined') {
-    windStationMarkers = new WindStationMarkers(map);
+    windStationMarkers = new WindStationMarkers(map, windOverlay);
 }
 
 // Wind legend gradient
 function initWindLegend() {
     const bar = document.getElementById('wind-legend-bar');
     if (bar) {
-        bar.style.background = 'linear-gradient(to right, rgb(100,100,140), rgb(130,90,170), rgb(170,70,190), rgb(210,110,200), rgb(235,180,215), rgb(255,255,255))';
+        const scheme = windOverlay ? windOverlay.scheme : 'green';
+        if (scheme === 'purple') {
+            bar.style.background = 'linear-gradient(to right, rgb(140,120,180), rgb(160,100,200), rgb(190,80,220), rgb(220,120,220), rgb(240,190,230), rgb(255,255,255))';
+        } else {
+            bar.style.background = 'linear-gradient(to right, rgb(60,80,30), rgb(80,140,20), rgb(120,200,30), rgb(170,230,50), rgb(210,250,100), rgb(255,255,255))';
+        }
     }
 }
 initWindLegend();
+
+// Wind color scheme toggle
+const windColorToggle = document.getElementById('wind-color-toggle');
+if (windColorToggle) {
+    function updateColorDots() {
+        windColorToggle.querySelectorAll('.color-dot').forEach(dot => {
+            dot.classList.toggle('active', dot.dataset.scheme === (windOverlay ? windOverlay.scheme : 'green'));
+        });
+    }
+    updateColorDots();
+
+    windColorToggle.addEventListener('click', (e) => {
+        const dot = e.target.closest('.color-dot');
+        if (!dot || !windOverlay) return;
+        windOverlay.setColorScheme(dot.dataset.scheme);
+        if (windStationMarkers) windStationMarkers._updateMarkers();
+        initWindLegend();
+        updateColorDots();
+    });
+}
 
 async function loadWindField() {
     try {

@@ -378,6 +378,35 @@ body {
     font-weight: 600;
 }
 
+#wind-color-toggle {
+    display: inline-flex;
+    gap: 4px;
+    margin-left: 4px;
+    vertical-align: middle;
+}
+
+#wind-color-toggle .color-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    display: inline-block;
+    cursor: pointer;
+    opacity: 0.4;
+    border: 1px solid transparent;
+}
+
+#wind-color-toggle .color-dot.active {
+    opacity: 1;
+    border-color: #fff;
+}
+
+#wind-color-toggle .color-dot.green { background: #78c81e; }
+#wind-color-toggle .color-dot.purple { background: #aa46be; }
+
+#wind-color-toggle .color-dot:hover {
+    opacity: 0.8;
+}
+
 .wind-legend-bar {
     width: 160px;
     height: 10px;

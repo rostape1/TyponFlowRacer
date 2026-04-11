@@ -24,7 +24,7 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 STATIC_DIR = os.path.join(SCRIPT_DIR, "static")
 
 # SF Bay default bounds
-DEFAULT_BOUNDS = (37.65, -122.60, 37.95, -122.30)
+DEFAULT_BOUNDS = (37.44, -122.52, 37.95, -122.15)
 DEFAULT_ZOOM_RANGE = (10, 15)
 
 # Tile sources

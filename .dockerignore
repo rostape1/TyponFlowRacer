@@ -1,0 +1,12 @@
+.git
+.claude
+.env
+__pycache__
+*.db
+*.db-shm
+*.db-wal
+static/tiles
+.gitignore
+README.md
+fly.toml
+Dockerfile

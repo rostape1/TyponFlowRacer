@@ -1,15 +1,20 @@
 # AIS Tracker
 
-A lightweight AIS vessel tracker for sailboats. Connects to a WiFi AIS receiver, decodes NMEA messages, stores vessel data in SQLite, and displays everything on an interactive nautical map.
+A lightweight AIS vessel tracker for sailboats. Connects to a WiFi AIS receiver, decodes NMEA messages, stores vessel data in SQLite, and displays everything on an interactive nautical map. Also works without hardware via AISstream.io cloud AIS data.
 
 ## Features
 
 - Real-time vessel tracking via AIS with WebSocket updates
+- **Multiple AIS data sources** — local receiver, AISstream.io cloud, or demo mode (auto-detects)
 - Interactive dark-themed nautical map (Leaflet) with multiple tile layers (CartoDB, OSM, NOAA charts, OpenSeaMap)
+- **Auto-detect online/offline** — uses CDN tiles when online, falls back to local cache when offline
 - **Per-vessel visibility toggles** — show/hide individual vessels on the map from the side panel
+- **50 closest vessels** cap — keeps the map clean when using cloud AIS data
 - CPA/TCPA collision risk warnings with color-coded alerts
 - Speed history charts (2-hour track) with acceleration/deceleration coloring
 - **High-resolution tidal current visualization** powered by NOAA SFBOFS hydrodynamic model (see below)
+- **Wind overlay** with animated particles from HRRR model
+- **PWA support** — installable on iPhone/iPad via "Add to Home Screen" for full-screen native feel
 - Offline-capable with locally cached map tiles and current data
 - Demo mode with simulated vessel movements in SF Bay
 
@@ -18,17 +23,33 @@ A lightweight AIS vessel tracker for sailboats. Connects to a WiFi AIS receiver,
 ```bash
 pip install -r requirements.txt
 
+# Auto mode (tries local AIS receiver, falls back to AISstream.io)
+python main.py
+
 # Demo mode (simulated vessels in SF Bay)
 python main.py --demo
 
-# Live mode (connects to AIS receiver)
-python main.py
+# Force local AIS receiver only
+python main.py --local
+
+# Force cloud AIS only (aisstream.io)
+python main.py --aisstream
 
 # Verbose vessel logging (shows every position update)
-python main.py --demo --verbose
+python main.py --verbose
 ```
 
 Then open **http://localhost:8888**
+
+### AISstream.io Setup
+
+For cloud AIS data (no hardware needed), get a free API key at [aisstream.io](https://aisstream.io) and add it to `.env`:
+
+```
+AISSTREAM_API_KEY=your_key_here
+```
+
+The app loads `.env` automatically. In auto mode (no flags), it tries the local AIS receiver first and falls back to AISstream.io if the key is set.
 
 ## Tidal Current Visualization
 
@@ -60,7 +81,9 @@ Edit `config.py` or set environment variables:
 |---------|---------|---------|
 | AIS Receiver IP | 192.168.47.10 | `AIS_HOST` |
 | AIS Receiver Port | 10110 | `AIS_PORT` |
+| AISstream API Key | (none) | `AISSTREAM_API_KEY` |
 | Own MMSI | 338361814 | `OWN_MMSI` |
+| Server Host | 127.0.0.1 | `SERVER_HOST` |
 | Server Port | 8888 | `SERVER_PORT` |
 | Database Path | ~/.ais_tracker/ais_tracker.db | `DB_PATH` |
 
@@ -76,11 +99,15 @@ ls -lh ~/ais_tracker.db
 ## Architecture
 
 ```
-AIS Receiver (WiFi TCP/UDP) → ais_listener.py → ais_decoder.py (pyais)
+AIS Data Sources (auto-detect priority):
+  1. Local AIS Receiver (WiFi TCP/UDP) → ais_listener.py → ais_decoder.py (pyais)
+  2. AISstream.io (WebSocket) → aisstream_listener.py (JSON decode)
+  3. Demo mode → main.py (simulated vessels)
     → database.py (SQLite) + server.py (FastAPI WebSocket) → Browser (Leaflet map)
 
 NOAA S3 (SFBOFS NetCDF) → sfbofs.py (regrid) → /api/current-field → tidal-flow.js (particles)
 NOAA CO-OPS API → currents.py → /api/currents → tidal-flow.js (fallback) + current arrows
+Open-Meteo (HRRR) → wind.py → /api/wind-field → wind-overlay.js (particles)
 ```
 
 ## Deployment on Raspberry Pi
@@ -111,3 +138,35 @@ EOF
 sudo systemctl enable ais-tracker
 sudo systemctl start ais-tracker
 ```
+
+## Cloud Deployment (Fly.io)
+
+The app is configured for deployment on **Fly.io** with the included `Dockerfile` and `fly.toml`. It auto-detects that no local AIS receiver is available and falls back to AISstream.io.
+
+```bash
+# Install Fly CLI
+brew install flyctl
+
+# Login and create the app
+fly auth login
+fly launch
+
+# Set your AIS API key as a secret (not stored in the image)
+fly secrets set AISSTREAM_API_KEY=your_key_here
+
+# Deploy
+fly deploy
+
+# Scale to 1 machine (free tier)
+fly scale count 1
+```
+
+The app will be live at `https://your-app-name.fly.dev`. The `fly.toml` sets San Jose region (`sjc`) for low latency to SF Bay. Free tier includes auto-stop on idle and auto-start on request (~2-3s cold start).
+
+Other hosting options: **Railway**, **Render**, or **Oracle Cloud** (most generous free tier).
+
+## iOS App
+
+The frontend can be wrapped as a native iOS app using **Capacitor** (Ionic's native bridge). The existing HTML/JS/CSS runs inside a WebView — no rewrite needed. For the app version, AIS data comes from **AISstream.io** instead of a local receiver, subscribing by bounding box based on the user's map view. No backend required for core functionality.
+
+Stack: Capacitor + existing frontend + AISstream.io WebSocket API + GPS for location. Offline support via cached map tiles and last-known vessel positions in IndexedDB. A lightweight backend would only be needed for user accounts, saved regions, or push notifications.

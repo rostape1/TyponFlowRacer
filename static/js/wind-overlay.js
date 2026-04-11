@@ -19,18 +19,43 @@ class WindOverlay {
         this.speedFactor = options.speedFactor || 0.001;
         this.fadeOpacity = options.fadeOpacity || 0.96;
 
-        // Purple/magenta color ramp — distinct from tidal blue→red
-        this.colorStops = [
-            { speed: 0,  color: [140, 120, 180] },
-            { speed: 3,  color: [160, 100, 200] },
-            { speed: 8,  color: [190, 80, 220] },
-            { speed: 15, color: [220, 120, 220] },
-            { speed: 25, color: [240, 190, 230] },
-            { speed: 35, color: [255, 255, 255] },
-        ];
+        this.colorSchemes = {
+            green: {
+                stops: [
+                    { speed: 0,  color: [60, 80, 30] },
+                    { speed: 3,  color: [80, 140, 20] },
+                    { speed: 8,  color: [120, 200, 30] },
+                    { speed: 15, color: [170, 230, 50] },
+                    { speed: 25, color: [210, 250, 100] },
+                    { speed: 35, color: [255, 255, 255] },
+                ],
+                hex: ['#508c14', '#78c81e', '#aae632', '#d2fa64', '#eeffaa'],
+                accent: '#78c81e',
+            },
+            purple: {
+                stops: [
+                    { speed: 0,  color: [140, 120, 180] },
+                    { speed: 3,  color: [160, 100, 200] },
+                    { speed: 8,  color: [190, 80, 220] },
+                    { speed: 15, color: [220, 120, 220] },
+                    { speed: 25, color: [240, 190, 230] },
+                    { speed: 35, color: [255, 255, 255] },
+                ],
+                hex: ['#8c78b4', '#a064c8', '#aa46be', '#d26ec8', '#ebb4d7'],
+                accent: '#aa46be',
+            },
+        };
+        this.scheme = options.colorScheme || 'green';
+        this.colorStops = this.colorSchemes[this.scheme].stops;
 
         this._initCanvas();
         this._bindEvents();
+    }
+
+    setColorScheme(scheme) {
+        if (!this.colorSchemes[scheme]) return;
+        this.scheme = scheme;
+        this.colorStops = this.colorSchemes[scheme].stops;
     }
 
     _initCanvas() {
@@ -236,8 +261,9 @@ class WindOverlay {
  * WindStationMarkers — Leaflet markers for NDBC buoy observations.
  */
 class WindStationMarkers {
-    constructor(map) {
+    constructor(map, overlay) {
         this.map = map;
+        this.overlay = overlay || null;
         this.layerGroup = L.layerGroup();
         this.stations = [];
         this.visible = false;
@@ -249,11 +275,12 @@ class WindStationMarkers {
     }
 
     _speedToColor(speed) {
-        if (speed < 3) return '#8c78b4';
-        if (speed < 8) return '#a064c8';
-        if (speed < 15) return '#aa46be';
-        if (speed < 25) return '#d26ec8';
-        return '#ebb4d7';
+        const h = this.overlay ? this.overlay.colorSchemes[this.overlay.scheme].hex : ['#508c14', '#78c81e', '#aae632', '#d2fa64', '#eeffaa'];
+        if (speed < 3) return h[0];
+        if (speed < 8) return h[1];
+        if (speed < 15) return h[2];
+        if (speed < 25) return h[3];
+        return h[4];
     }
 
     _updateMarkers() {
@@ -286,13 +313,15 @@ class WindStationMarkers {
             const gustStr = s.gust_kn != null ? `${s.gust_kn.toFixed(1)} kn` : '—';
             const timeStr = s.timestamp ? new Date(s.timestamp).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Los_Angeles' }) : '—';
 
+            const accent = this.overlay ? this.overlay.colorSchemes[this.overlay.scheme].accent : '#78c81e';
+
             const marker = L.marker([s.lat, s.lon], {
                 icon,
                 zIndexOffset: -50,
             }).bindPopup(`<div class="popup-content">
                 <h3>${s.name} (${s.id})</h3>
-                <div class="popup-row"><span class="popup-label">Type</span><span class="popup-value" style="color:#aa46be">NDBC Observation</span></div>
-                <div class="popup-row"><span class="popup-label">Wind</span><span class="popup-value" style="color:#aa46be">${s.speed_kn.toFixed(1)} kn / ${s.direction.toFixed(0)}°</span></div>
+                <div class="popup-row"><span class="popup-label">Type</span><span class="popup-value" style="color:${accent}">NDBC Observation</span></div>
+                <div class="popup-row"><span class="popup-label">Wind</span><span class="popup-value" style="color:${accent}">${s.speed_kn.toFixed(1)} kn / ${s.direction.toFixed(0)}°</span></div>
                 <div class="popup-row"><span class="popup-label">Gusts</span><span class="popup-value">${gustStr}</span></div>
                 <div class="popup-row"><span class="popup-label">Updated</span><span class="popup-value">${timeStr}</span></div>
             </div>`, { className: 'vessel-popup', maxWidth: 220 });

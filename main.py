@@ -88,8 +88,23 @@ async def process_decoded(db, decoded_queue: asyncio.Queue):
             logger.error(f"Error processing message: {e}")
 
 
+async def try_local_ais(host: str, port: int, timeout: float = 5.0) -> bool:
+    """Check if a local AIS receiver is reachable."""
+    try:
+        reader, writer = await asyncio.wait_for(
+            asyncio.open_connection(host, port), timeout=timeout
+        )
+        writer.close()
+        await writer.wait_closed()
+        return True
+    except (ConnectionRefusedError, ConnectionResetError, OSError, asyncio.TimeoutError):
+        return False
+
+
 async def main():
     demo_mode = "--demo" in sys.argv
+    aisstream_mode = "--aisstream" in sys.argv
+    local_mode = "--local" in sys.argv
     global VERBOSE_VESSELS
     VERBOSE_VESSELS = "--verbose" in sys.argv
 
@@ -102,11 +117,36 @@ async def main():
     if demo_mode:
         logger.info("Starting in DEMO mode (simulated AIS data)")
         asyncio.create_task(demo_listener(decoded_queue))
-    else:
+    elif aisstream_mode:
+        from config import AISSTREAM_API_KEY
+        from aisstream_listener import aisstream_listener
+        if not AISSTREAM_API_KEY:
+            logger.error("AISSTREAM_API_KEY not set. Set it in config.py or env var.")
+            sys.exit(1)
+        logger.info("Starting in AISSTREAM mode (cloud AIS data from aisstream.io)")
+        asyncio.create_task(aisstream_listener(decoded_queue, AISSTREAM_API_KEY))
+    elif local_mode:
         from config import AIS_PROTOCOL
         logger.info(f"Starting AIS listener → {AIS_HOST}:{AIS_PORT} (protocol={AIS_PROTOCOL})")
         asyncio.create_task(ais_listener(raw_queue, protocol=AIS_PROTOCOL))
         asyncio.create_task(ais_decoder(raw_queue, decoded_queue))
+    else:
+        # Auto mode: try local AIS receiver first, fall back to AISstream
+        logger.info(f"Auto-detecting AIS source: trying local receiver at {AIS_HOST}:{AIS_PORT}...")
+        if await try_local_ais(AIS_HOST, AIS_PORT):
+            from config import AIS_PROTOCOL
+            logger.info("Local AIS receiver found — using local mode")
+            asyncio.create_task(ais_listener(raw_queue, protocol=AIS_PROTOCOL))
+            asyncio.create_task(ais_decoder(raw_queue, decoded_queue))
+        else:
+            from config import AISSTREAM_API_KEY
+            if AISSTREAM_API_KEY:
+                from aisstream_listener import aisstream_listener
+                logger.info("No local AIS receiver — falling back to AISstream.io")
+                asyncio.create_task(aisstream_listener(decoded_queue, AISSTREAM_API_KEY))
+            else:
+                logger.warning("No local AIS receiver and no AISSTREAM_API_KEY set — no AIS data source available")
+                logger.info("Use --demo for simulated data, or set AISSTREAM_API_KEY in .env")
 
     asyncio.create_task(process_decoded(db, decoded_queue))
 
