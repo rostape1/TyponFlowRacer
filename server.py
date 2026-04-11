@@ -9,6 +9,7 @@ from fastapi.responses import FileResponse
 
 from database import get_all_vessels, get_vessel_detail, get_vessel_track, get_avg_speed, get_stats
 from currents import get_all_currents
+from sfbofs import get_current_field
 
 logger = logging.getLogger(__name__)
 
@@ -77,6 +78,14 @@ async def api_stats():
 @app.get("/api/currents")
 async def api_currents():
     return await get_all_currents()
+
+
+@app.get("/api/current-field")
+async def api_current_field():
+    field = await get_current_field()
+    if field:
+        return field
+    return {"error": "SFBOFS data not available"}
 
 
 @app.websocket("/ws")

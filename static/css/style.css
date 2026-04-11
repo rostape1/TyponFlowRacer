@@ -272,6 +272,56 @@ body {
 .type-other { background: rgba(149, 165, 166, 0.2); color: #aab7b8; }
 .type-unknown { background: rgba(149, 165, 166, 0.15); color: #85929e; }
 
+/* Current flow legend */
+#flow-legend {
+    position: fixed;
+    bottom: 36px;
+    left: 12px;
+    z-index: 1000;
+    background: rgba(10, 22, 40, 0.88);
+    backdrop-filter: blur(8px);
+    border: 1px solid rgba(100, 150, 200, 0.15);
+    border-radius: 6px;
+    padding: 8px 10px;
+    font-size: 10px;
+    color: #7a8fa6;
+    display: none;
+}
+
+#flow-legend.visible {
+    display: block;
+}
+
+.flow-legend-title {
+    font-size: 10px;
+    color: #a0b0c0;
+    margin-bottom: 4px;
+    font-weight: 600;
+}
+
+.flow-legend-bar {
+    width: 160px;
+    height: 10px;
+    border-radius: 3px;
+    margin-bottom: 3px;
+}
+
+.flow-legend-labels {
+    display: flex;
+    justify-content: space-between;
+    font-size: 9px;
+    color: #5a7a9a;
+    width: 160px;
+}
+
+.flow-legend-source {
+    margin-top: 5px;
+    font-size: 9px;
+    color: #4a6a8a;
+    border-top: 1px solid rgba(100, 150, 200, 0.1);
+    padding-top: 4px;
+}
+
 /* Vessel popup styling */
 .vessel-popup .leaflet-popup-content-wrapper {
     background: rgba(10, 22, 40, 0.95);

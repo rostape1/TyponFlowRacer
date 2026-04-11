@@ -17,6 +17,9 @@ logging.basicConfig(
 )
 logger = logging.getLogger("ais-tracker")
 
+# Verbose vessel logging (use --verbose to enable)
+VERBOSE_VESSELS = False
+
 
 # --- Demo mode: generate fake AIS data for testing without a receiver ---
 
@@ -75,10 +78,11 @@ async def process_decoded(db, decoded_queue: asyncio.Queue):
             from database import get_avg_speed
             data["avg_speed"] = await get_avg_speed(db, data["mmsi"])
             name = data.get("shipname") or data.get("name") or f"MMSI {data['mmsi']}"
-            lat = data.get("lat", "?")
-            lon = data.get("lon", "?")
-            sog = data.get("sog", "?")
-            logger.info(f"VESSEL: {name} | {lat},{lon} | {sog} kn | msg_type={data.get('msg_type', '?')}")
+            if VERBOSE_VESSELS:
+                lat = data.get("lat", "?")
+                lon = data.get("lon", "?")
+                sog = data.get("sog", "?")
+                logger.info(f"VESSEL: {name} | {lat},{lon} | {sog} kn | msg_type={data.get('msg_type', '?')}")
             await broadcast(data)
         except Exception as e:
             logger.error(f"Error processing message: {e}")
@@ -86,6 +90,8 @@ async def process_decoded(db, decoded_queue: asyncio.Queue):
 
 async def main():
     demo_mode = "--demo" in sys.argv
+    global VERBOSE_VESSELS
+    VERBOSE_VESSELS = "--verbose" in sys.argv
 
     db = await init_db()
     set_db(db)

@@ -79,6 +79,9 @@ class TidalFlowOverlay {
         this.ctx = null;
         this.waterPolygon = options.waterPolygon || SF_BAY_WATER;
 
+        // Grid data (from SFBOFS)
+        this.grid = null;  // { bounds, nx, ny, u[][], v[][] }
+
         // Config
         this.particleCount = options.particleCount || 2000;
         this.particleAge = options.particleAge || 80;
@@ -155,6 +158,13 @@ class TidalFlowOverlay {
     }
 
     _interpolateAt(lat, lon) {
+        // Prefer grid data (SFBOFS) if available
+        if (this.grid) {
+            const result = this._interpolateAtGrid(lat, lon);
+            if (result) return result;
+        }
+
+        // Fallback to IDW station interpolation
         if (this.stations.length === 0) return { vx: 0, vy: 0, speed: 0 };
 
         const cosLat = Math.cos(lat * Math.PI / 180);
@@ -223,6 +233,69 @@ class TidalFlowOverlay {
         });
     }
 
+    setGrid(data) {
+        if (!data || !data.u || !data.v) {
+            this.grid = null;
+            return;
+        }
+        this.grid = {
+            bounds: data.bounds,
+            nx: data.nx,
+            ny: data.ny,
+            u: data.u,
+            v: data.v,
+        };
+        console.log(`Tidal flow grid loaded: ${data.nx}x${data.ny}`);
+    }
+
+    _interpolateAtGrid(lat, lon) {
+        const g = this.grid;
+        const b = g.bounds;
+
+        // Check if point is within grid bounds
+        if (lat < b.south || lat > b.north || lon < b.west || lon > b.east) {
+            return null;
+        }
+
+        // Convert lat/lon to fractional grid indices
+        const fy = (lat - b.south) / (b.north - b.south) * (g.ny - 1);
+        const fx = (lon - b.west) / (b.east - b.west) * (g.nx - 1);
+
+        const iy = Math.floor(fy);
+        const ix = Math.floor(fx);
+
+        // Clamp to valid range
+        if (iy < 0 || iy >= g.ny - 1 || ix < 0 || ix >= g.nx - 1) {
+            return null;
+        }
+
+        // Bilinear interpolation weights
+        const ty = fy - iy;
+        const tx = fx - ix;
+
+        const u00 = g.u[iy][ix];
+        const u10 = g.u[iy + 1][ix];
+        const u01 = g.u[iy][ix + 1];
+        const u11 = g.u[iy + 1][ix + 1];
+
+        const v00 = g.v[iy][ix];
+        const v10 = g.v[iy + 1][ix];
+        const v01 = g.v[iy][ix + 1];
+        const v11 = g.v[iy + 1][ix + 1];
+
+        // Skip if all surrounding cells are zero (land/no data)
+        if (u00 === 0 && u10 === 0 && u01 === 0 && u11 === 0 &&
+            v00 === 0 && v10 === 0 && v01 === 0 && v11 === 0) {
+            return null;
+        }
+
+        const vx = (1 - ty) * ((1 - tx) * u00 + tx * u01) + ty * ((1 - tx) * u10 + tx * u11);
+        const vy = (1 - ty) * ((1 - tx) * v00 + tx * v01) + ty * ((1 - tx) * v10 + tx * v11);
+        const speed = Math.sqrt(vx * vx + vy * vy);
+
+        return { vx, vy, speed };
+    }
+
     start() {
         if (this.animating) return;
         this.animating = true;
@@ -282,7 +355,7 @@ class TidalFlowOverlay {
             const newPt = this.map.latLngToContainerPoint([p.lat, p.lon]);
 
             const [r, g, b] = this._speedToColor(current.speed);
-            const alpha = Math.min(1, 0.4 + current.speed * 0.4);
+            const alpha = 0.85;
             ctx.strokeStyle = `rgba(${r},${g},${b},${alpha})`;
             ctx.lineWidth = this.lineWidth;
             ctx.beginPath();

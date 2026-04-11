@@ -676,6 +676,13 @@ async function loadCurrents() {
         // Update tidal flow overlay
         if (stations.length > 0 && tidalFlow) {
             tidalFlow.setStations(stations);
+            // Show legend with station source if no grid loaded yet
+            if (!tidalFlow.grid) {
+                const legend = document.getElementById('flow-legend');
+                const source = document.getElementById('flow-legend-source');
+                if (legend) legend.classList.add('visible');
+                if (source && !source.textContent) source.textContent = 'NOAA Tidal Stations';
+            }
         }
     } catch (e) {
         // Currents are optional — fail silently
@@ -686,11 +693,11 @@ async function loadCurrents() {
 let tidalFlow = null;
 if (typeof TidalFlowOverlay !== 'undefined') {
     tidalFlow = new TidalFlowOverlay(map, {
-        particleCount: 1500,
-        particleAge: 120,
+        particleCount: 3000,
+        particleAge: 140,
         speedFactor: 0.003,
-        fadeOpacity: 0.95,
-        lineWidth: 1.5,
+        fadeOpacity: 0.96,
+        lineWidth: 2.0,
         useWaterMask: false,
     });
     tidalFlow.start();
@@ -700,17 +707,58 @@ if (typeof TidalFlowOverlay !== 'undefined') {
 loadCurrents();
 setInterval(loadCurrents, 60000);
 
+// Load SFBOFS grid data for high-resolution tidal flow
+function initFlowLegend() {
+    const bar = document.getElementById('flow-legend-bar');
+    if (bar) {
+        bar.style.background = 'linear-gradient(to right, rgb(15,40,180), rgb(30,110,220), rgb(40,190,220), rgb(50,200,100), rgb(160,220,50), rgb(240,200,30), rgb(240,130,20), rgb(220,50,30), rgb(180,20,60))';
+    }
+}
+initFlowLegend();
+
+async function loadCurrentField() {
+    try {
+        const res = await fetch('/api/current-field');
+        if (!res.ok) return;
+        const data = await res.json();
+        if (data.error) {
+            console.log('SFBOFS not available:', data.error);
+            return;
+        }
+        if (tidalFlow) {
+            tidalFlow.setGrid(data);
+        }
+        // Update legend
+        const legend = document.getElementById('flow-legend');
+        const source = document.getElementById('flow-legend-source');
+        if (legend) legend.classList.add('visible');
+        if (source) {
+            const src = data.source || 'NOAA Stations';
+            const time = data.fetched_at || '';
+            source.textContent = `${src} · ${time}`;
+        }
+    } catch (e) {
+        console.log('Current field fetch failed (optional)');
+    }
+}
+
+loadCurrentField();
+setInterval(loadCurrentField, 300000);  // Refresh every 5 minutes
+
 // Flow toggle button
 document.getElementById('flow-toggle').addEventListener('click', () => {
     if (!tidalFlow) return;
     const btn = document.getElementById('flow-toggle');
+    const legend = document.getElementById('flow-legend');
     if (tidalFlow.animating) {
         tidalFlow.stop();
         btn.textContent = 'Flow: OFF';
         btn.classList.add('flow-off');
+        if (legend) legend.classList.remove('visible');
     } else {
         tidalFlow.start();
         btn.textContent = 'Flow: ON';
         btn.classList.remove('flow-off');
+        if (legend) legend.classList.add('visible');
     }
 });
