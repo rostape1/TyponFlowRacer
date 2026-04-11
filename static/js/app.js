@@ -651,7 +651,6 @@ async function loadCurrents() {
         const res = await fetch('/api/currents');
         if (!res.ok) return;
         const stations = await res.json();
-        console.log('Current data:', stations);
 
         // Clear old markers
         currentLayer.clearLayers();
