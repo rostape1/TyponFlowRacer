@@ -37,13 +37,13 @@ class WindOverlay {
         this.canvas = document.createElement('canvas');
         this.canvas.id = 'wind-flow-canvas';
         this.canvas.style.cssText = 'position:absolute;top:0;left:0;pointer-events:none;opacity:0.8;display:none;';
-        // Place inside Leaflet's overlay pane so it sits below markers/popups
-        const pane = this.map.getPane('overlayPane');
-        if (pane) {
-            pane.appendChild(this.canvas);
-        } else {
-            this.map.getContainer().appendChild(this.canvas);
+        // Use a custom Leaflet pane so canvas participates in pane z-ordering
+        // z-index 450: above overlayPane (400) but below markerPane (600)
+        if (!this.map.getPane('windCanvas')) {
+            this.map.createPane('windCanvas');
+            this.map.getPane('windCanvas').style.zIndex = 450;
         }
+        this.map.getPane('windCanvas').appendChild(this.canvas);
         this.ctx = this.canvas.getContext('2d');
     }
 
@@ -51,7 +51,14 @@ class WindOverlay {
         const size = this.map.getSize();
         this.canvas.width = size.x;
         this.canvas.height = size.y;
+        this._repositionCanvas();
         this._resetParticles();
+    }
+
+    _repositionCanvas() {
+        // Offset canvas to counteract the pane's CSS transform
+        const topLeft = this.map.containerPointToLayerPoint([0, 0]);
+        L.DomUtil.setPosition(this.canvas, topLeft);
     }
 
     _bindEvents() {
@@ -62,6 +69,7 @@ class WindOverlay {
 
     _onMapMove() {
         if (!this.animating) return;
+        this._repositionCanvas();
         this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
         this._resetParticles();
     }

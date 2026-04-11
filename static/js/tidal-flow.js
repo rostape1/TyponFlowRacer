@@ -116,13 +116,13 @@ class TidalFlowOverlay {
         this.canvas = document.createElement('canvas');
         this.canvas.id = 'tidal-flow-canvas';
         this.canvas.style.cssText = 'position:absolute;top:0;left:0;pointer-events:none;opacity:0.8;';
-        // Place inside Leaflet's overlay pane so it sits below markers/popups
-        const pane = this.map.getPane('overlayPane');
-        if (pane) {
-            pane.appendChild(this.canvas);
-        } else {
-            this.map.getContainer().appendChild(this.canvas);
+        // Use a custom Leaflet pane so canvas participates in pane z-ordering
+        // z-index 451: above wind (450), below markerPane (600)
+        if (!this.map.getPane('tidalCanvas')) {
+            this.map.createPane('tidalCanvas');
+            this.map.getPane('tidalCanvas').style.zIndex = 451;
         }
+        this.map.getPane('tidalCanvas').appendChild(this.canvas);
         this.ctx = this.canvas.getContext('2d');
         this._resize();
     }
@@ -131,7 +131,13 @@ class TidalFlowOverlay {
         const size = this.map.getSize();
         this.canvas.width = size.x;
         this.canvas.height = size.y;
+        this._repositionCanvas();
         this._resetParticles();
+    }
+
+    _repositionCanvas() {
+        const topLeft = this.map.containerPointToLayerPoint([0, 0]);
+        L.DomUtil.setPosition(this.canvas, topLeft);
     }
 
     _bindEvents() {
@@ -141,6 +147,7 @@ class TidalFlowOverlay {
     }
 
     _onMapMove() {
+        this._repositionCanvas();
         this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
         this._resetParticles();
     }
