@@ -134,20 +134,89 @@ function formatTime(minutes) {
 // --- Create vessel arrow icon ---
 function createVesselIcon(vessel) {
     const color = getVesselColor(vessel);
-    const size = vessel.mmsi === OWN_MMSI ? 28 : 20;
+    const isOwn = vessel.mmsi === OWN_MMSI;
+    const size = isOwn ? 28 : 20;
     const heading = vessel.heading || vessel.cog || 0;
 
-    const svg = `<svg width="${size}" height="${size}" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
-        <g transform="rotate(${heading}, 12, 12)">
-            <path d="M12 2 L6 20 L12 16 L18 20 Z" fill="${color}" stroke="rgba(0,0,0,0.4)" stroke-width="1"/>
+    if (!isOwn) {
+        const svg = `<svg width="${size}" height="${size}" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+            <g transform="rotate(${heading}, 12, 12)">
+                <path d="M12 2 L6 20 L12 16 L18 20 Z" fill="${color}" stroke="rgba(0,0,0,0.4)" stroke-width="1"/>
+            </g>
+        </svg>`;
+        return L.divIcon({
+            html: svg,
+            className: 'vessel-icon',
+            iconSize: [size, size],
+            iconAnchor: [size / 2, size / 2],
+        });
+    }
+
+    // Own vessel: larger canvas with three directional arrows
+    const ownSize = 150;
+    const cx = ownSize / 2;
+    const cy = ownSize / 2;
+    const boatR = 14;  // vessel triangle size
+    const headingDeg = vessel.heading != null && vessel.heading < 360 ? vessel.heading : null;
+    const cogDeg = vessel.cog != null && vessel.cog < 360 ? vessel.cog : null;
+    const boatRotation = headingDeg != null ? headingDeg : (cogDeg != null ? cogDeg : 0);
+
+    // Get tidal current at own vessel position
+    let tideDeg = null;
+    let tideSpeed = 0;
+    if (tidalFlow && vessel.lat != null) {
+        const tc = tidalFlow._interpolateAt(vessel.lat, vessel.lon);
+        if (tc && tc.speed > 0.05) {
+            tideDeg = (Math.atan2(tc.vx, tc.vy) * 180 / Math.PI + 360) % 360;
+            tideSpeed = tc.speed;
+        }
+    }
+
+    // Arrow line builder: from center outward at given angle
+    const arrowLen = 55;
+    function arrowAt(deg, len) {
+        const rad = (deg - 90) * Math.PI / 180;  // SVG: 0° = up → rotate from east
+        const ex = cx + Math.cos(rad) * len;
+        const ey = cy + Math.sin(rad) * len;
+        // Arrowhead
+        const headLen = 10;
+        const headAng = 25 * Math.PI / 180;
+        const ax1 = ex - headLen * Math.cos(rad - headAng);
+        const ay1 = ey - headLen * Math.sin(rad - headAng);
+        const ax2 = ex - headLen * Math.cos(rad + headAng);
+        const ay2 = ey - headLen * Math.sin(rad + headAng);
+        return `<line x1="${cx}" y1="${cy}" x2="${ex}" y2="${ey}"/>` +
+               `<polygon points="${ex},${ey} ${ax1},${ay1} ${ax2},${ay2}"/>`;
+    }
+
+    // Build arrow SVG groups
+    let arrows = '';
+    // 1. Heading arrow (white, dashed) — where the bow is pointing
+    if (headingDeg != null) {
+        arrows += `<g class="own-arrow-heading" stroke="#ffffff" fill="#ffffff" stroke-width="1.5" stroke-dasharray="3 2" opacity="0.8">${arrowAt(headingDeg, arrowLen)}</g>`;
+    }
+    // 2. COG arrow (green, solid) — where the vessel is actually moving
+    if (cogDeg != null) {
+        arrows += `<g class="own-arrow-cog" stroke="#2ecc71" fill="#2ecc71" stroke-width="2" opacity="0.9">${arrowAt(cogDeg, arrowLen)}</g>`;
+    }
+    // 3. Tide arrow (cyan) — direction of tidal current push
+    if (tideDeg != null) {
+        const tideLen = Math.min(arrowLen, Math.max(25, tideSpeed * 20));
+        arrows += `<g class="own-arrow-tide" stroke="#00d4ff" fill="#00d4ff" stroke-width="1.5" opacity="0.85">${arrowAt(tideDeg, tideLen)}</g>`;
+    }
+
+    const svg = `<svg width="${ownSize}" height="${ownSize}" viewBox="0 0 ${ownSize} ${ownSize}" xmlns="http://www.w3.org/2000/svg">
+        ${arrows}
+        <g transform="translate(${cx}, ${cy}) rotate(${boatRotation}) translate(-12, -12)">
+            <path d="M12 2 L6 20 L12 16 L18 20 Z" fill="${color}" stroke="rgba(0,0,0,0.5)" stroke-width="1"/>
         </g>
     </svg>`;
 
     return L.divIcon({
         html: svg,
-        className: 'vessel-icon',
-        iconSize: [size, size],
-        iconAnchor: [size / 2, size / 2],
+        className: 'vessel-icon own-vessel-icon',
+        iconSize: [ownSize, ownSize],
+        iconAnchor: [cx, cy],
     });
 }
 
@@ -238,6 +307,12 @@ function buildPopupHtml(v) {
         ? bearingTo(ownPosition.lat, ownPosition.lon, v.lat, v.lon).toFixed(0) + '°'
         : '—';
 
+    const speedDiff = (v.mmsi !== OWN_MMSI && ownVessel && ownVessel.sog != null && v.sog != null)
+        ? (v.sog - ownVessel.sog) : null;
+    const speedDiffStr = speedDiff != null
+        ? (speedDiff >= 0 ? '+' : '') + speedDiff.toFixed(1) + ' kn'
+        : '—';
+
     const cpaInfo = (v.mmsi !== OWN_MMSI && ownVessel) ? computeCpaTcpa(ownVessel, v) : null;
     const cpaClass = cpaInfo && cpaInfo.cpa < 0.1 && cpaInfo.tcpa > 0 && cpaInfo.tcpa < 30
         ? 'popup-value cpa-danger'
@@ -245,16 +320,28 @@ function buildPopupHtml(v) {
             ? 'popup-value cpa-warn'
             : 'popup-value';
 
+    // Get tidal current at vessel position (for own vessel popup)
+    let tideStr = '—';
+    if (v.mmsi === OWN_MMSI && tidalFlow && v.lat != null) {
+        const tc = tidalFlow._interpolateAt(v.lat, v.lon);
+        if (tc && tc.speed > 0.05) {
+            const tidDir = (Math.atan2(tc.vx, tc.vy) * 180 / Math.PI + 360) % 360;
+            tideStr = tc.speed.toFixed(1) + ' kn / ' + tidDir.toFixed(0) + '°';
+        }
+    }
+
     return `<div class="popup-content">
         <h3>${v.name || 'MMSI ' + v.mmsi}${v.mmsi === OWN_MMSI ? ' (You)' : ''}</h3>
         <div class="popup-row"><span class="popup-label">MMSI</span><span class="popup-value">${v.mmsi}</span></div>
         <div class="popup-row"><span class="popup-label">Type</span><span class="popup-value">${v.ship_category || 'Unknown'}</span></div>
         <div class="popup-row"><span class="popup-label">SOG</span><span class="popup-value">${v.sog != null ? v.sog.toFixed(1) + ' kn' : '—'}</span></div>
         <div class="popup-row"><span class="popup-label">COG</span><span class="popup-value">${v.cog != null ? v.cog.toFixed(0) + '°' : '—'}</span></div>
+        ${v.mmsi === OWN_MMSI ? `<div class="popup-row"><span class="popup-label">Tide</span><span class="popup-value" style="color:#00d4ff">${tideStr}</span></div>` : ''}
         <div class="popup-row"><span class="popup-label">Avg Speed</span><span class="popup-value">${v.avg_speed != null ? v.avg_speed + ' kn' : '—'}</span></div>
         <div class="popup-row"><span class="popup-label">Distance</span><span class="popup-value">${dist}</span></div>
         <div class="popup-row"><span class="popup-label">Bearing</span><span class="popup-value">${bearing}</span></div>
         ${cpaInfo ? `<div class="popup-row"><span class="popup-label">CPA/TCPA</span><span class="${cpaClass}">${cpaInfo.label}</span></div>` : ''}
+        ${v.mmsi !== OWN_MMSI ? `<div class="popup-row"><span class="popup-label">Speed Diff</span><span class="popup-value">${speedDiffStr}</span></div>` : ''}
         ${v.destination ? `<div class="popup-row"><span class="popup-label">Dest</span><span class="popup-value">${v.destination}</span></div>` : ''}
         <div class="popup-chart" id="chart-${v.mmsi}">
             <div class="popup-chart-label">Speed History</div>
