@@ -624,6 +624,11 @@ body.panel-collapsed #panel-toggle {
     border-radius: 2px;
 }
 
+/* On desktop, button row wrapper is invisible — buttons flow inline */
+.timeline-btn-row {
+    display: contents;
+}
+
 /* Responsive */
 @media (max-width: 600px) {
     /* Panel slides up from bottom on mobile */
@@ -769,10 +774,7 @@ body.panel-collapsed #panel-toggle {
     align-items: stretch;
 }
 
-/* On desktop, button row wrapper is invisible — buttons flow inline */
-.timeline-btn-row {
-    display: contents;
-}
+
 
 #timeline-scroll {
     flex: 1;
