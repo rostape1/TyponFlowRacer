@@ -665,6 +665,23 @@ body.panel-collapsed #panel-toggle {
         min-width: 40px;
         font-size: 9px;
     }
+
+    /* Ensure timeline buttons are tappable in portrait */
+    .timeline-go,
+    .timeline-now-btn,
+    .timeline-cal-btn,
+    .timeline-dl-btn {
+        min-width: 44px;
+        min-height: 44px;
+        flex-shrink: 0;
+        font-size: 14px;
+        padding: 0 12px;
+    }
+
+    .timeline-go {
+        font-size: 11px;
+        padding: 0 10px;
+    }
 }
 
 /* Forecast banner */
