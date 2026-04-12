@@ -24,7 +24,7 @@ VERBOSE_VESSELS = False
 # --- Demo mode: generate fake AIS data for testing without a receiver ---
 
 DEMO_VESSELS = [
-    {"mmsi": 338361814, "shipname": "OWN VESSEL", "ship_type": 36, "ship_category": "Sailing/Pleasure",
+    {"mmsi": 338361814, "shipname": "TYPON", "ship_type": 36, "ship_category": "Sailing/Pleasure",
      "lat": 37.8085, "lon": -122.4095, "sog": 5.2, "cog": 245.0, "heading": 243},
     {"mmsi": 367596000, "shipname": "GOLDEN GATE FERRY", "ship_type": 60, "ship_category": "Passenger",
      "lat": 37.8120, "lon": -122.4200, "sog": 12.5, "cog": 180.0, "heading": 178},

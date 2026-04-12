@@ -116,6 +116,12 @@ body {
     color: #7a8fa6;
 }
 
+#tide-toggle.tide-off {
+    background: rgba(100, 100, 100, 0.2);
+    border-color: rgba(100, 100, 100, 0.3);
+    color: #7a8fa6;
+}
+
 /* Side panel */
 #panel {
     position: fixed;
@@ -468,6 +474,11 @@ body.panel-collapsed #panel-toggle {
 
 /* Wind station icons */
 .wind-station-icon {
+    background: none !important;
+    border: none !important;
+}
+
+.tide-station-icon {
     background: none !important;
     border: none !important;
 }

@@ -17,16 +17,16 @@ from urllib.error import URLError
 
 logger = logging.getLogger(__name__)
 
-# SF Bay bounding box (same as sfbofs.py)
+# SF Bay + offshore bounding box (extends west to cover offshore buoys)
 BOUNDS = {
-    "south": 37.40,
-    "north": 38.05,
-    "west": -122.65,
+    "south": 37.30,
+    "north": 38.10,
+    "west": -122.95,
     "east": -122.10,
 }
 
 # Coarse grid — wind varies slowly over bay distances
-GRID_NX = 7
+GRID_NX = 9
 GRID_NY = 8
 
 # Cache settings
@@ -38,6 +38,7 @@ _grid_cache = None
 _grid_cache_time = None
 _station_cache = None
 _station_cache_time = None
+_forecast_cache = {}  # keyed by "forecast_{hour}" → {"grid": ..., "_cached_at": datetime}
 _fetch_lock = None
 
 # Offline paths
@@ -47,19 +48,33 @@ OFFLINE_STATION_PATH = Path(__file__).parent / "static" / "data" / "wind_station
 # NDBC stations in SF Bay area
 NDBC_STATIONS = {
     "FTPC1": {"name": "Fort Point", "lat": 37.8060, "lon": -122.4659},
+    "SFXC1": {"name": "SF Bar Pilots", "lat": 37.7600, "lon": -122.6900},
     "RCMC1": {"name": "Richmond", "lat": 37.9228, "lon": -122.4098},
     "AAMC1": {"name": "Alameda", "lat": 37.7717, "lon": -122.2992},
     "OKXC1": {"name": "Oakland", "lat": 37.8067, "lon": -122.3340},
     "PPXC1": {"name": "Point Potrero", "lat": 37.9078, "lon": -122.3728},
+    "46026": {"name": "SF Buoy (offshore)", "lat": 37.7590, "lon": -122.8330},
+    "TIBC1": {"name": "Tiburon", "lat": 37.8911, "lon": -122.4478},
+    "46012": {"name": "Half Moon Bay", "lat": 37.3630, "lon": -122.8810},
 }
 
-# Open-Meteo API
+# Open-Meteo API — current conditions
 OPEN_METEO_URL = (
     "https://api.open-meteo.com/v1/forecast"
     "?latitude={lat}&longitude={lon}"
     "&current=wind_speed_10m,wind_direction_10m,wind_gusts_10m"
     "&models=gfs_seamless"
     "&wind_speed_unit=kn"
+)
+
+# Open-Meteo API — hourly forecast
+OPEN_METEO_FORECAST_URL = (
+    "https://api.open-meteo.com/v1/forecast"
+    "?latitude={lat}&longitude={lon}"
+    "&hourly=wind_speed_10m,wind_direction_10m,wind_gusts_10m"
+    "&models=gfs_seamless"
+    "&wind_speed_unit=kn"
+    "&forecast_hours={hours}"
 )
 
 # NDBC real-time data
@@ -80,8 +95,11 @@ def _fetch_url(url: str, timeout: int = 15) -> str | None:
         return None
 
 
-def _fetch_grid() -> dict | None:
-    """Fetch HRRR wind grid from Open-Meteo (runs in thread)."""
+def _fetch_grid(forecast_hour: int = 0) -> dict | None:
+    """Fetch HRRR wind grid from Open-Meteo (runs in thread).
+
+    forecast_hour: 0 = current conditions, 1-48 = forecast hours ahead.
+    """
     lats = [BOUNDS["south"] + i * (BOUNDS["north"] - BOUNDS["south"]) / (GRID_NY - 1)
             for i in range(GRID_NY)]
     lons = [BOUNDS["west"] + i * (BOUNDS["east"] - BOUNDS["west"]) / (GRID_NX - 1)
@@ -93,23 +111,42 @@ def _fetch_grid() -> dict | None:
     gust_grid = [[0.0] * GRID_NX for _ in range(GRID_NY)]
 
     success_count = 0
+    is_forecast = forecast_hour > 0
 
     for iy, lat in enumerate(lats):
         for ix, lon in enumerate(lons):
-            url = OPEN_METEO_URL.format(lat=lat, lon=lon)
+            if is_forecast:
+                url = OPEN_METEO_FORECAST_URL.format(
+                    lat=lat, lon=lon, hours=forecast_hour + 1
+                )
+            else:
+                url = OPEN_METEO_URL.format(lat=lat, lon=lon)
             text = _fetch_url(url)
             if not text:
                 continue
 
             try:
                 data = json.loads(text)
-                current = data.get("current", {})
-                speed_kn = current.get("wind_speed_10m", 0) or 0
-                direction = current.get("wind_direction_10m", 0) or 0
-                gust_kn = current.get("wind_gusts_10m", 0) or 0
+
+                if is_forecast:
+                    # Extract the target hour from hourly arrays
+                    hourly = data.get("hourly", {})
+                    speeds = hourly.get("wind_speed_10m", [])
+                    dirs = hourly.get("wind_direction_10m", [])
+                    gusts = hourly.get("wind_gusts_10m", [])
+                    idx = min(forecast_hour, len(speeds) - 1) if speeds else -1
+                    if idx < 0:
+                        continue
+                    speed_kn = speeds[idx] or 0
+                    direction = dirs[idx] or 0
+                    gust_kn = gusts[idx] or 0
+                else:
+                    current = data.get("current", {})
+                    speed_kn = current.get("wind_speed_10m", 0) or 0
+                    direction = current.get("wind_direction_10m", 0) or 0
+                    gust_kn = current.get("wind_gusts_10m", 0) or 0
 
                 # Convert meteorological "from" direction + speed to u/v components
-                # Meteorological convention: direction is where wind comes FROM
                 dir_rad = direction * math.pi / 180
                 u_grid[iy][ix] = round(-speed_kn * math.sin(dir_rad), 2)
                 v_grid[iy][ix] = round(-speed_kn * math.cos(dir_rad), 2)
@@ -122,7 +159,7 @@ def _fetch_grid() -> dict | None:
         logger.warning(f"Too few grid points fetched: {success_count}/{GRID_NX * GRID_NY}")
         return None
 
-    logger.info(f"Wind grid fetched: {success_count}/{GRID_NX * GRID_NY} points from Open-Meteo (HRRR)")
+    logger.info(f"Wind grid fetched: {success_count}/{GRID_NX * GRID_NY} points from Open-Meteo (HRRR) forecast_hour={forecast_hour}")
 
     result = {
         "bounds": BOUNDS,
@@ -131,17 +168,19 @@ def _fetch_grid() -> dict | None:
         "model": "HRRR 3km",
         "source": "Open-Meteo (NOAA HRRR)",
         "fetched_at": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
+        "forecast_hour": forecast_hour,
         "u": u_grid,
         "v": v_grid,
         "gusts": gust_grid,
     }
 
-    # Save offline cache
-    try:
-        OFFLINE_GRID_PATH.parent.mkdir(parents=True, exist_ok=True)
-        OFFLINE_GRID_PATH.write_text(json.dumps(result))
-    except Exception as e:
-        logger.debug(f"Failed to save offline wind grid: {e}")
+    # Save offline cache (only for current conditions)
+    if not is_forecast:
+        try:
+            OFFLINE_GRID_PATH.parent.mkdir(parents=True, exist_ok=True)
+            OFFLINE_GRID_PATH.write_text(json.dumps(result))
+        except Exception as e:
+            logger.debug(f"Failed to save offline wind grid: {e}")
 
     return result
 
@@ -224,11 +263,58 @@ def _fetch_stations() -> list | None:
     return stations
 
 
-async def get_wind_field() -> dict | None:
-    """Get combined wind grid + station observations. Uses caches."""
-    global _grid_cache, _grid_cache_time, _station_cache, _station_cache_time, _fetch_lock
+async def get_wind_field(forecast_hour: int = 0) -> dict | None:
+    """Get combined wind grid + station observations. Uses caches.
+
+    forecast_hour: 0 = current conditions, 1-48 = forecast hours ahead.
+    When forecasting, NDBC stations are excluded (observations only).
+    """
+    global _grid_cache, _grid_cache_time, _station_cache, _station_cache_time, _forecast_cache, _fetch_lock
 
     now = datetime.now(timezone.utc)
+    is_forecast = forecast_hour > 0
+
+    # For forecast requests, use separate forecast cache
+    if is_forecast:
+        if _fetch_lock is None:
+            _fetch_lock = asyncio.Lock()
+
+        cache_key = f"forecast_{forecast_hour}"
+        cached = _forecast_cache.get(cache_key)
+        if cached and (now - cached["_cached_at"]).total_seconds() < GRID_CACHE_TTL:
+            return {"grid": cached["grid"], "stations": [], "forecast_hour": forecast_hour}
+
+        async with _fetch_lock:
+            # Double-check
+            cached = _forecast_cache.get(cache_key)
+            if cached and (now - cached["_cached_at"]).total_seconds() < GRID_CACHE_TTL:
+                return {"grid": cached["grid"], "stations": [], "forecast_hour": forecast_hour}
+
+            loop = asyncio.get_event_loop()
+            grid_result = await loop.run_in_executor(None, _fetch_grid, forecast_hour)
+            if grid_result:
+                _forecast_cache[cache_key] = {"grid": grid_result, "_cached_at": now}
+                return {"grid": grid_result, "stations": [], "forecast_hour": forecast_hour}
+            return None
+
+    # Real-time path (original logic)
+
+    # On first call, load offline cache immediately so we have data right away
+    if _grid_cache is None and OFFLINE_GRID_PATH.exists():
+        try:
+            _grid_cache = json.loads(OFFLINE_GRID_PATH.read_text())
+            _grid_cache_time = datetime.now(timezone.utc)
+            logger.info("Loaded offline wind grid cache")
+        except Exception:
+            pass
+
+    if _station_cache is None and OFFLINE_STATION_PATH.exists():
+        try:
+            _station_cache = json.loads(OFFLINE_STATION_PATH.read_text())
+            _station_cache_time = datetime.now(timezone.utc)
+            logger.info("Loaded offline wind station cache")
+        except Exception:
+            pass
 
     # Check if both caches are fresh
     grid_fresh = (_grid_cache and _grid_cache_time and
@@ -258,7 +344,7 @@ async def get_wind_field() -> dict | None:
         station_future = None
 
         if not grid_fresh:
-            grid_future = loop.run_in_executor(None, _fetch_grid)
+            grid_future = loop.run_in_executor(None, _fetch_grid, 0)
         if not stations_fresh:
             station_future = loop.run_in_executor(None, _fetch_stations)
 
@@ -273,23 +359,6 @@ async def get_wind_field() -> dict | None:
             if result:
                 _station_cache = result
                 _station_cache_time = datetime.now(timezone.utc)
-
-    # Use offline fallbacks if needed
-    if not _grid_cache and OFFLINE_GRID_PATH.exists():
-        try:
-            _grid_cache = json.loads(OFFLINE_GRID_PATH.read_text())
-            _grid_cache_time = datetime.now(timezone.utc)
-            logger.info("Using offline wind grid cache")
-        except Exception:
-            pass
-
-    if not _station_cache and OFFLINE_STATION_PATH.exists():
-        try:
-            _station_cache = json.loads(OFFLINE_STATION_PATH.read_text())
-            _station_cache_time = datetime.now(timezone.utc)
-            logger.info("Using offline wind station cache")
-        except Exception:
-            pass
 
     if not _grid_cache and not _station_cache:
         return None

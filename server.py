@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
@@ -11,6 +12,7 @@ from database import get_all_vessels, get_vessel_detail, get_vessel_track, get_a
 from currents import get_all_currents
 from sfbofs import get_current_field
 from wind import get_wind_field
+from tides import get_all_tide_heights
 
 logger = logging.getLogger(__name__)
 
@@ -82,25 +84,48 @@ async def api_stats():
     return stats
 
 
+def _parse_target_time(minutes_offset: int | None) -> datetime | None:
+    """Convert minutes-from-now offset to UTC datetime. None/0 = real-time."""
+    if not minutes_offset:
+        return None
+    return datetime.now(timezone.utc) + timedelta(minutes=minutes_offset)
+
+
+def _compute_forecast_hour(minutes_offset: int | None) -> int:
+    """Convert minutes offset to whole forecast hours (capped at 48 for model data)."""
+    if not minutes_offset:
+        return 0
+    return min(max(0, minutes_offset // 60), 48)
+
+
 @app.get("/api/currents")
-async def api_currents():
-    return await get_all_currents()
+async def api_currents(time: int | None = None):
+    target = _parse_target_time(time)
+    return await get_all_currents(target_time=target)
 
 
 @app.get("/api/current-field")
-async def api_current_field():
-    field = await get_current_field()
+async def api_current_field(time: int | None = None):
+    fh = _compute_forecast_hour(time)
+    field = await get_current_field(forecast_hour=fh)
     if field:
         return field
     return {"error": "SFBOFS data not available"}
 
 
 @app.get("/api/wind-field")
-async def api_wind_field():
-    field = await get_wind_field()
+async def api_wind_field(time: int | None = None):
+    fh = _compute_forecast_hour(time)
+    field = await get_wind_field(forecast_hour=fh)
     if field:
         return field
     return {"error": "Wind data not available"}
+
+
+@app.get("/api/tide-height")
+async def api_tide_height(time: int | None = None):
+    target = _parse_target_time(time)
+    return await get_all_tide_heights(target_time=target)
 
 
 @app.websocket("/ws")

@@ -18,7 +18,7 @@ const hiddenVessels = new Set();  // mmsi values of vessels hidden from map
 
 // --- Forecast time shift ---
 let forecastMinutes = 0;  // 0 = real-time, >0 = minutes into the future
-let autoRefreshTimers = { currents: null, field: null, wind: null };
+let autoRefreshTimers = { currents: null, field: null, wind: null, tide: null };
 
 // --- Color mapping ---
 const TYPE_COLORS = {
@@ -290,7 +290,9 @@ map.on('click', (e) => {
     }
 
     // Wind
-    if (windOverlay) {
+    if (forecastMinutes > 48 * 60) {
+        rows += `<div class="popup-row"><span class="popup-label">Wind</span><span class="popup-value" style="color:#4a6a8a">Not available beyond 48h</span></div>`;
+    } else if (windOverlay) {
         const w = windOverlay.interpolateAt(lat, lon);
         if (w) {
             const gustStr = w.gust > 0 ? ` (gust ${w.gust.toFixed(0)})` : '';
@@ -1122,6 +1124,109 @@ async function loadWindField() {
 
 // Load wind data on startup and refresh every 5 minutes
 loadWindField();
+
+// --- Tide Height Stations ---
+let tideStations = [];  // array of {station_id, name, lat, lon, height_ft, next_extreme}
+let tideStationMarkers = null;  // L.layerGroup
+let tideMarkersVisible = false;
+
+async function loadTideHeight() {
+    try {
+        const timeParam = forecastMinutes > 0 ? `?time=${forecastMinutes}` : '';
+        const res = await fetch(`/api/tide-height${timeParam}`);
+        if (!res.ok) { console.log('Tide API returned', res.status); return; }
+        const data = await res.json();
+        console.log('Tide data:', Array.isArray(data) ? data.length + ' stations' : data);
+        if (Array.isArray(data)) {
+            tideStations = data;
+            updateTideMarkers();
+        }
+    } catch (e) {
+        console.log('Tide height fetch failed:', e);
+    }
+}
+
+function updateTideMarkers() {
+    if (!tideStationMarkers) {
+        tideStationMarkers = L.layerGroup();
+    }
+    tideStationMarkers.clearLayers();
+    console.log('Updating tide markers:', tideStations.length, 'stations');
+
+    for (const s of tideStations) {
+        const h = s.height_ft;
+        if (h == null) continue;
+        const sign = h >= 0 ? '+' : '';
+        const color = h >= 0 ? '#5dade2' : '#e74c3c';
+        const size = 44;
+
+        const svg = `<svg width="${size}" height="${size}" viewBox="0 0 ${size} ${size}" xmlns="http://www.w3.org/2000/svg">
+            <circle cx="${size/2}" cy="${size/2}" r="${size/2 - 2}" fill="rgba(10,22,40,0.9)" stroke="${color}" stroke-width="2.5"/>
+            <text x="${size/2}" y="${size/2 + 1}" text-anchor="middle" dominant-baseline="middle" fill="${color}" font-size="11" font-weight="bold">${sign}${h.toFixed(1)}</text>
+            <text x="${size/2}" y="${size/2 + 13}" text-anchor="middle" fill="${color}" font-size="8">ft</text>
+        </svg>`;
+
+        const icon = L.divIcon({
+            html: svg,
+            className: 'tide-station-icon',
+            iconSize: [size, size],
+            iconAnchor: [size / 2, size / 2],
+        });
+
+        // Build popup content
+        let popupRows = `<div class="popup-row"><span class="popup-label">Tide Height</span><span class="popup-value" style="color:${color}">${sign}${h.toFixed(2)} ft</span></div>`;
+        if (s.next_extreme) {
+            const ex = s.next_extreme;
+            const exTime = new Date(ex.time + 'Z').toLocaleTimeString('en-US', {
+                hour: 'numeric', minute: '2-digit', timeZone: 'America/Los_Angeles'
+            });
+            const exColor = ex.type === 'High' ? '#5dade2' : '#e74c3c';
+            popupRows += `<div class="popup-row"><span class="popup-label">Next ${ex.type}</span><span class="popup-value" style="color:${exColor}">${ex.height_ft.toFixed(2)} ft @ ${exTime}</span></div>`;
+        }
+        // Show forecast time if in forecast mode
+        if (forecastMinutes > 0) {
+            const target = new Date(Date.now() + forecastMinutes * 60000);
+            const fTime = target.toLocaleString('en-US', {
+                weekday: 'short', month: 'short', day: 'numeric',
+                hour: 'numeric', minute: '2-digit',
+                timeZone: 'America/Los_Angeles'
+            });
+            popupRows += `<div class="popup-row"><span class="popup-label">Forecast time</span><span class="popup-value" style="color:#f39c12">${fTime}</span></div>`;
+        }
+        popupRows += `<div class="popup-row"><span class="popup-label">Datum</span><span class="popup-value">MLLW</span></div>`;
+
+        const marker = L.marker([s.lat, s.lon], { icon, zIndexOffset: 500 })
+            .bindPopup(`<div class="popup-content"><h3>${s.name}</h3>${popupRows}</div>`, { className: 'vessel-popup', maxWidth: 240 });
+
+        tideStationMarkers.addLayer(marker);
+    }
+
+    // Re-add to map if toggle is on
+    if (tideMarkersVisible) {
+        tideStationMarkers.addTo(map);
+    }
+}
+
+loadTideHeight();
+
+// Tide toggle button
+const tideToggleBtn = document.getElementById('tide-toggle');
+if (tideToggleBtn) {
+    tideToggleBtn.classList.add('tide-off');
+    tideToggleBtn.addEventListener('click', () => {
+        tideMarkersVisible = !tideMarkersVisible;
+        if (tideMarkersVisible) {
+            if (tideStationMarkers) tideStationMarkers.addTo(map);
+            tideToggleBtn.textContent = 'Tide: ON';
+            tideToggleBtn.classList.remove('tide-off');
+        } else {
+            if (tideStationMarkers) map.removeLayer(tideStationMarkers);
+            tideToggleBtn.textContent = 'Tide: OFF';
+            tideToggleBtn.classList.add('tide-off');
+        }
+    });
+}
+
 autoRefreshTimers.wind = setInterval(loadWindField, 300000);
 
 // Wind toggle button
@@ -1165,6 +1270,7 @@ const forecastCancelBtn = document.getElementById('forecast-cancel');
 
 let _forecastLoading = false;
 let _selectedHourEl = null;  // currently highlighted hour element
+let _windWasOn = false;      // track if wind was on before going beyond 48h
 
 // --- Build the 48-hour timeline ---
 function buildTimeline() {
@@ -1260,6 +1366,13 @@ function updateTimeShiftUI() {
     if (!isForecast) {
         forecastBanner.classList.add('hidden');
         statusBar.classList.remove('forecast-mode');
+        // Restore wind if it was on before going beyond 48h
+        if (_windWasOn && windOverlay && !windOverlay.animating) {
+            windOverlay.start();
+            const windLegend = document.getElementById('wind-legend');
+            if (windLegend) windLegend.classList.add('visible');
+            _windWasOn = false;
+        }
         if (windStationMarkers && windOverlay && windOverlay.animating) {
             windStationMarkers.show();
         }
@@ -1274,6 +1387,23 @@ function updateTimeShiftUI() {
         forecastBanner.classList.remove('hidden');
         statusBar.classList.add('forecast-mode');
         if (windStationMarkers) windStationMarkers.hide();
+
+        // Beyond 48h — no wind forecast available, turn off wind overlay
+        const windLegend = document.getElementById('wind-legend');
+        if (forecastMinutes > 48 * 60) {
+            if (windOverlay && windOverlay.animating) {
+                _windWasOn = true;
+                windOverlay.stop();
+                if (windLegend) windLegend.classList.remove('visible');
+            }
+        } else if (_windWasOn) {
+            // Back within 48h — restore wind if user had it on
+            if (windOverlay && !windOverlay.animating) {
+                windOverlay.start();
+                if (windLegend) windLegend.classList.add('visible');
+            }
+            _windWasOn = false;
+        }
     }
 }
 
@@ -1326,11 +1456,13 @@ function manageAutoRefresh() {
     clearInterval(autoRefreshTimers.currents);
     clearInterval(autoRefreshTimers.field);
     clearInterval(autoRefreshTimers.wind);
+    clearInterval(autoRefreshTimers.tide);
 
     if (forecastMinutes === 0) {
         autoRefreshTimers.currents = setInterval(loadCurrents, 60000);
         autoRefreshTimers.field = setInterval(loadCurrentField, 300000);
         autoRefreshTimers.wind = setInterval(loadWindField, 300000);
+        autoRefreshTimers.tide = setInterval(loadTideHeight, 300000);
     }
 }
 
@@ -1339,12 +1471,13 @@ async function reloadEnvironmentalData() {
     setForecastLoading(true);
 
     let loaded = 0;
-    const total = forecastMinutes > 48 * 60 ? 2 : 3;
+    const total = forecastMinutes > 48 * 60 ? 3 : 4;  // currents + field + tide (+ wind if ≤48h)
 
     try {
         const promises = [
             loadCurrents().then(() => { loaded++; setForecastProgress(loaded, total); }),
             loadCurrentField().then(() => { loaded++; setForecastProgress(loaded, total); }),
+            loadTideHeight().then(() => { loaded++; setForecastProgress(loaded, total); }),
         ];
         if (forecastMinutes <= 48 * 60) {
             promises.push(loadWindField().then(() => { loaded++; setForecastProgress(loaded, total); }));

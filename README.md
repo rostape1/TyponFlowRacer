@@ -13,7 +13,9 @@ A lightweight AIS vessel tracker for sailboats. Connects to a WiFi AIS receiver,
 - CPA/TCPA collision risk warnings with color-coded alerts
 - Speed history charts (2-hour track) with acceleration/deceleration coloring
 - **High-resolution tidal current visualization** powered by NOAA SFBOFS hydrodynamic model (see below)
+- **Tide height stations** — 14 NOAA tide stations across SF Bay showing real-time water level (ft MLLW) and next high/low tide with toggleable markers
 - **Wind overlay** with animated particles from HRRR model
+- **Forecast timeline** — scrollable 48-hour timeline strip with hour/day marks; tap an hour, click GO, see real % progress. Calendar picker for unlimited long-range tide forecasts beyond 48h
 - **PWA support** — installable on iPhone/iPad via "Add to Home Screen" for full-screen native feel
 - Offline-capable with locally cached map tiles and current data
 - Demo mode with simulated vessel movements in SF Bay
@@ -73,6 +75,28 @@ The app shows animated tidal current flow using particle trails on the map, simi
 - `numpy` — array operations
 - `scipy` — regridding from unstructured mesh to regular grid
 
+## Tide Height Stations
+
+14 NOAA tide prediction stations across SF Bay, from Half Moon Bay to Port Chicago. Toggle visibility with the **Tide: ON/OFF** button in the status bar.
+
+Each station marker shows the current water level in feet above MLLW. Click a marker to see:
+- **Tide Height** — current water level (e.g. +4.2 ft)
+- **Next High/Low** — time and height of the next tidal extreme
+- **Forecast time** — shown when in forecast mode
+
+Tide predictions are math-based (harmonic constituents) with **no time limit** — you can forecast tide heights months ahead using the calendar picker. Wind and current field forecasts are limited to 48h (HRRR/SFBOFS model data).
+
+**Key stations:** San Francisco (Golden Gate), Alameda, Oakland, Berkeley, Redwood City, San Mateo Bridge, Dumbarton Bridge, San Leandro Marina, Corte Madera Creek, Richmond, Half Moon Bay, Pinole Point, Martinez, Port Chicago.
+
+## Forecast Timeline
+
+A scrollable timeline strip at the bottom of the screen. Shows 48 hours of forecast time with hour marks grouped by day.
+
+- **Tap an hour** to select it (highlighted in orange)
+- **Click GO** to load forecast data — progress shown as real percentage (25% → 50% → 75% → 100%)
+- **Click NOW** to return to real-time
+- **Calendar button** (📅) for dates beyond 48h — tide heights work at any range, wind/current field limited to 48h
+
 ## Configuration
 
 Edit `config.py` or set environment variables:
@@ -107,6 +131,7 @@ AIS Data Sources (auto-detect priority):
 
 NOAA S3 (SFBOFS NetCDF) → sfbofs.py (regrid) → /api/current-field → tidal-flow.js (particles)
 NOAA CO-OPS API → currents.py → /api/currents → tidal-flow.js (fallback) + current arrows
+NOAA CO-OPS API → tides.py → /api/tide-height → app.js (station markers)
 Open-Meteo (HRRR) → wind.py → /api/wind-field → wind-overlay.js (particles)
 ```
 

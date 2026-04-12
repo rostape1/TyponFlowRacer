@@ -36,29 +36,33 @@ def _build_url(station_id: str, date: str = "today") -> str:
     )
 
 
-async def fetch_predictions(station_id: str) -> list[dict] | None:
-    """Fetch current predictions from NOAA for a station. Returns list of prediction dicts."""
+async def fetch_predictions(station_id: str, date_str: str = "today") -> list[dict] | None:
+    """Fetch current predictions from NOAA for a station. Returns list of prediction dicts.
+
+    date_str: NOAA date param — "today" or "YYYYMMDD".
+    """
+    cache_key = f"{station_id}_{date_str}"
 
     # Check memory cache first
-    cached = _cache.get(station_id)
+    cached = _cache.get(cache_key)
     if cached and (datetime.now(timezone.utc) - cached["fetched_at"]).total_seconds() < 6 * 3600:
         return cached["predictions"]
 
-    # Check offline cache
-    offline_file = OFFLINE_DIR / f"{station_id}.json"
-    if offline_file.exists():
-        try:
-            data = json.loads(offline_file.read_text())
-            # Check if predictions cover today
-            today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-            if any(today_str in p.get("Time", "") for p in data):
-                _cache[station_id] = {"predictions": data, "fetched_at": datetime.now(timezone.utc)}
-                return data
-        except Exception:
-            pass
+    # Check offline cache (only for today)
+    if date_str == "today":
+        offline_file = OFFLINE_DIR / f"{station_id}.json"
+        if offline_file.exists():
+            try:
+                data = json.loads(offline_file.read_text())
+                today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+                if any(today_str in p.get("Time", "") for p in data):
+                    _cache[cache_key] = {"predictions": data, "fetched_at": datetime.now(timezone.utc)}
+                    return data
+            except Exception:
+                pass
 
     # Fetch from NOAA API
-    url = _build_url(station_id)
+    url = _build_url(station_id, date=date_str)
     try:
         loop = asyncio.get_event_loop()
         result = await loop.run_in_executor(None, _fetch_url, url)
@@ -75,7 +79,7 @@ async def fetch_predictions(station_id: str) -> list[dict] | None:
             predictions = parsed["predictions"]
 
         if predictions:
-            _cache[station_id] = {"predictions": predictions, "fetched_at": datetime.now(timezone.utc)}
+            _cache[cache_key] = {"predictions": predictions, "fetched_at": datetime.now(timezone.utc)}
             return predictions
 
         return None
@@ -168,13 +172,20 @@ def _format_prediction(p: dict) -> dict:
     }
 
 
-async def get_all_currents() -> list[dict]:
-    """Fetch current data for all SF Bay stations."""
+async def get_all_currents(target_time: datetime | None = None) -> list[dict]:
+    """Fetch current data for all SF Bay stations.
+
+    target_time: UTC datetime to evaluate predictions at (None = now).
+    """
+    # Determine which date(s) to fetch predictions for
+    eval_time = target_time or datetime.now(timezone.utc)
+    date_str = eval_time.strftime("%Y%m%d")
+
     results = []
     for station_id, info in STATIONS.items():
-        predictions = await fetch_predictions(station_id)
+        predictions = await fetch_predictions(station_id, date_str=date_str)
         if predictions:
-            current = interpolate_current(predictions)
+            current = interpolate_current(predictions, now=eval_time)
             if current:
                 results.append({
                     "station_id": station_id,

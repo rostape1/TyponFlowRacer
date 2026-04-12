@@ -34,9 +34,9 @@ BOUNDS = {
 # Grid resolution (~200m spacing)
 GRID_SPACING = 0.002  # degrees
 
-# Cache
-_grid_cache = None
-_cache_time = None
+# Cache — keyed by forecast_hour
+_grid_cache: dict[int, dict] = {}
+_cache_times: dict[int, datetime] = {}
 _fetch_lock = None  # Initialized lazily to avoid event loop issues
 CACHE_TTL = 6 * 3600  # 6 hours
 
@@ -70,8 +70,11 @@ def _download_file(url: str, dest: str) -> bool:
         return False
 
 
-def _find_latest_url() -> str | None:
-    """Find the most recent available SFBOFS fields file on S3."""
+def _find_latest_run() -> tuple[str, str] | None:
+    """Find the most recent available SFBOFS model run on S3.
+
+    Returns (date_str, run_hour) or None.
+    """
     now = datetime.now(timezone.utc)
 
     # Try today and yesterday
@@ -90,8 +93,8 @@ def _find_latest_url() -> str | None:
             try:
                 req = Request(url, method="HEAD", headers={"User-Agent": "AIS-Tracker/1.0"})
                 with urlopen(req, timeout=10):
-                    logger.info(f"Found SFBOFS: {date_str} t{run}z")
-                    return url
+                    logger.info(f"Found SFBOFS run: {date_str} t{run}z")
+                    return (date_str, run)
             except (URLError, TimeoutError, OSError):
                 continue
 
@@ -240,56 +243,72 @@ def _extract_and_regrid(nc_path: str, source_url: str = "") -> dict | None:
         ds.close()
 
 
-async def get_current_field() -> dict | None:
-    """Get the regridded current velocity field. Uses cache + S3 fetch."""
-    global _grid_cache, _cache_time, _fetch_lock
+async def get_current_field(forecast_hour: int = 0) -> dict | None:
+    """Get the regridded current velocity field. Uses cache + S3 fetch.
 
-    # Check memory cache
-    if _grid_cache and _cache_time:
-        age = (datetime.now(timezone.utc) - _cache_time).total_seconds()
+    forecast_hour: 0 = nowcast, 1-48 = forecast hours ahead.
+    """
+    global _fetch_lock
+
+    # On first call for nowcast, load offline cache so we have data immediately
+    if forecast_hour == 0 and 0 not in _grid_cache and OFFLINE_PATH.exists():
+        try:
+            data = json.loads(OFFLINE_PATH.read_text())
+            _grid_cache[0] = data
+            _cache_times[0] = datetime.now(timezone.utc)
+            logger.info("Loaded offline SFBOFS cache")
+        except Exception:
+            pass
+
+    # Check memory cache for this forecast hour
+    cached = _grid_cache.get(forecast_hour)
+    cached_time = _cache_times.get(forecast_hour)
+    if cached and cached_time:
+        age = (datetime.now(timezone.utc) - cached_time).total_seconds()
         if age < CACHE_TTL:
-            return _grid_cache
+            return cached
 
     # Lazy-init lock (must be in event loop context)
     if _fetch_lock is None:
         _fetch_lock = asyncio.Lock()
 
+    # Return stale cache immediately if available, refresh in background
+    stale_data = _grid_cache.get(forecast_hour)
+
     async with _fetch_lock:
         # Double-check after acquiring lock (another request may have completed)
-        if _grid_cache and _cache_time:
-            age = (datetime.now(timezone.utc) - _cache_time).total_seconds()
+        cached = _grid_cache.get(forecast_hour)
+        cached_time = _cache_times.get(forecast_hour)
+        if cached and cached_time:
+            age = (datetime.now(timezone.utc) - cached_time).total_seconds()
             if age < CACHE_TTL:
-                return _grid_cache
+                return cached
 
         # Try to fetch and process in a thread (blocking I/O)
         loop = asyncio.get_event_loop()
-        result = await loop.run_in_executor(None, _fetch_and_process)
+        result = await loop.run_in_executor(None, _fetch_and_process, forecast_hour)
 
         if result:
-            _grid_cache = result
-            _cache_time = datetime.now(timezone.utc)
+            _grid_cache[forecast_hour] = result
+            _cache_times[forecast_hour] = datetime.now(timezone.utc)
             return result
 
-    # Fall back to offline cache
-    if OFFLINE_PATH.exists():
-        try:
-            data = json.loads(OFFLINE_PATH.read_text())
-            logger.info("Using offline SFBOFS cache")
-            _grid_cache = data
-            _cache_time = datetime.now(timezone.utc)
-            return data
-        except Exception:
-            pass
+    # Return stale data if online fetch failed
+    if stale_data:
+        return stale_data
 
     return None
 
 
-def _fetch_and_process() -> dict | None:
+def _fetch_and_process(forecast_hour: int = 0) -> dict | None:
     """Download latest SFBOFS file and extract grid (runs in thread)."""
-    url = _find_latest_url()
-    if not url:
+    run_info = _find_latest_run()
+    if not run_info:
         logger.warning("No SFBOFS data available on S3")
         return None
+
+    date_str, run_hour = run_info
+    url = _s3_url(date_str, run_hour, forecast_hour=forecast_hour)
 
     # Download to temp file
     with tempfile.NamedTemporaryFile(suffix=".nc", delete=False) as tmp:
@@ -298,13 +317,23 @@ def _fetch_and_process() -> dict | None:
     try:
         logger.info(f"Downloading SFBOFS: {url}")
         if not _download_file(url, tmp_path):
-            return None
+            # If requested forecast hour is not available, fall back to closest
+            if forecast_hour > 0:
+                logger.warning(f"Forecast hour {forecast_hour} not available, trying hour 0")
+                url = _s3_url(date_str, run_hour, forecast_hour=0)
+                if not _download_file(url, tmp_path):
+                    return None
+            else:
+                return None
 
         logger.info("Extracting and regridding...")
         result = _extract_and_regrid(tmp_path, source_url=url)
 
-        # Save offline cache
         if result:
+            result["forecast_hour"] = forecast_hour
+
+        # Save offline cache (only for nowcast)
+        if result and forecast_hour == 0:
             try:
                 OFFLINE_PATH.parent.mkdir(parents=True, exist_ok=True)
                 OFFLINE_PATH.write_text(json.dumps(result))
