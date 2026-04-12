@@ -1091,6 +1091,21 @@ document.getElementById('flow-toggle').addEventListener('click', () => {
     }
 });
 
+// Heatmap toggle button
+document.getElementById('heatmap-toggle').addEventListener('click', () => {
+    if (!tidalFlow) return;
+    const btn = document.getElementById('heatmap-toggle');
+    if (tidalFlow.heatmapEnabled) {
+        tidalFlow.setHeatmapEnabled(false);
+        btn.textContent = 'Heatmap: OFF';
+        btn.classList.add('flow-off');
+    } else {
+        tidalFlow.setHeatmapEnabled(true);
+        btn.textContent = 'Heatmap: ON';
+        btn.classList.remove('flow-off');
+    }
+});
+
 // --- Data freshness indicator ---
 function formatDataAge(fetchedAtStr) {
     if (!fetchedAtStr) return null;

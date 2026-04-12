@@ -82,6 +82,12 @@ class TidalFlowOverlay {
         // Grid data (from SFBOFS)
         this.grid = null;  // { bounds, nx, ny, u[][], v[][] }
 
+        // Heatmap
+        this.heatmapCanvas = null;
+        this.heatmapCtx = null;
+        this.heatmapEnabled = true;  // default ON
+        this._heatmapImage = null;   // cached offscreen ImageData
+
         // Config
         this.particleCount = options.particleCount || 2000;
         this.particleAge = options.particleAge || 80;
@@ -113,11 +119,21 @@ class TidalFlowOverlay {
     }
 
     _initCanvas() {
+        // Heatmap canvas (below particles)
+        if (!this.map.getPane('tidalHeatmap')) {
+            this.map.createPane('tidalHeatmap');
+            this.map.getPane('tidalHeatmap').style.zIndex = 449;
+        }
+        this.heatmapCanvas = document.createElement('canvas');
+        this.heatmapCanvas.id = 'tidal-heatmap-canvas';
+        this.heatmapCanvas.style.cssText = 'position:absolute;top:0;left:0;pointer-events:none;opacity:0.4;';
+        this.map.getPane('tidalHeatmap').appendChild(this.heatmapCanvas);
+        this.heatmapCtx = this.heatmapCanvas.getContext('2d');
+
+        // Particle canvas (above heatmap)
         this.canvas = document.createElement('canvas');
         this.canvas.id = 'tidal-flow-canvas';
         this.canvas.style.cssText = 'position:absolute;top:0;left:0;pointer-events:none;opacity:0.8;';
-        // Use a custom Leaflet pane so canvas participates in pane z-ordering
-        // z-index 451: above wind (450), below markerPane (600)
         if (!this.map.getPane('tidalCanvas')) {
             this.map.createPane('tidalCanvas');
             this.map.getPane('tidalCanvas').style.zIndex = 451;
@@ -131,6 +147,8 @@ class TidalFlowOverlay {
         const size = this.map.getSize();
         this.canvas.width = size.x;
         this.canvas.height = size.y;
+        this.heatmapCanvas.width = size.x;
+        this.heatmapCanvas.height = size.y;
         this._repositionCanvas();
         this._resetParticles();
     }
@@ -138,6 +156,8 @@ class TidalFlowOverlay {
     _repositionCanvas() {
         const topLeft = this.map.containerPointToLayerPoint([0, 0]);
         L.DomUtil.setPosition(this.canvas, topLeft);
+        L.DomUtil.setPosition(this.heatmapCanvas, topLeft);
+        this._drawHeatmap();
     }
 
     _bindEvents() {
@@ -150,6 +170,7 @@ class TidalFlowOverlay {
         this._repositionCanvas();
         this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
         this._resetParticles();
+        this._drawHeatmap();
     }
 
     _speedToColor(speed) {
@@ -265,6 +286,7 @@ class TidalFlowOverlay {
     setGrid(data) {
         if (!data || !data.u || !data.v) {
             this.grid = null;
+            this._heatmapImage = null;
             return;
         }
         this.grid = {
@@ -275,6 +297,85 @@ class TidalFlowOverlay {
             v: data.v,
         };
         console.log(`Tidal flow grid loaded: ${data.nx}x${data.ny}`);
+        this._renderHeatmapImage();
+        this._drawHeatmap();
+    }
+
+    /** Pre-render the grid speed data to an offscreen image (called once per grid load) */
+    _renderHeatmapImage() {
+        if (!this.grid) { this._heatmapImage = null; return; }
+        const g = this.grid;
+        const w = g.nx;
+        const h = g.ny;
+        const offscreen = document.createElement('canvas');
+        offscreen.width = w;
+        offscreen.height = h;
+        const octx = offscreen.getContext('2d');
+        const imageData = octx.createImageData(w, h);
+        const pixels = imageData.data;
+
+        for (let iy = 0; iy < h; iy++) {
+            for (let ix = 0; ix < w; ix++) {
+                const u = g.u[iy][ix];
+                const v = g.v[iy][ix];
+                // Flip Y: grid row 0 = south, but canvas row 0 = top (north)
+                const canvasY = h - 1 - iy;
+                const idx = (canvasY * w + ix) * 4;
+
+                if (u === 0 && v === 0) {
+                    // Land / no data — fully transparent
+                    pixels[idx] = 0;
+                    pixels[idx + 1] = 0;
+                    pixels[idx + 2] = 0;
+                    pixels[idx + 3] = 0;
+                } else {
+                    const speed = Math.sqrt(u * u + v * v);
+                    const [r, gr, b] = this._speedToColor(speed);
+                    pixels[idx] = r;
+                    pixels[idx + 1] = gr;
+                    pixels[idx + 2] = b;
+                    pixels[idx + 3] = 255;
+                }
+            }
+        }
+
+        octx.putImageData(imageData, 0, 0);
+        this._heatmapImage = offscreen;
+    }
+
+    /** Draw the cached heatmap image projected onto current map view */
+    _drawHeatmap() {
+        if (!this.heatmapCtx) return;
+        const W = this.heatmapCanvas.width;
+        const H = this.heatmapCanvas.height;
+        this.heatmapCtx.clearRect(0, 0, W, H);
+
+        if (!this._heatmapImage || !this.grid || !this.heatmapEnabled) return;
+
+        const b = this.grid.bounds;
+        // Project grid corners to container pixels
+        const topLeft = this.map.latLngToContainerPoint([b.north, b.west]);
+        const bottomRight = this.map.latLngToContainerPoint([b.south, b.east]);
+
+        const dx = topLeft.x;
+        const dy = topLeft.y;
+        const dw = bottomRight.x - topLeft.x;
+        const dh = bottomRight.y - topLeft.y;
+
+        // Use image smoothing for nice interpolation when scaled up
+        this.heatmapCtx.imageSmoothingEnabled = true;
+        this.heatmapCtx.imageSmoothingQuality = 'high';
+        this.heatmapCtx.drawImage(this._heatmapImage, dx, dy, dw, dh);
+    }
+
+    setHeatmapEnabled(enabled) {
+        this.heatmapEnabled = enabled;
+        if (enabled) {
+            this.heatmapCanvas.style.display = '';
+            this._drawHeatmap();
+        } else {
+            this.heatmapCanvas.style.display = 'none';
+        }
     }
 
     _interpolateAtGrid(lat, lon) {
@@ -329,13 +430,19 @@ class TidalFlowOverlay {
         if (this.animating) return;
         this.animating = true;
         this.canvas.style.display = '';
+        if (this.heatmapEnabled) {
+            this.heatmapCanvas.style.display = '';
+            this._drawHeatmap();
+        }
         this._animate();
     }
 
     stop() {
         this.animating = false;
         this.canvas.style.display = 'none';
+        this.heatmapCanvas.style.display = 'none';
         this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
+        this.heatmapCtx.clearRect(0, 0, this.heatmapCanvas.width, this.heatmapCanvas.height);
     }
 
     _animate() {
@@ -383,9 +490,13 @@ class TidalFlowOverlay {
 
             const newPt = this.map.latLngToContainerPoint([p.lat, p.lon]);
 
-            const [r, g, b] = this._speedToColor(current.speed);
             const alpha = 0.85;
-            ctx.strokeStyle = `rgba(${r},${g},${b},${alpha})`;
+            if (this.heatmapEnabled) {
+                ctx.strokeStyle = `rgba(255,255,255,${alpha})`;
+            } else {
+                const [r, g, b] = this._speedToColor(current.speed);
+                ctx.strokeStyle = `rgba(${r},${g},${b},${alpha})`;
+            }
             ctx.lineWidth = this.lineWidth;
             ctx.beginPath();
             ctx.moveTo(oldPt.x, oldPt.y);

@@ -95,6 +95,27 @@ body {
     color: #7a8fa6;
 }
 
+#heatmap-toggle {
+    background: rgba(220, 120, 30, 0.2);
+    border: 1px solid rgba(220, 120, 30, 0.3);
+    color: #e8a040;
+    font-size: 11px;
+    padding: 2px 8px;
+    border-radius: 3px;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+#heatmap-toggle:hover {
+    background: rgba(220, 120, 30, 0.3);
+}
+
+#heatmap-toggle.flow-off {
+    background: rgba(100, 100, 100, 0.2);
+    border-color: rgba(100, 100, 100, 0.3);
+    color: #7a8fa6;
+}
+
 #wind-toggle {
     background: rgba(170, 70, 190, 0.2);
     border: 1px solid rgba(170, 70, 190, 0.3);
