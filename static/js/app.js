@@ -1155,15 +1155,19 @@ function updateTideMarkers() {
 
     for (const s of tideStations) {
         const h = s.height_ft;
-        if (h == null) continue;
-        const sign = h >= 0 ? '+' : '';
-        const color = h >= 0 ? '#5dade2' : '#e74c3c';
+        const hasData = h != null;
+        const sign = hasData && h >= 0 ? '+' : '';
+        const color = !hasData ? '#888' : (h >= 0 ? '#5dade2' : '#e74c3c');
         const size = 44;
 
+        const label = hasData ? `${sign}${h.toFixed(1)}` : 'N/A';
+        const textY = size / 2 + (hasData ? 1 : 5);
+        const fontSize = hasData ? 11 : 12;
+        const ftLine = hasData ? `<text x="${size/2}" y="${size/2 + 13}" text-anchor="middle" fill="${color}" font-size="8">ft</text>` : '';
         const svg = `<svg width="${size}" height="${size}" viewBox="0 0 ${size} ${size}" xmlns="http://www.w3.org/2000/svg">
             <circle cx="${size/2}" cy="${size/2}" r="${size/2 - 2}" fill="rgba(10,22,40,0.9)" stroke="${color}" stroke-width="2.5"/>
-            <text x="${size/2}" y="${size/2 + 1}" text-anchor="middle" dominant-baseline="middle" fill="${color}" font-size="11" font-weight="bold">${sign}${h.toFixed(1)}</text>
-            <text x="${size/2}" y="${size/2 + 13}" text-anchor="middle" fill="${color}" font-size="8">ft</text>
+            <text x="${size/2}" y="${textY}" text-anchor="middle" dominant-baseline="middle" fill="${color}" font-size="${fontSize}" font-weight="bold">${label}</text>
+            ${ftLine}
         </svg>`;
 
         const icon = L.divIcon({
@@ -1174,14 +1178,19 @@ function updateTideMarkers() {
         });
 
         // Build popup content
-        let popupRows = `<div class="popup-row"><span class="popup-label">Tide Height</span><span class="popup-value" style="color:${color}">${sign}${h.toFixed(2)} ft</span></div>`;
-        if (s.next_extreme) {
-            const ex = s.next_extreme;
-            const exTime = new Date(ex.time + 'Z').toLocaleTimeString('en-US', {
-                hour: 'numeric', minute: '2-digit', timeZone: 'America/Los_Angeles'
-            });
-            const exColor = ex.type === 'High' ? '#5dade2' : '#e74c3c';
-            popupRows += `<div class="popup-row"><span class="popup-label">Next ${ex.type}</span><span class="popup-value" style="color:${exColor}">${ex.height_ft.toFixed(2)} ft @ ${exTime}</span></div>`;
+        let popupRows;
+        if (!hasData) {
+            popupRows = `<div class="popup-row"><span class="popup-label">Tide Height</span><span class="popup-value" style="color:#888">Data unavailable</span></div>`;
+        } else {
+            popupRows = `<div class="popup-row"><span class="popup-label">Tide Height</span><span class="popup-value" style="color:${color}">${sign}${h.toFixed(2)} ft</span></div>`;
+            if (s.next_extreme) {
+                const ex = s.next_extreme;
+                const exTime = new Date(ex.time + 'Z').toLocaleTimeString('en-US', {
+                    hour: 'numeric', minute: '2-digit', timeZone: 'America/Los_Angeles'
+                });
+                const exColor = ex.type === 'High' ? '#5dade2' : '#e74c3c';
+                popupRows += `<div class="popup-row"><span class="popup-label">Next ${ex.type}</span><span class="popup-value" style="color:${exColor}">${ex.height_ft.toFixed(2)} ft @ ${exTime}</span></div>`;
+            }
         }
         // Show forecast time if in forecast mode
         if (forecastMinutes > 0) {
@@ -1193,7 +1202,7 @@ function updateTideMarkers() {
             });
             popupRows += `<div class="popup-row"><span class="popup-label">Forecast time</span><span class="popup-value" style="color:#f39c12">${fTime}</span></div>`;
         }
-        popupRows += `<div class="popup-row"><span class="popup-label">Datum</span><span class="popup-value">MLLW</span></div>`;
+        if (hasData) popupRows += `<div class="popup-row"><span class="popup-label">Datum</span><span class="popup-value">MLLW</span></div>`;
 
         const marker = L.marker([s.lat, s.lon], { icon, zIndexOffset: 500 })
             .bindPopup(`<div class="popup-content"><h3>${s.name}</h3>${popupRows}</div>`, { className: 'vessel-popup', maxWidth: 240 });

@@ -147,29 +147,29 @@ def find_next_extreme(predictions: list[dict], target: datetime) -> dict | None:
     return None
 
 
-async def _get_station_tide(station_id: str, info: dict, eval_time: datetime) -> dict | None:
-    """Get tide data for a single station."""
+async def _get_station_tide(station_id: str, info: dict, eval_time: datetime) -> dict:
+    """Get tide data for a single station. Always returns a dict (height_ft may be None)."""
     begin = eval_time.strftime("%Y%m%d")
     end = (eval_time + timedelta(days=1)).strftime("%Y%m%d")
 
+    base = {"station_id": station_id, "name": info["name"],
+            "lat": info["lat"], "lon": info["lon"],
+            "height_ft": None, "next_extreme": None}
+
     preds = await fetch_predictions(station_id, begin_date=begin, end_date=end)
     if not preds:
-        return None
+        # Retry once after a short pause
+        await asyncio.sleep(1)
+        preds = await fetch_predictions(station_id, begin_date=begin, end_date=end)
+    if not preds:
+        return base
 
     height = interpolate_height(preds, eval_time)
     extreme = find_next_extreme(preds, eval_time)
 
-    if height is None:
-        return None
-
-    return {
-        "station_id": station_id,
-        "name": info["name"],
-        "lat": info["lat"],
-        "lon": info["lon"],
-        "height_ft": height,
-        "next_extreme": extreme,
-    }
+    base["height_ft"] = height
+    base["next_extreme"] = extreme
+    return base
 
 
 async def get_all_tide_heights(target_time: datetime | None = None) -> list[dict]:
