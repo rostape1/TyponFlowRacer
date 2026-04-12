@@ -2,6 +2,7 @@ import asyncio
 import json
 import logging
 from datetime import datetime, timezone, timedelta
+from pathlib import Path
 from urllib.request import Request, urlopen
 from urllib.error import URLError
 
@@ -38,6 +39,9 @@ NOAA_BASE = "https://api.tidesandcurrents.noaa.gov/api/prod/datagetter"
 # Cache: "station_date" → { predictions: [...], fetched_at: datetime }
 _cache: dict[str, dict] = {}
 
+# Offline cache directory
+OFFLINE_DIR = Path(__file__).parent / "static" / "data" / "tides"
+
 
 def _build_url(station_id: str, begin_date: str = None, end_date: str = None) -> str:
     if begin_date and end_date:
@@ -70,6 +74,19 @@ async def fetch_predictions(station_id: str, begin_date: str = None, end_date: s
     cached = _cache.get(cache_key)
     if cached and (datetime.now(timezone.utc) - cached["fetched_at"]).total_seconds() < 6 * 3600:
         return cached["predictions"]
+
+    # Check offline cache
+    offline_file = OFFLINE_DIR / f"{station_id}.json"
+    if offline_file.exists():
+        try:
+            data = json.loads(offline_file.read_text())
+            # Check if offline data covers the requested date range
+            match_date = begin_date[:4] + "-" + begin_date[4:6] + "-" + begin_date[6:8] if begin_date else datetime.now(timezone.utc).strftime("%Y-%m-%d")
+            if any(match_date in p.get("t", "") for p in data):
+                _cache[cache_key] = {"predictions": data, "fetched_at": datetime.now(timezone.utc)}
+                return data
+        except Exception:
+            pass
 
     url = _build_url(station_id, begin_date, end_date)
     try:
@@ -183,3 +200,21 @@ async def get_all_tide_heights(target_time: datetime | None = None) -> list[dict
     results = await asyncio.gather(*tasks, return_exceptions=True)
 
     return [r for r in results if isinstance(r, dict)]
+
+
+async def save_offline_cache():
+    """Download tide predictions for all stations (today + tomorrow) and save to disk."""
+    OFFLINE_DIR.mkdir(parents=True, exist_ok=True)
+    saved = 0
+    now = datetime.now(timezone.utc)
+    begin = now.strftime("%Y%m%d")
+    end = (now + timedelta(days=2)).strftime("%Y%m%d")
+
+    for station_id in STATIONS:
+        predictions = await fetch_predictions(station_id, begin_date=begin, end_date=end)
+        if predictions:
+            offline_file = OFFLINE_DIR / f"{station_id}.json"
+            offline_file.write_text(json.dumps(predictions, indent=2))
+            saved += 1
+            logger.info(f"Cached tides for {station_id} ({len(predictions)} predictions)")
+    return saved

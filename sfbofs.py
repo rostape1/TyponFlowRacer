@@ -42,6 +42,8 @@ CACHE_TTL = 6 * 3600  # 6 hours
 
 # Offline cache path
 OFFLINE_PATH = Path(__file__).parent / "static" / "data" / "sfbofs_field.json"
+OFFLINE_FORECAST_PATH = Path(__file__).parent / "static" / "data" / "sfbofs_forecasts.json"
+_forecast_cache_loaded = False
 
 
 def _s3_url(date_str: str, run_hour: str, forecast_hour: int = 0) -> str:
@@ -250,13 +252,16 @@ async def get_current_field(forecast_hour: int = 0) -> dict | None:
     """
     global _fetch_lock
 
+    # Load forecast cache from disk on first call
+    load_forecast_cache()
+
     # On first call for nowcast, load offline cache so we have data immediately
     if forecast_hour == 0 and 0 not in _grid_cache and OFFLINE_PATH.exists():
         try:
             data = json.loads(OFFLINE_PATH.read_text())
             _grid_cache[0] = data
-            _cache_times[0] = datetime.now(timezone.utc)
-            logger.info("Loaded offline SFBOFS cache")
+            _cache_times[0] = datetime(2000, 1, 1, tzinfo=timezone.utc)
+            logger.info("Loaded offline SFBOFS cache (will refresh in background)")
         except Exception:
             pass
 
@@ -358,3 +363,46 @@ async def save_offline_field():
         OFFLINE_PATH.write_text(json.dumps(result))
         return True
     return False
+
+
+def save_forecast_cache():
+    """Save all forecast hours to disk for offline use."""
+    if not _grid_cache:
+        return
+    try:
+        data = {}
+        for hour, grid in _grid_cache.items():
+            cached_time = _cache_times.get(hour)
+            if cached_time:
+                data[str(hour)] = {
+                    "grid": grid,
+                    "cached_at": cached_time.isoformat(),
+                }
+        OFFLINE_FORECAST_PATH.parent.mkdir(parents=True, exist_ok=True)
+        OFFLINE_FORECAST_PATH.write_text(json.dumps(data))
+        logger.info(f"Saved SFBOFS forecast cache: {len(data)} hours to disk")
+    except Exception as e:
+        logger.warning(f"Failed to save SFBOFS forecast cache: {e}")
+
+
+def load_forecast_cache():
+    """Load forecast hours from disk into memory cache."""
+    global _forecast_cache_loaded
+    if _forecast_cache_loaded:
+        return
+    _forecast_cache_loaded = True
+    if not OFFLINE_FORECAST_PATH.exists():
+        return
+    try:
+        data = json.loads(OFFLINE_FORECAST_PATH.read_text())
+        loaded = 0
+        for hour_str, entry in data.items():
+            hour = int(hour_str)
+            if hour not in _grid_cache:
+                _grid_cache[hour] = entry["grid"]
+                _cache_times[hour] = datetime.fromisoformat(entry["cached_at"])
+                loaded += 1
+        if loaded:
+            logger.info(f"Loaded SFBOFS forecast cache from disk: {loaded} hours")
+    except Exception as e:
+        logger.warning(f"Failed to load SFBOFS forecast cache: {e}")

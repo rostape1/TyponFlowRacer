@@ -752,6 +752,7 @@ function updatePanel() {
     // Update status bar
     document.getElementById('vessel-count').textContent = `${vesselArray.length} vessels`;
     document.getElementById('message-count').textContent = `${messageCount} msgs`;
+    if (_mobileVesselsOn) updateMobileVesselList();
 }
 
 // --- WebSocket ---
@@ -796,7 +797,7 @@ function connectWebSocket() {
 const _isMobile = window.innerWidth <= 600;
 
 function getPanelArrow(collapsed) {
-    if (_isMobile) return collapsed ? '\u25B2' : '\u25BC';  // ▲ / ▼
+    if (_isMobile) return '';  // grab bar styled via CSS
     return collapsed ? '\u203A' : '\u2039';  // › / ‹
 }
 
@@ -814,6 +815,84 @@ if (_isMobile) {
     panel.classList.add('collapsed');
     document.body.classList.add('panel-collapsed');
     document.getElementById('panel-toggle').textContent = getPanelArrow(true);
+
+    // Hide layers tray on mobile (toggled via layers button)
+    const layersTray = document.getElementById('layers-tray');
+    if (layersTray) layersTray.classList.add('hidden');
+}
+
+// --- Layers tray toggle (mobile) ---
+const _layersBtn = document.getElementById('layers-btn');
+const _layersTray = document.getElementById('layers-tray');
+if (_layersBtn && _layersTray) {
+    _layersBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        _layersTray.classList.toggle('hidden');
+    });
+    document.addEventListener('click', (e) => {
+        if (!_layersTray.contains(e.target) && e.target !== _layersBtn) {
+            _layersTray.classList.add('hidden');
+        }
+    });
+}
+
+// --- Mobile vessels toggle ---
+const _vesselsBtn = document.getElementById('vessels-toggle');
+const _mobileVesselList = document.getElementById('mobile-vessel-list');
+let _mobileVesselsOn = false;
+
+function updateMobileVesselList() {
+    if (!_mobileVesselList || !_mobileVesselsOn) return;
+    let vesselArray = Array.from(vessels.values()).filter(v => v.lat != null);
+    vesselArray.sort((a, b) => {
+        if (a.mmsi === OWN_MMSI) return -1;
+        if (b.mmsi === OWN_MMSI) return 1;
+        if (!ownPosition) return 0;
+        const da = haversineNm(ownPosition.lat, ownPosition.lon, a.lat, a.lon);
+        const db = haversineNm(ownPosition.lat, ownPosition.lon, b.lat, b.lon);
+        return da - db;
+    });
+    _mobileVesselList.innerHTML = vesselArray.map(v => {
+        const isOwn = v.mmsi === OWN_MMSI;
+        const isStale = (Date.now() - (v._lastUpdate || 0)) > STALE_MINUTES * 60 * 1000;
+        const typeClass = getTypeCssClass(v.ship_category);
+        const dist = ownPosition && !isOwn
+            ? haversineNm(ownPosition.lat, ownPosition.lon, v.lat, v.lon).toFixed(1) : null;
+        return `<div class="vessel-card ${isOwn ? 'own-vessel' : ''} ${isStale ? 'stale' : ''}" data-mmsi="${v.mmsi}">
+            <div class="vessel-name">
+                ${isOwn ? OWN_NAME : (v.name || 'MMSI ' + v.mmsi)}
+                ${v.ship_category && v.ship_category !== 'Unknown' ? `<span class="vessel-type-badge ${typeClass}">${v.ship_category}</span>` : ''}
+            </div>
+            <div class="vessel-meta">
+                ${v.sog != null ? `<span>${v.sog.toFixed(1)} kn</span>` : ''}
+                ${dist ? `<span>${dist} nm</span>` : ''}
+            </div>
+        </div>`;
+    }).join('');
+    _mobileVesselList.querySelectorAll('.vessel-card').forEach(card => {
+        card.addEventListener('click', () => {
+            const mmsi = parseInt(card.dataset.mmsi);
+            const v = vessels.get(mmsi);
+            if (v && v.lat != null) {
+                map.setView([v.lat, v.lon], Math.max(map.getZoom(), 14));
+                const marker = markers.get(mmsi);
+                if (marker) marker.openPopup();
+            }
+        });
+    });
+}
+
+if (_vesselsBtn) {
+    _vesselsBtn.classList.add('vessels-off');
+    _vesselsBtn.addEventListener('click', () => {
+        _mobileVesselsOn = !_mobileVesselsOn;
+        _vesselsBtn.textContent = _mobileVesselsOn ? 'Vessels: ON' : 'Vessels: OFF';
+        _vesselsBtn.classList.toggle('vessels-off', !_mobileVesselsOn);
+        if (_mobileVesselList) {
+            _mobileVesselList.classList.toggle('hidden', !_mobileVesselsOn);
+            if (_mobileVesselsOn) updateMobileVesselList();
+        }
+    });
 }
 
 // --- Vessel search ---
@@ -994,6 +1073,11 @@ initFlowLegend();
 
 async function loadCurrentField() {
     try {
+        // Show loading state in legend immediately
+        const flowSourceEl = document.getElementById('flow-legend-source');
+        if (flowSourceEl && !flowSourceEl.textContent) {
+            flowSourceEl.innerHTML = '<span style="opacity:0.6">Loading current data\u2026</span>';
+        }
         const timeParam = forecastMinutes > 0 ? `?time=${forecastMinutes}` : '';
         const res = await fetch(`/api/current-field${timeParam}`);
         if (!res.ok) return;
@@ -1017,8 +1101,13 @@ async function loadCurrentField() {
                 const timeStr = target.toLocaleString('en-US', { weekday: 'short', hour: 'numeric', minute: '2-digit', timeZone: 'America/Los_Angeles' });
                 source.textContent = `${src} · Forecast: ${timeStr}`;
             } else {
-                const time = data.fetched_at ? new Date(data.fetched_at.replace(' UTC', 'Z')).toLocaleString('en-US', { hour: '2-digit', minute: '2-digit', timeZoneName: 'short', timeZone: 'America/Los_Angeles' }) : '';
-                source.textContent = `${src} · ${time}`;
+                const age = formatDataAge(data.fetched_at);
+                if (age) {
+                    source.innerHTML = `${src} · ${age.dot}${age.ageText}`;
+                } else {
+                    const time = data.fetched_at ? new Date(data.fetched_at.replace(' UTC', 'Z')).toLocaleString('en-US', { hour: '2-digit', minute: '2-digit', timeZoneName: 'short', timeZone: 'America/Los_Angeles' }) : '';
+                    source.textContent = `${src} · ${time}`;
+                }
             }
         }
     } catch (e) {
@@ -1046,6 +1135,27 @@ document.getElementById('flow-toggle').addEventListener('click', () => {
         if (legend) legend.classList.add('visible');
     }
 });
+
+// --- Data freshness indicator ---
+function formatDataAge(fetchedAtStr) {
+    if (!fetchedAtStr) return null;
+    const fetched = new Date(fetchedAtStr.replace(' UTC', 'Z'));
+    if (isNaN(fetched)) return null;
+    const ageMs = Date.now() - fetched.getTime();
+    const ageMins = Math.floor(ageMs / 60000);
+    const fresh = ageMins < 45; // green if < 45 min old
+    let ageText;
+    if (ageMins < 1) ageText = 'just now';
+    else if (ageMins < 60) ageText = `${ageMins}m ago`;
+    else {
+        const h = Math.floor(ageMins / 60);
+        const m = ageMins % 60;
+        ageText = m > 0 ? `${h}h ${m}m ago` : `${h}h ago`;
+    }
+    const dotColor = fresh ? '#27ae60' : '#f1c40f';
+    const dot = `<span style="display:inline-block;width:6px;height:6px;border-radius:50%;background:${dotColor};box-shadow:0 0 4px ${dotColor};margin-right:3px;vertical-align:middle;"></span>`;
+    return { dot, ageText, fresh };
+}
 
 // --- Wind Overlay ---
 let windOverlay = null;
@@ -1109,6 +1219,11 @@ async function loadWindField() {
             if (wsource) wsource.textContent = 'Wind forecast unavailable beyond 48h';
             return;
         }
+        // Show loading state in legend immediately
+        const sourceEl = document.getElementById('wind-legend-source');
+        if (sourceEl && !sourceEl.textContent) {
+            sourceEl.innerHTML = '<span style="opacity:0.6">Loading wind data\u2026</span>';
+        }
         const timeParam = forecastMinutes > 0 ? `?time=${forecastMinutes}` : '';
         const res = await fetch(`/api/wind-field${timeParam}`);
         if (!res.ok) return;
@@ -1138,9 +1253,14 @@ async function loadWindField() {
                 const timeStr = target.toLocaleString('en-US', { weekday: 'short', hour: 'numeric', minute: '2-digit', timeZone: 'America/Los_Angeles' });
                 source.textContent = `${src} · Forecast: ${timeStr}`;
             } else {
-                const time = data.grid.fetched_at ? new Date(data.grid.fetched_at.replace(' UTC', 'Z')).toLocaleString('en-US', { hour: '2-digit', minute: '2-digit', timeZoneName: 'short', timeZone: 'America/Los_Angeles' }) : '';
                 const stationCount = data.stations ? data.stations.length : 0;
-                source.textContent = `${src} · ${time} · ${stationCount} stations`;
+                const age = formatDataAge(data.grid.fetched_at);
+                if (age) {
+                    source.innerHTML = `${src} · ${age.dot}${age.ageText} · ${stationCount} stations`;
+                } else {
+                    const time = data.grid.fetched_at ? new Date(data.grid.fetched_at.replace(' UTC', 'Z')).toLocaleString('en-US', { hour: '2-digit', minute: '2-digit', timeZoneName: 'short', timeZone: 'America/Los_Angeles' }) : '';
+                    source.textContent = `${src} · ${time} · ${stationCount} stations`;
+                }
             }
         }
     } catch (e) {

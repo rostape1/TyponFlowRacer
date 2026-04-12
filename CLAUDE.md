@@ -134,8 +134,12 @@ Local server runs at `http://localhost:8888`. Deploys to Fly.io via `fly deploy`
 
 - **50 vessel cap** — cloud AIS mode limits to 50 closest vessels to keep the map clean
 - **Tide forecasts are unlimited range** — harmonic math, no model dependency. Wind/current field limited to 48h (HRRR/SFBOFS)
+- **Startup environmental refresh** — background task fetches all 48h of wind, current field, tidal currents, and tide height data on startup, then repeats every 30 minutes. Saves all forecast data to disk (`static/data/`) for offline use.
+- **Offline forecast persistence** — All 48h of forecast data (wind grid, SFBOFS current field, tidal currents, tide heights) is saved to JSON files on disk after each refresh cycle. On restart (even offline), forecast caches load from disk immediately so forecast mode works without internet.
+- **Offline cache files** — `static/data/wind_forecasts.json` (48h wind grid), `static/data/sfbofs_forecasts.json` (48h current field), `static/data/tides/*.json` (14 station predictions), `static/data/currents/*.json` (6 station predictions), plus hour-0 files `wind_field.json`, `wind_stations.json`, `sfbofs_field.json`
 - **Offline mode** — `download_offline.py` pre-caches tiles (OSM/CartoDB/NOAA/SeaMarks), currents, wind. Service Worker serves cached assets when offline
 - **PWA offline pre-fetch** — Download button (arrow icon in timeline strip) pre-fetches 24h of tide, current, wind, and current-field data for offline PWA use. Service Worker caches environmental API responses (`ais-env-data-v1` cache) with network-first strategy; falls back to cached data when offline. `X-From-Cache` response header signals staleness to the app. Offline banner shown when serving cached data.
+- **Data freshness indicators** — Wind and current field legends show green/yellow dot with relative age (e.g. "3m ago" / "2h 30m ago"). Green = data < 45 min old, yellow = stale.
 - **Position data kept permanently** — for post-voyage analysis
 
 ## Key Patterns

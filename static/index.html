@@ -47,10 +47,19 @@
         <span id="connection-status" class="status-disconnected">Disconnected</span>
         <span id="vessel-count">0 vessels</span>
         <span id="message-count">0 messages</span>
+        <button id="layers-btn" class="layers-btn" title="Map layers">&#x2630;</button>
+    </div>
+
+    <!-- Layer toggles (desktop: inline in status area, mobile: slide-up tray) -->
+    <div id="layers-tray" class="layers-tray">
         <button id="flow-toggle" title="Toggle tidal flow animation">Flow: ON</button>
         <button id="wind-toggle" title="Toggle wind overlay">Wind: OFF</button>
         <button id="tide-toggle" title="Toggle tide height stations">Tide: OFF</button>
+        <button id="vessels-toggle" title="Toggle vessel list">Vessels: OFF</button>
     </div>
+
+    <!-- Mobile vessel list (shown when vessels toggle is ON) -->
+    <div id="mobile-vessel-list" class="mobile-vessel-list hidden"></div>
 
     <!-- Offline download progress -->
     <div id="offline-dl-panel" class="offline-dl-panel hidden">

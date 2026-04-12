@@ -44,6 +44,8 @@ _fetch_lock = None
 # Offline paths
 OFFLINE_GRID_PATH = Path(__file__).parent / "static" / "data" / "wind_field.json"
 OFFLINE_STATION_PATH = Path(__file__).parent / "static" / "data" / "wind_stations.json"
+OFFLINE_FORECAST_PATH = Path(__file__).parent / "static" / "data" / "wind_forecasts.json"
+_forecast_cache_loaded = False
 
 # NDBC stations in SF Bay area
 NDBC_STATIONS = {
@@ -263,6 +265,50 @@ def _fetch_stations() -> list | None:
     return stations
 
 
+def save_forecast_cache():
+    """Save all forecast hours to disk for offline use."""
+    if not _forecast_cache:
+        return
+    try:
+        data = {}
+        for key, entry in _forecast_cache.items():
+            hour = key.replace("forecast_", "")
+            data[hour] = {
+                "grid": entry["grid"],
+                "cached_at": entry["_cached_at"].isoformat(),
+            }
+        OFFLINE_FORECAST_PATH.parent.mkdir(parents=True, exist_ok=True)
+        OFFLINE_FORECAST_PATH.write_text(json.dumps(data))
+        logger.info(f"Saved wind forecast cache: {len(data)} hours to disk")
+    except Exception as e:
+        logger.warning(f"Failed to save wind forecast cache: {e}")
+
+
+def load_forecast_cache():
+    """Load forecast hours from disk into memory cache."""
+    global _forecast_cache, _forecast_cache_loaded
+    if _forecast_cache_loaded:
+        return
+    _forecast_cache_loaded = True
+    if not OFFLINE_FORECAST_PATH.exists():
+        return
+    try:
+        data = json.loads(OFFLINE_FORECAST_PATH.read_text())
+        loaded = 0
+        for hour_str, entry in data.items():
+            cache_key = f"forecast_{hour_str}"
+            if cache_key not in _forecast_cache:
+                _forecast_cache[cache_key] = {
+                    "grid": entry["grid"],
+                    "_cached_at": datetime.fromisoformat(entry["cached_at"]),
+                }
+                loaded += 1
+        if loaded:
+            logger.info(f"Loaded wind forecast cache from disk: {loaded} hours")
+    except Exception as e:
+        logger.warning(f"Failed to load wind forecast cache: {e}")
+
+
 async def get_wind_field(forecast_hour: int = 0) -> dict | None:
     """Get combined wind grid + station observations. Uses caches.
 
@@ -276,13 +322,14 @@ async def get_wind_field(forecast_hour: int = 0) -> dict | None:
 
     # For forecast requests, use separate forecast cache
     if is_forecast:
-        if _fetch_lock is None:
-            _fetch_lock = asyncio.Lock()
-
+        load_forecast_cache()  # Load from disk on first call
         cache_key = f"forecast_{forecast_hour}"
         cached = _forecast_cache.get(cache_key)
         if cached and (now - cached["_cached_at"]).total_seconds() < GRID_CACHE_TTL:
             return {"grid": cached["grid"], "stations": [], "forecast_hour": forecast_hour}
+
+        if _fetch_lock is None:
+            _fetch_lock = asyncio.Lock()
 
         async with _fetch_lock:
             # Double-check
@@ -303,16 +350,17 @@ async def get_wind_field(forecast_hour: int = 0) -> dict | None:
     if _grid_cache is None and OFFLINE_GRID_PATH.exists():
         try:
             _grid_cache = json.loads(OFFLINE_GRID_PATH.read_text())
-            _grid_cache_time = datetime.now(timezone.utc)
-            logger.info("Loaded offline wind grid cache")
+            # Set to epoch so offline data is immediately considered stale
+            _grid_cache_time = datetime(2000, 1, 1, tzinfo=timezone.utc)
+            logger.info("Loaded offline wind grid cache (will refresh in background)")
         except Exception:
             pass
 
     if _station_cache is None and OFFLINE_STATION_PATH.exists():
         try:
             _station_cache = json.loads(OFFLINE_STATION_PATH.read_text())
-            _station_cache_time = datetime.now(timezone.utc)
-            logger.info("Loaded offline wind station cache")
+            _station_cache_time = datetime(2000, 1, 1, tzinfo=timezone.utc)
+            logger.info("Loaded offline wind station cache (will refresh in background)")
         except Exception:
             pass
 

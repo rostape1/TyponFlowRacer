@@ -48,18 +48,21 @@ async def fetch_predictions(station_id: str, date_str: str = "today") -> list[di
     if cached and (datetime.now(timezone.utc) - cached["fetched_at"]).total_seconds() < 6 * 3600:
         return cached["predictions"]
 
-    # Check offline cache (only for today)
-    if date_str == "today":
-        offline_file = OFFLINE_DIR / f"{station_id}.json"
-        if offline_file.exists():
-            try:
-                data = json.loads(offline_file.read_text())
-                today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-                if any(today_str in p.get("Time", "") for p in data):
-                    _cache[cache_key] = {"predictions": data, "fetched_at": datetime.now(timezone.utc)}
-                    return data
-            except Exception:
-                pass
+    # Check offline cache (for any date)
+    offline_file = OFFLINE_DIR / f"{station_id}.json"
+    if offline_file.exists():
+        try:
+            data = json.loads(offline_file.read_text())
+            # Convert YYYYMMDD to YYYY-MM-DD for matching against prediction Time field
+            if date_str == "today":
+                match_date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+            else:
+                match_date = f"{date_str[:4]}-{date_str[4:6]}-{date_str[6:8]}"
+            if any(match_date in p.get("Time", "") for p in data):
+                _cache[cache_key] = {"predictions": data, "fetched_at": datetime.now(timezone.utc)}
+                return data
+        except Exception:
+            pass
 
     # Fetch from NOAA API
     url = _build_url(station_id, date=date_str)
@@ -198,14 +201,31 @@ async def get_all_currents(target_time: datetime | None = None) -> list[dict]:
 
 
 async def save_offline_cache():
-    """Download predictions for all stations and save to disk for offline use."""
+    """Download predictions for all stations (today + tomorrow) and save to disk for offline use."""
     OFFLINE_DIR.mkdir(parents=True, exist_ok=True)
     saved = 0
+    now = datetime.now(timezone.utc)
+    dates = [
+        now.strftime("%Y%m%d"),
+        (now + timedelta(days=1)).strftime("%Y%m%d"),
+    ]
     for station_id in STATIONS:
-        predictions = await fetch_predictions(station_id)
-        if predictions:
+        all_predictions = []
+        for date_str in dates:
+            predictions = await fetch_predictions(station_id, date_str=date_str)
+            if predictions:
+                all_predictions.extend(predictions)
+        if all_predictions:
+            # Deduplicate by Time field
+            seen = set()
+            unique = []
+            for p in all_predictions:
+                t = p.get("Time", "")
+                if t not in seen:
+                    seen.add(t)
+                    unique.append(p)
             offline_file = OFFLINE_DIR / f"{station_id}.json"
-            offline_file.write_text(json.dumps(predictions, indent=2))
+            offline_file.write_text(json.dumps(unique, indent=2))
             saved += 1
-            logger.info(f"Cached currents for {station_id}")
+            logger.info(f"Cached currents for {station_id} ({len(unique)} predictions)")
     return saved
