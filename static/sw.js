@@ -1,5 +1,14 @@
-const CACHE_NAME = 'ais-tracker-v4';
+const CACHE_NAME = 'ais-tracker-v5';
 const ENV_CACHE = 'ais-env-data-v1';
+const TILE_CACHE = 'ais-tiles-v1';
+
+// External tile CDN hosts to cache
+const TILE_HOSTS = [
+  'basemaps.cartocdn.com',
+  'tile.openstreetmap.org',
+  'gis.charttools.noaa.gov',
+  'tiles.openseamap.org',
+];
 const ASSETS = [
   '/',
   '/static/css/style.css',
@@ -31,7 +40,7 @@ self.addEventListener('install', (event) => {
 self.addEventListener('activate', (event) => {
   event.waitUntil(
     caches.keys().then((keys) =>
-      Promise.all(keys.filter((k) => k !== CACHE_NAME && k !== ENV_CACHE).map((k) => caches.delete(k)))
+      Promise.all(keys.filter((k) => k !== CACHE_NAME && k !== ENV_CACHE && k !== TILE_CACHE).map((k) => caches.delete(k)))
     )
   );
   self.clients.claim();
@@ -91,7 +100,23 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // Cache-first for tiles only (expensive to re-download)
+  // External CDN tiles: cache-first (tiles don't change), network fallback
+  if (TILE_HOSTS.some(h => url.hostname.endsWith(h))) {
+    event.respondWith(
+      caches.open(TILE_CACHE).then((cache) =>
+        cache.match(event.request).then((cached) => {
+          if (cached) return cached;
+          return fetch(event.request).then((response) => {
+            if (response.ok) cache.put(event.request, response.clone());
+            return response;
+          }).catch(() => new Response('', { status: 404 }));
+        })
+      )
+    );
+    return;
+  }
+
+  // Cache-first for local tiles (expensive to re-download)
   if (url.pathname.startsWith('/static/tiles/')) {
     event.respondWith(
       caches.match(event.request).then((cached) => {

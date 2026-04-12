@@ -61,7 +61,7 @@ Environmental data flows independently:
 | `js/tidal-flow.js` | Canvas particle animation for tidal currents (2000-3000 particles, bilinear interpolation) |
 | `js/wind-overlay.js` | Canvas particle animation for wind (800 particles, NDBC station markers) |
 | `css/style.css` | Dark nautical theme, glassmorphism panels, responsive layout |
-| `sw.js` | Service Worker: cache-first for tiles, network-first for HTML/JS, network-first+cache-fallback for environmental APIs (offline support) |
+| `sw.js` | Service Worker: cache-first for external CDN tiles (CartoDB, OSM, NOAA, OpenSeaMap via `ais-tiles-v1` cache), network-first for HTML/JS, network-first+cache-fallback for environmental APIs (offline support) |
 
 ## Database Schema
 
@@ -139,7 +139,7 @@ Local server runs at `http://localhost:8888`. Deploys to Fly.io via `fly deploy`
 - **Startup environmental refresh** — background task fetches all 48h of wind, current field, tidal currents, and tide height data on startup, then repeats every 30 minutes. Saves all forecast data to disk (`static/data/`) for offline use.
 - **Offline forecast persistence** — All 48h of forecast data (wind grid, SFBOFS current field, tidal currents, tide heights) is saved to JSON files on disk after each refresh cycle. On restart (even offline), forecast caches load from disk immediately so forecast mode works without internet.
 - **Offline cache files** — `static/data/wind_forecasts.json` (48h wind grid), `static/data/sfbofs_forecasts.json` (48h current field), `static/data/tides/*.json` (14 station predictions), `static/data/currents/*.json` (6 station predictions), plus hour-0 files `wind_field.json`, `wind_stations.json`, `sfbofs_field.json`
-- **Offline mode** — `download_offline.py` pre-caches tiles (OSM/CartoDB/NOAA/SeaMarks), currents, wind. Service Worker serves cached assets when offline
+- **Offline mode** — Service Worker automatically caches all external map tiles (CartoDB, OSM, NOAA charts, OpenSeaMap) on first view via `ais-tiles-v1` cache. `download_offline.py` can additionally pre-cache tiles, currents, wind for areas not yet viewed.
 - **PWA offline pre-fetch** — Download button (arrow icon in timeline strip) pre-fetches 24h of tide, current, wind, and current-field data for offline PWA use. Service Worker caches environmental API responses (`ais-env-data-v1` cache) with network-first strategy; falls back to cached data when offline. `X-From-Cache` response header signals staleness to the app. Offline banner shown when serving cached data.
 - **Data freshness indicators** — Wind and current field legends show green/yellow dot with relative age (e.g. "3m ago" / "2h 30m ago"). Green = data < 45 min old, yellow = stale.
 - **Position data kept permanently** — for post-voyage analysis

@@ -7,7 +7,7 @@ A lightweight AIS vessel tracker for sailboats. Connects to a WiFi AIS receiver,
 - Real-time vessel tracking via AIS with WebSocket updates
 - **Multiple AIS data sources** — local receiver, AISstream.io cloud, or demo mode (auto-detects)
 - Interactive dark-themed nautical map (Leaflet) with multiple tile layers (CartoDB, OSM, NOAA charts, OpenSeaMap)
-- **Auto-detect online/offline** — uses CDN tiles when online, falls back to local cache when offline
+- **Auto-detect online/offline** — service worker caches all map tiles (CartoDB, OSM, NOAA, OpenSeaMap) automatically on first view; works offline without pre-downloading
 - **Per-vessel visibility toggles** — show/hide individual vessels on the map from the side panel
 - **50 closest vessels** cap — keeps the map clean when using cloud AIS data
 - CPA/TCPA collision risk warnings with color-coded alerts

@@ -323,55 +323,15 @@ map.on('click', (e) => {
         .openOn(map);
 });
 
-// Tile layers — local tiles with online fallback
-// Tile layers — auto-fallback: try online, switch to offline if no internet
-const darkOnline = L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+// Tile layers — external CDN tiles cached by service worker for offline use
+const darkLayer = L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
     attribution: '&copy; CartoDB',
     maxZoom: 19,
 });
 
-const darkOffline = L.tileLayer('/static/tiles/dark/{z}/{x}/{y}.png', {
-    attribution: '&copy; CartoDB',
-    maxZoom: 19,
-    errorTileUrl: '',
-});
-
-const osmOnline = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+const osmLayer = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
     attribution: '&copy; OpenStreetMap contributors',
     maxZoom: 19,
-});
-
-const osmOffline = L.tileLayer('/static/tiles/osm/{z}/{x}/{y}.png', {
-    attribution: '&copy; OpenStreetMap contributors',
-    maxZoom: 19,
-    errorTileUrl: '',
-});
-
-// Auto-detect: try online tile, fall back to offline if it fails
-let darkLayer, osmLayer;
-function initTileLayers() {
-    return new Promise((resolve) => {
-        const testImg = new Image();
-        testImg.onload = () => {
-            darkLayer = darkOnline;
-            osmLayer = osmOnline;
-            resolve('online');
-        };
-        testImg.onerror = () => {
-            darkLayer = darkOffline;
-            osmLayer = osmOffline;
-            resolve('offline');
-        };
-        testImg.src = 'https://a.basemaps.cartocdn.com/dark_all/10/163/395.png';
-        // Timeout after 3s — assume offline
-        setTimeout(() => { testImg.src = ''; testImg.onerror(); }, 3000);
-    });
-}
-
-const seaOffline = L.tileLayer('/static/tiles/sea/{z}/{x}/{y}.png', {
-    attribution: '&copy; OpenSeaMap',
-    maxZoom: 18,
-    opacity: 0.8,
 });
 
 const seaLayer = L.tileLayer('https://tiles.openseamap.org/seamark/{z}/{x}/{y}.png', {
@@ -380,43 +340,38 @@ const seaLayer = L.tileLayer('https://tiles.openseamap.org/seamark/{z}/{x}/{y}.p
     opacity: 0.8,
 });
 
-// NOAA Nautical Charts — full depth soundings, contours, channels, hazards
-const noaaChart = L.tileLayer('https://tileservice.charts.noaa.gov/tiles/50000_1/{z}/{x}/{y}.png', {
+// NOAA Nautical Charts — ENC display with traditional paper chart symbols
+// Uses ArcGIS MapServer tile cache; LOD 0 = standard zoom 2 (resolution offset)
+const noaaChart = L.TileLayer.extend({
+    getTileUrl: function(coords) {
+        const lod = coords.z - 2;
+        if (lod < 0) return '';
+        return `https://gis.charttools.noaa.gov/arcgis/rest/services/MarineChart_Services/NOAACharts/MapServer/tile/${lod}/${coords.y}/${coords.x}`;
+    }
+});
+const noaaChartLayer = new noaaChart({
     attribution: '&copy; NOAA',
-    maxZoom: 18,
+    minZoom: 2,
+    maxZoom: 16,
     opacity: 0.9,
 });
 
-const noaaChartOffline = L.tileLayer('/static/tiles/noaa/{z}/{x}/{y}.png', {
-    attribution: '&copy; NOAA',
-    maxZoom: 18,
-    opacity: 0.9,
-    errorTileUrl: '',
-});
 
 // Current arrows layer group
 currentLayer = L.layerGroup().addTo(map);
 
-// Default: dark base + sea overlay (added after auto-detect resolves)
-initTileLayers().then((mode) => {
-    console.log(`Tile mode: ${mode}`);
-    darkLayer.addTo(map);
-    const seaActive = mode === 'online' ? seaLayer : seaOffline;
-    seaActive.addTo(map);
+// Default: dark base + sea marks overlay
+darkLayer.addTo(map);
+seaLayer.addTo(map);
 
-    L.control.layers({
-        'Dark': darkLayer,
-        'Dark (offline)': darkOffline,
-        'NOAA Chart': noaaChart,
-        'NOAA Chart (offline)': noaaChartOffline,
-        'Street': osmLayer,
-        'Street (offline)': osmOffline,
-    }, {
-        'Nautical Marks': seaActive,
-        'Nautical Marks (offline)': seaOffline,
-        'Currents': currentLayer,
-    }, { position: 'topleft' }).addTo(map);
-});
+L.control.layers({
+    'Dark': darkLayer,
+    'NOAA Chart': noaaChartLayer,
+    'Street': osmLayer,
+}, {
+    'Nautical Marks': seaLayer,
+    'Currents': currentLayer,
+}, { position: 'topleft' }).addTo(map);
 
 // --- Popup content ---
 function buildPopupHtml(v) {
