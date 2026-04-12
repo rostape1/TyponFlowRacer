@@ -5,6 +5,7 @@ from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 
@@ -17,6 +18,7 @@ from tides import get_all_tide_heights
 logger = logging.getLogger(__name__)
 
 app = FastAPI(title="AIS Tracker")
+app.add_middleware(GZipMiddleware, minimum_size=1000)
 
 # WebSocket clients
 ws_clients: set[WebSocket] = set()
