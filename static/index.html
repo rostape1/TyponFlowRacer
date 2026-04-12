@@ -17,6 +17,22 @@
 <body>
     <div id="map"></div>
 
+    <!-- Forecast banner -->
+    <div id="forecast-banner" class="forecast-banner hidden">
+        FORECAST: <span id="forecast-time-display"></span>
+        <div id="forecast-progress-bar" class="forecast-progress-bar"></div>
+    </div>
+
+    <!-- Timeline strip (Windy-style) -->
+    <div id="timeline-strip">
+        <div id="timeline-scroll">
+            <div id="timeline-track"><!-- populated by JS --></div>
+        </div>
+        <button id="timeline-go" class="timeline-go hidden" title="Load forecast">GO</button>
+        <button id="timeline-now" class="timeline-now-btn" title="Reset to now">NOW</button>
+        <button id="timeline-calendar" class="timeline-cal-btn" title="Pick a date for tide forecast">&#x1F4C5;</button>
+    </div>
+
     <!-- Status bar -->
     <div id="status-bar">
         <span id="connection-status" class="status-disconnected">Disconnected</span>
@@ -24,6 +40,20 @@
         <span id="message-count">0 messages</span>
         <button id="flow-toggle" title="Toggle tidal flow animation">Flow: ON</button>
         <button id="wind-toggle" title="Toggle wind overlay">Wind: OFF</button>
+    </div>
+
+    <!-- Date/time picker panel -->
+    <div id="time-picker-panel" class="time-picker-panel hidden">
+        <div class="time-picker-title">Forecast Date &amp; Time</div>
+        <div class="time-picker-inputs">
+            <input type="date" id="forecast-date" />
+            <input type="time" id="forecast-time" value="12:00" />
+        </div>
+        <div class="time-picker-actions">
+            <button id="forecast-go" class="time-picker-btn go">Go</button>
+            <button id="forecast-cancel" class="time-picker-btn cancel">Cancel</button>
+        </div>
+        <div class="time-picker-note">Tides: unlimited &middot; Wind: up to 48h</div>
     </div>
 
     <!-- Current flow legend -->
@@ -56,10 +86,13 @@
     </div>
 
     <!-- Side panel -->
+    <button id="panel-toggle" title="Toggle vessel list">&lsaquo;</button>
     <div id="panel">
         <div id="panel-header">
             <h2>Vessels</h2>
-            <button id="panel-toggle" title="Collapse">&lsaquo;</button>
+        </div>
+        <div id="vessel-search-wrap">
+            <input type="text" id="vessel-search" placeholder="Search name or MMSI..." autocomplete="off" />
         </div>
         <div id="vessel-list"></div>
     </div>

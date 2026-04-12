@@ -37,9 +37,10 @@ body {
     bottom: 0;
     left: 0;
     right: 0;
-    z-index: 1000;
+    z-index: 1001;
     display: flex;
-    gap: 20px;
+    flex-wrap: wrap;
+    gap: 8px 14px;
     padding: 6px 16px;
     background: rgba(10, 22, 40, 0.92);
     backdrop-filter: blur(8px);
@@ -121,7 +122,7 @@ body {
     top: 0;
     right: 0;
     width: 340px;
-    height: 100vh;
+    height: calc(100vh - 88px);
     z-index: 1000;
     background: rgba(10, 22, 40, 0.94);
     backdrop-filter: blur(12px);
@@ -129,11 +130,36 @@ body {
     display: flex;
     flex-direction: column;
     transition: transform 0.3s ease;
-    padding-bottom: 32px;
 }
 
 #panel.collapsed {
-    transform: translateX(300px);
+    transform: translateX(340px);
+}
+
+#panel-toggle {
+    position: fixed;
+    right: 340px;
+    top: 12px;
+    z-index: 1001;
+    background: rgba(10, 22, 40, 0.92);
+    border: 1px solid rgba(100, 150, 200, 0.2);
+    border-right: none;
+    border-radius: 4px 0 0 4px;
+    color: #7a8fa6;
+    font-size: 18px;
+    cursor: pointer;
+    padding: 8px 5px;
+    transition: right 0.3s ease, background 0.2s;
+}
+
+#panel-toggle:hover {
+    background: rgba(100, 150, 200, 0.15);
+    color: #e2e8f0;
+}
+
+/* When panel is collapsed, move toggle to screen edge */
+body.panel-collapsed #panel-toggle {
+    right: 0;
 }
 
 #panel-header {
@@ -152,20 +178,30 @@ body {
     text-transform: uppercase;
 }
 
-#panel-toggle {
-    background: none;
-    border: 1px solid rgba(100, 150, 200, 0.2);
-    color: #7a8fa6;
-    font-size: 16px;
-    cursor: pointer;
-    padding: 4px 8px;
-    border-radius: 4px;
-    transition: all 0.2s;
+/* Vessel search */
+#vessel-search-wrap {
+    padding: 8px 12px 4px;
 }
 
-#panel-toggle:hover {
-    background: rgba(100, 150, 200, 0.1);
+#vessel-search {
+    width: 100%;
+    background: rgba(100, 150, 200, 0.08);
+    border: 1px solid rgba(100, 150, 200, 0.15);
+    border-radius: 5px;
+    padding: 6px 10px;
+    font-size: 12px;
     color: #e2e8f0;
+    outline: none;
+    transition: border-color 0.2s;
+}
+
+#vessel-search::placeholder {
+    color: #4a6a8a;
+}
+
+#vessel-search:focus {
+    border-color: rgba(100, 150, 200, 0.4);
+    background: rgba(100, 150, 200, 0.12);
 }
 
 #vessel-list {
@@ -304,7 +340,7 @@ body {
 /* Current flow legend */
 #flow-legend {
     position: fixed;
-    bottom: 36px;
+    bottom: 90px;
     left: 12px;
     z-index: 1000;
     background: rgba(10, 22, 40, 0.88);
@@ -354,7 +390,7 @@ body {
 /* Wind speed legend */
 #wind-legend {
     position: fixed;
-    bottom: 120px;
+    bottom: 174px;
     left: 12px;
     z-index: 1000;
     background: rgba(10, 22, 40, 0.88);
@@ -439,7 +475,7 @@ body {
 /* Own vessel arrow legend */
 #arrow-legend {
     position: fixed;
-    bottom: 36px;
+    bottom: 90px;
     left: 202px;
     z-index: 1000;
     background: rgba(10, 22, 40, 0.88);
@@ -568,7 +604,7 @@ body {
         width: 100%;
         height: 30vh;
         top: auto;
-        bottom: 32px;
+        bottom: 86px;
         border-left: none;
         border-top: 1px solid rgba(100, 150, 200, 0.12);
     }
@@ -592,4 +628,285 @@ body {
         font-size: 12px;
         padding: 6px 10px;
     }
+
+    #timeline-strip {
+        height: 46px;
+    }
+    #timeline-strip .timeline-day-label {
+        font-size: 9px;
+    }
+    #timeline-strip .timeline-hour {
+        min-width: 40px;
+        font-size: 9px;
+    }
+}
+
+/* Forecast banner */
+.forecast-banner {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    z-index: 1001;
+    background: rgba(243, 156, 18, 0.15);
+    backdrop-filter: blur(4px);
+    border-bottom: 1px solid rgba(243, 156, 18, 0.3);
+    color: #f39c12;
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0.5px;
+    text-align: center;
+    padding: 5px 16px;
+    overflow: hidden;
+}
+
+.forecast-banner.hidden {
+    display: none;
+}
+
+.forecast-progress-bar {
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    height: 3px;
+    background: #f39c12;
+    transition: width 0.3s ease;
+    width: 0;
+}
+
+/* ---- Timeline Strip (Windy-style) ---- */
+#timeline-strip {
+    position: fixed;
+    bottom: 32px;
+    left: 0;
+    right: 0;
+    z-index: 1000;
+    height: 54px;
+    background: rgba(10, 22, 40, 0.95);
+    backdrop-filter: blur(8px);
+    border-top: 1px solid rgba(100, 150, 200, 0.12);
+    display: flex;
+    align-items: stretch;
+}
+
+#timeline-scroll {
+    flex: 1;
+    overflow-x: auto;
+    overflow-y: hidden;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+}
+#timeline-scroll::-webkit-scrollbar { display: none; }
+
+#timeline-track {
+    display: flex;
+    height: 100%;
+    min-width: max-content;
+}
+
+/* Day group */
+.timeline-day-group {
+    display: flex;
+    flex-direction: column;
+    border-right: 1px solid rgba(100, 150, 200, 0.1);
+}
+
+.timeline-day-label {
+    font-size: 10px;
+    font-weight: 600;
+    color: #7a8fa6;
+    text-align: center;
+    padding: 2px 0;
+    letter-spacing: 0.3px;
+    white-space: nowrap;
+    border-bottom: 1px solid rgba(100, 150, 200, 0.08);
+}
+
+.timeline-hours-row {
+    display: flex;
+    flex: 1;
+    align-items: center;
+}
+
+.timeline-hour {
+    min-width: 48px;
+    text-align: center;
+    font-size: 10px;
+    color: #4a6a8a;
+    cursor: pointer;
+    padding: 4px 2px;
+    border-radius: 3px;
+    transition: all 0.15s;
+    user-select: none;
+    position: relative;
+}
+
+.timeline-hour:hover {
+    background: rgba(100, 150, 200, 0.12);
+    color: #c8d6e5;
+}
+
+.timeline-hour.now {
+    color: #5dade2;
+    font-weight: 700;
+}
+
+.timeline-hour.now::after {
+    content: '';
+    position: absolute;
+    bottom: 1px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 4px;
+    height: 4px;
+    border-radius: 50%;
+    background: #5dade2;
+}
+
+.timeline-hour.selected {
+    background: rgba(243, 156, 18, 0.25);
+    color: #f39c12;
+    font-weight: 700;
+    border: 1px solid rgba(243, 156, 18, 0.4);
+}
+
+/* GO button */
+.timeline-go {
+    background: #f39c12;
+    color: #0a1628;
+    border: none;
+    font-size: 12px;
+    font-weight: 700;
+    padding: 0 14px;
+    cursor: pointer;
+    letter-spacing: 0.5px;
+    transition: all 0.2s;
+    white-space: nowrap;
+}
+.timeline-go:hover { background: #e67e22; }
+.timeline-go.hidden { display: none; }
+
+/* NOW button in timeline */
+.timeline-now-btn {
+    background: rgba(93, 173, 226, 0.15);
+    border: none;
+    border-left: 1px solid rgba(100, 150, 200, 0.12);
+    color: #5dade2;
+    font-size: 10px;
+    font-weight: 700;
+    padding: 0 10px;
+    cursor: pointer;
+    letter-spacing: 0.3px;
+    transition: all 0.2s;
+}
+.timeline-now-btn:hover { background: rgba(93, 173, 226, 0.25); }
+
+/* Calendar button */
+.timeline-cal-btn {
+    background: rgba(100, 150, 200, 0.1);
+    border: none;
+    border-left: 1px solid rgba(100, 150, 200, 0.12);
+    color: #7a8fa6;
+    font-size: 16px;
+    padding: 0 10px;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+.timeline-cal-btn:hover { background: rgba(100, 150, 200, 0.2); color: #c8d6e5; }
+
+/* Forecast mode status bar highlight */
+#status-bar.forecast-mode {
+    border-top-color: rgba(243, 156, 18, 0.4);
+}
+
+/* Date/time picker panel */
+.time-picker-panel {
+    position: fixed;
+    bottom: 90px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 1002;
+    background: rgba(10, 22, 40, 0.95);
+    backdrop-filter: blur(12px);
+    border: 1px solid rgba(243, 156, 18, 0.25);
+    border-radius: 8px;
+    padding: 14px 16px;
+    min-width: 260px;
+}
+
+.time-picker-panel.hidden {
+    display: none;
+}
+
+.time-picker-title {
+    font-size: 11px;
+    font-weight: 600;
+    color: #f39c12;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-bottom: 10px;
+}
+
+.time-picker-inputs {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 10px;
+}
+
+.time-picker-inputs input {
+    background: rgba(100, 150, 200, 0.1);
+    border: 1px solid rgba(100, 150, 200, 0.2);
+    border-radius: 4px;
+    padding: 6px 8px;
+    font-size: 12px;
+    color: #e2e8f0;
+    outline: none;
+    color-scheme: dark;
+}
+
+.time-picker-inputs input:focus {
+    border-color: rgba(243, 156, 18, 0.4);
+}
+
+.time-picker-actions {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 8px;
+}
+
+.time-picker-btn {
+    flex: 1;
+    padding: 5px 12px;
+    border-radius: 4px;
+    font-size: 11px;
+    font-weight: 600;
+    cursor: pointer;
+    border: 1px solid transparent;
+    transition: all 0.2s;
+}
+
+.time-picker-btn.go {
+    background: rgba(243, 156, 18, 0.2);
+    border-color: rgba(243, 156, 18, 0.4);
+    color: #f39c12;
+}
+
+.time-picker-btn.go:hover {
+    background: rgba(243, 156, 18, 0.3);
+}
+
+.time-picker-btn.cancel {
+    background: rgba(100, 100, 100, 0.2);
+    border-color: rgba(100, 100, 100, 0.3);
+    color: #7a8fa6;
+}
+
+.time-picker-btn.cancel:hover {
+    background: rgba(100, 100, 100, 0.3);
+}
+
+.time-picker-note {
+    font-size: 9px;
+    color: #4a6a8a;
+    text-align: center;
 }

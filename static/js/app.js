@@ -1,6 +1,7 @@
 // --- Config ---
 const OWN_MMSI = 338361814;
-const TRACK_HOURS = 2;
+const OWN_NAME = 'TYPON';
+const TRACK_HOURS = 1;
 const STALE_MINUTES = 10;
 const MAX_VESSELS = 50;
 
@@ -14,6 +15,10 @@ let ownPosition = null;
 let ownVessel = null;  // full own vessel data (for SOG/COG)
 let messageCount = 0;
 const hiddenVessels = new Set();  // mmsi values of vessels hidden from map
+
+// --- Forecast time shift ---
+let forecastMinutes = 0;  // 0 = real-time, >0 = minutes into the future
+let autoRefreshTimers = { currents: null, field: null, wind: null };
 
 // --- Color mapping ---
 const TYPE_COLORS = {
@@ -130,6 +135,16 @@ function formatTime(minutes) {
     const h = Math.floor(minutes / 60);
     const m = Math.round(minutes % 60);
     return m > 0 ? `${h}h ${m}m` : `${h}h`;
+}
+
+function formatAgo(timestamp) {
+    const sec = Math.floor((Date.now() - timestamp) / 1000);
+    if (sec < 5) return 'just now';
+    if (sec < 60) return `${sec}s ago`;
+    const min = Math.floor(sec / 60);
+    if (min < 60) return `${min}m ago`;
+    const hr = Math.floor(min / 60);
+    return `${hr}h ${min % 60}m ago`;
 }
 
 // --- Create vessel arrow icon ---
@@ -249,6 +264,19 @@ map.on('click', (e) => {
     const lat = e.latlng.lat;
     const lon = e.latlng.lng;
     let rows = `<div class="popup-row"><span class="popup-label">Position</span><span class="popup-value">${lat.toFixed(5)}°, ${lon.toFixed(5)}°</span></div>`;
+
+    // Forecast time
+    if (forecastMinutes > 0) {
+        const target = new Date(Date.now() + forecastMinutes * 60000);
+        const fTime = target.toLocaleString('en-US', {
+            weekday: 'short', month: 'short', day: 'numeric',
+            hour: 'numeric', minute: '2-digit',
+            timeZone: 'America/Los_Angeles'
+        });
+        rows += `<div class="popup-row"><span class="popup-label">Forecast time</span><span class="popup-value" style="color:#f39c12">${fTime}</span></div>`;
+    } else {
+        rows += `<div class="popup-row"><span class="popup-label">Forecast time</span><span class="popup-value">Now</span></div>`;
+    }
 
     // Tidal current
     if (typeof tidalFlow !== 'undefined' && tidalFlow) {
@@ -389,12 +417,14 @@ initTileLayers().then((mode) => {
 
 // --- Popup content ---
 function buildPopupHtml(v) {
-    const dist = ownPosition && v.mmsi !== OWN_MMSI
-        ? haversineNm(ownPosition.lat, ownPosition.lon, v.lat, v.lon).toFixed(1) + ' nm'
-        : '—';
+    const distNm = ownPosition && v.mmsi !== OWN_MMSI
+        ? haversineNm(ownPosition.lat, ownPosition.lon, v.lat, v.lon) : null;
+    const dist = distNm != null ? distNm.toFixed(1) + ' nm' : '—';
     const bearing = ownPosition && v.mmsi !== OWN_MMSI
         ? bearingTo(ownPosition.lat, ownPosition.lon, v.lat, v.lon).toFixed(0) + '°'
         : '—';
+    const eta = (distNm != null && ownVessel && ownVessel.sog > 0.5)
+        ? formatTime(distNm / ownVessel.sog * 60) : null;
 
     const speedDiff = (v.mmsi !== OWN_MMSI && ownVessel && ownVessel.sog != null && v.sog != null)
         ? (v.sog - ownVessel.sog) : null;
@@ -431,10 +461,12 @@ function buildPopupHtml(v) {
         }
     }
 
+    const lastPing = v._lastUpdate ? formatAgo(v._lastUpdate) : '—';
+
     return `<div class="popup-content">
-        <h3>${v.name || 'MMSI ' + v.mmsi}${v.mmsi === OWN_MMSI ? ' (You)' : ''}</h3>
+        <h3>${v.mmsi === OWN_MMSI ? OWN_NAME : (v.name || 'MMSI ' + v.mmsi)}${v.mmsi === OWN_MMSI ? ' (You)' : ''}</h3>
         <div class="popup-row"><span class="popup-label">MMSI</span><span class="popup-value">${v.mmsi}</span></div>
-        <div class="popup-row"><span class="popup-label">Type</span><span class="popup-value">${v.ship_category || 'Unknown'}</span></div>
+        ${v.ship_category && v.ship_category !== 'Unknown' ? `<div class="popup-row"><span class="popup-label">Type</span><span class="popup-value">${v.ship_category}</span></div>` : ''}
         <div class="popup-row"><span class="popup-label">SOG</span><span class="popup-value">${v.sog != null ? v.sog.toFixed(1) + ' kn' : '—'}</span></div>
         <div class="popup-row"><span class="popup-label">COG</span><span class="popup-value">${v.cog != null ? v.cog.toFixed(0) + '°' : '—'}</span></div>
         ${v.mmsi === OWN_MMSI ? `<div class="popup-row"><span class="popup-label">Tide</span><span class="popup-value" style="color:#00d4ff">${tideStr}</span></div>` : ''}
@@ -442,9 +474,11 @@ function buildPopupHtml(v) {
         <div class="popup-row"><span class="popup-label">Avg Speed</span><span class="popup-value">${v.avg_speed != null ? v.avg_speed + ' kn' : '—'}</span></div>
         <div class="popup-row"><span class="popup-label">Distance</span><span class="popup-value">${dist}</span></div>
         <div class="popup-row"><span class="popup-label">Bearing</span><span class="popup-value">${bearing}</span></div>
+        ${eta ? `<div class="popup-row"><span class="popup-label">ETA from ${OWN_NAME}</span><span class="popup-value">${eta}</span></div>` : ''}
         ${cpaInfo ? `<div class="popup-row"><span class="popup-label">CPA/TCPA</span><span class="${cpaClass}">${cpaInfo.label}</span></div>` : ''}
         ${v.mmsi !== OWN_MMSI ? `<div class="popup-row"><span class="popup-label">Speed Diff</span><span class="popup-value">${speedDiffStr}</span></div>` : ''}
         ${v.destination ? `<div class="popup-row"><span class="popup-label">Dest</span><span class="popup-value">${v.destination}</span></div>` : ''}
+        <div class="popup-row"><span class="popup-label">Last AIS</span><span class="popup-value">${lastPing}</span></div>
         <div class="popup-chart" id="chart-${v.mmsi}">
             <div class="popup-chart-label">Speed History</div>
             <div class="popup-chart-loading">Loading...</div>
@@ -612,7 +646,18 @@ function toggleVessel(mmsi) {
 // --- Side panel ---
 function updatePanel() {
     const list = document.getElementById('vessel-list');
-    const vesselArray = Array.from(vessels.values()).filter(v => v.lat != null);
+    const searchInput = document.getElementById('vessel-search');
+    const query = (searchInput ? searchInput.value : '').toLowerCase().trim();
+    let vesselArray = Array.from(vessels.values()).filter(v => v.lat != null);
+
+    // Filter by search query
+    if (query) {
+        vesselArray = vesselArray.filter(v => {
+            const name = (v.name || v.shipname || '').toLowerCase();
+            const mmsi = String(v.mmsi);
+            return name.includes(query) || mmsi.includes(query);
+        });
+    }
 
     // Sort: own vessel first, then by distance
     vesselArray.sort((a, b) => {
@@ -657,9 +702,9 @@ function updatePanel() {
         return `<div class="vessel-card ${isOwn ? 'own-vessel' : ''} ${isStale ? 'stale' : ''} ${!isVisible ? 'vessel-hidden' : ''}"
                      data-mmsi="${v.mmsi}">
             <div class="vessel-name">
-                ${v.name || 'MMSI ' + v.mmsi}
-                <span class="vessel-type-badge ${typeClass}">${v.ship_category || 'Unknown'}</span>
-                <button class="vessel-toggle ${isVisible ? '' : 'toggled-off'}" data-mmsi="${v.mmsi}" title="${isVisible ? 'Hide from map' : 'Show on map'}" aria-pressed="${isVisible}" aria-label="${isVisible ? 'Hide' : 'Show'} ${v.name || 'MMSI ' + v.mmsi} on map">
+                ${v.mmsi === OWN_MMSI ? OWN_NAME : (v.name || 'MMSI ' + v.mmsi)}
+                ${v.ship_category && v.ship_category !== 'Unknown' ? `<span class="vessel-type-badge ${typeClass}">${v.ship_category}</span>` : ''}
+                <button class="vessel-toggle ${isVisible ? '' : 'toggled-off'}" data-mmsi="${v.mmsi}" title="${isVisible ? 'Hide from map' : 'Show on map'}" aria-pressed="${isVisible}" aria-label="${isVisible ? 'Hide' : 'Show'} ${v.mmsi === OWN_MMSI ? OWN_NAME : (v.name || 'MMSI ' + v.mmsi)} on map">
                     ${isVisible ? '&#9673;' : '&#9675;'}
                 </button>
             </div>
@@ -742,9 +787,13 @@ function connectWebSocket() {
 document.getElementById('panel-toggle').addEventListener('click', () => {
     const panel = document.getElementById('panel');
     panel.classList.toggle('collapsed');
+    document.body.classList.toggle('panel-collapsed');
     const btn = document.getElementById('panel-toggle');
     btn.textContent = panel.classList.contains('collapsed') ? '\u203A' : '\u2039';
 });
+
+// --- Vessel search ---
+document.getElementById('vessel-search').addEventListener('input', () => updatePanel());
 
 // --- Load initial data ---
 async function loadVessels() {
@@ -849,7 +898,8 @@ function createCurrentArrow(station) {
 
 async function loadCurrents() {
     try {
-        const res = await fetch('/api/currents');
+        const timeParam = forecastMinutes > 0 ? `?time=${forecastMinutes}` : '';
+        const res = await fetch(`/api/currents${timeParam}`);
         if (!res.ok) return;
         const stations = await res.json();
 
@@ -905,7 +955,7 @@ if (typeof TidalFlowOverlay !== 'undefined') {
 
 // Load currents on startup and refresh every 60 seconds
 loadCurrents();
-setInterval(loadCurrents, 60000);
+autoRefreshTimers.currents = setInterval(loadCurrents, 60000);
 
 // Load SFBOFS grid data for high-resolution tidal flow
 function initFlowLegend() {
@@ -918,7 +968,8 @@ initFlowLegend();
 
 async function loadCurrentField() {
     try {
-        const res = await fetch('/api/current-field');
+        const timeParam = forecastMinutes > 0 ? `?time=${forecastMinutes}` : '';
+        const res = await fetch(`/api/current-field${timeParam}`);
         if (!res.ok) return;
         const data = await res.json();
         if (data.error) {
@@ -934,8 +985,14 @@ async function loadCurrentField() {
         if (legend) legend.classList.add('visible');
         if (source) {
             const src = data.source || 'NOAA Stations';
-            const time = data.fetched_at ? new Date(data.fetched_at.replace(' UTC', 'Z')).toLocaleString('en-US', { hour: '2-digit', minute: '2-digit', timeZoneName: 'short', timeZone: 'America/Los_Angeles' }) : '';
-            source.textContent = `${src} · ${time}`;
+            if (forecastMinutes > 0) {
+                const target = new Date(Date.now() + forecastMinutes * 60000);
+                const timeStr = target.toLocaleString('en-US', { weekday: 'short', hour: 'numeric', minute: '2-digit', timeZone: 'America/Los_Angeles' });
+                source.textContent = `${src} · Forecast: ${timeStr}`;
+            } else {
+                const time = data.fetched_at ? new Date(data.fetched_at.replace(' UTC', 'Z')).toLocaleString('en-US', { hour: '2-digit', minute: '2-digit', timeZoneName: 'short', timeZone: 'America/Los_Angeles' }) : '';
+                source.textContent = `${src} · ${time}`;
+            }
         }
     } catch (e) {
         console.log('Current field fetch failed (optional)');
@@ -943,7 +1000,7 @@ async function loadCurrentField() {
 }
 
 loadCurrentField();
-setInterval(loadCurrentField, 300000);  // Refresh every 5 minutes
+autoRefreshTimers.field = setInterval(loadCurrentField, 300000);  // Refresh every 5 minutes
 
 // Flow toggle button
 document.getElementById('flow-toggle').addEventListener('click', () => {
@@ -1018,7 +1075,15 @@ if (windColorToggle) {
 
 async function loadWindField() {
     try {
-        const res = await fetch('/api/wind-field');
+        // Wind forecasts limited to 48h (HRRR model limit)
+        if (forecastMinutes > 48 * 60) {
+            // Beyond wind forecast range — show note in legend
+            const wsource = document.getElementById('wind-legend-source');
+            if (wsource) wsource.textContent = 'Wind forecast unavailable beyond 48h';
+            return;
+        }
+        const timeParam = forecastMinutes > 0 ? `?time=${forecastMinutes}` : '';
+        const res = await fetch(`/api/wind-field${timeParam}`);
         if (!res.ok) return;
         const data = await res.json();
         if (data.error) {
@@ -1040,9 +1105,15 @@ async function loadWindField() {
         const source = document.getElementById('wind-legend-source');
         if (source && data.grid) {
             const src = data.grid.source || 'HRRR';
-            const time = data.grid.fetched_at ? new Date(data.grid.fetched_at.replace(' UTC', 'Z')).toLocaleString('en-US', { hour: '2-digit', minute: '2-digit', timeZoneName: 'short', timeZone: 'America/Los_Angeles' }) : '';
-            const stationCount = data.stations ? data.stations.length : 0;
-            source.textContent = `${src} · ${time} · ${stationCount} stations`;
+            if (forecastMinutes > 0) {
+                const target = new Date(Date.now() + forecastMinutes * 60000);
+                const timeStr = target.toLocaleString('en-US', { weekday: 'short', hour: 'numeric', minute: '2-digit', timeZone: 'America/Los_Angeles' });
+                source.textContent = `${src} · Forecast: ${timeStr}`;
+            } else {
+                const time = data.grid.fetched_at ? new Date(data.grid.fetched_at.replace(' UTC', 'Z')).toLocaleString('en-US', { hour: '2-digit', minute: '2-digit', timeZoneName: 'short', timeZone: 'America/Los_Angeles' }) : '';
+                const stationCount = data.stations ? data.stations.length : 0;
+                source.textContent = `${src} · ${time} · ${stationCount} stations`;
+            }
         }
     } catch (e) {
         console.log('Wind field fetch failed (optional)');
@@ -1051,7 +1122,7 @@ async function loadWindField() {
 
 // Load wind data on startup and refresh every 5 minutes
 loadWindField();
-setInterval(loadWindField, 300000);
+autoRefreshTimers.wind = setInterval(loadWindField, 300000);
 
 // Wind toggle button
 const windToggleBtn = document.getElementById('wind-toggle');
@@ -1068,10 +1139,307 @@ if (windToggleBtn) {
             if (legend) legend.classList.remove('visible');
         } else {
             if (windOverlay) windOverlay.start();
-            if (windStationMarkers) windStationMarkers.show();
+            // Only show station markers in real-time mode
+            if (windStationMarkers && forecastMinutes === 0) windStationMarkers.show();
             windToggleBtn.textContent = 'Wind: ON';
             windToggleBtn.classList.remove('wind-off');
             if (legend) legend.classList.add('visible');
         }
     });
 }
+
+// --- Forecast Time Shift (Windy-style timeline) ---
+const forecastBanner = document.getElementById('forecast-banner');
+const forecastTimeDisplay = document.getElementById('forecast-time-display');
+const forecastProgressBar = document.getElementById('forecast-progress-bar');
+const timelineTrack = document.getElementById('timeline-track');
+const timelineScroll = document.getElementById('timeline-scroll');
+const timelineGoBtn = document.getElementById('timeline-go');
+const timelineNowBtn = document.getElementById('timeline-now');
+const timelineCalBtn = document.getElementById('timeline-calendar');
+const timePickerPanel = document.getElementById('time-picker-panel');
+const forecastDateInput = document.getElementById('forecast-date');
+const forecastTimeInput = document.getElementById('forecast-time');
+const forecastGoBtn = document.getElementById('forecast-go');
+const forecastCancelBtn = document.getElementById('forecast-cancel');
+
+let _forecastLoading = false;
+let _selectedHourEl = null;  // currently highlighted hour element
+
+// --- Build the 48-hour timeline ---
+function buildTimeline() {
+    if (!timelineTrack) return;
+    timelineTrack.innerHTML = '';
+
+    const now = new Date();
+    // Round down to the current hour
+    const startHour = new Date(now.getFullYear(), now.getMonth(), now.getDate(), now.getHours());
+    const currentHourMs = startHour.getTime();
+
+    // Group hours by day
+    const dayGroups = {};  // key: "YYYY-MM-DD", value: [{hour, label, isNow, minutesFromNow}]
+    for (let h = 0; h <= 48; h++) {
+        const t = new Date(currentHourMs + h * 3600000);
+        const dayKey = t.toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' });
+        if (!dayGroups[dayKey]) dayGroups[dayKey] = [];
+        const hourLabel = t.toLocaleTimeString('en-US', {
+            hour: 'numeric', hour12: true, timeZone: 'America/Los_Angeles'
+        }).replace(' ', '').toLowerCase(); // "8pm", "11am"
+        dayGroups[dayKey].push({
+            date: t,
+            label: h === 0 ? 'Now' : hourLabel,
+            isNow: h === 0,
+            minutesFromNow: h * 60
+        });
+    }
+
+    // Render each day
+    for (const [dayKey, hours] of Object.entries(dayGroups)) {
+        const dayGroup = document.createElement('div');
+        dayGroup.className = 'timeline-day-group';
+
+        // Day label
+        const dayLabel = document.createElement('div');
+        dayLabel.className = 'timeline-day-label';
+        const dayDate = new Date(dayKey + 'T12:00:00');
+        dayLabel.textContent = dayDate.toLocaleDateString('en-US', {
+            weekday: 'short', month: 'short', day: 'numeric',
+            timeZone: 'America/Los_Angeles'
+        });
+        dayGroup.appendChild(dayLabel);
+
+        // Hours row
+        const hoursRow = document.createElement('div');
+        hoursRow.className = 'timeline-hours-row';
+
+        for (const hr of hours) {
+            const el = document.createElement('div');
+            el.className = 'timeline-hour';
+            if (hr.isNow) el.classList.add('now');
+            el.textContent = hr.label;
+            el.dataset.minutes = hr.minutesFromNow;
+
+            el.addEventListener('click', () => {
+                selectTimelineHour(el, hr.minutesFromNow);
+            });
+
+            hoursRow.appendChild(el);
+        }
+
+        dayGroup.appendChild(hoursRow);
+        timelineTrack.appendChild(dayGroup);
+    }
+}
+
+function selectTimelineHour(el, minutes) {
+    // Deselect previous
+    if (_selectedHourEl) _selectedHourEl.classList.remove('selected');
+
+    if (minutes === 0) {
+        // Clicking "Now" resets
+        _selectedHourEl = null;
+        forecastMinutes = 0;
+        timelineGoBtn.classList.add('hidden');
+        updateTimeShiftUI();
+        reloadEnvironmentalData();
+        return;
+    }
+
+    _selectedHourEl = el;
+    el.classList.add('selected');
+    forecastMinutes = minutes;
+    timelineGoBtn.classList.remove('hidden');
+    updateTimeShiftUI();
+    // Do NOT fetch yet — user must click GO
+}
+
+function updateTimeShiftUI() {
+    const isForecast = forecastMinutes > 0;
+    const statusBar = document.getElementById('status-bar');
+
+    if (!isForecast) {
+        forecastBanner.classList.add('hidden');
+        statusBar.classList.remove('forecast-mode');
+        if (windStationMarkers && windOverlay && windOverlay.animating) {
+            windStationMarkers.show();
+        }
+    } else {
+        const target = new Date(Date.now() + forecastMinutes * 60000);
+        const fullTime = target.toLocaleString('en-US', {
+            weekday: 'long', month: 'short', day: 'numeric',
+            hour: 'numeric', minute: '2-digit',
+            timeZone: 'America/Los_Angeles'
+        });
+        forecastTimeDisplay.textContent = fullTime;
+        forecastBanner.classList.remove('hidden');
+        statusBar.classList.add('forecast-mode');
+        if (windStationMarkers) windStationMarkers.hide();
+    }
+}
+
+function setForecastProgress(loaded, total) {
+    if (!forecastProgressBar) return;
+    const pct = Math.round((loaded / total) * 100);
+    forecastProgressBar.style.width = pct + '%';
+    if (forecastTimeDisplay && loaded < total) {
+        const target = new Date(Date.now() + forecastMinutes * 60000);
+        const fullTime = target.toLocaleString('en-US', {
+            weekday: 'long', month: 'short', day: 'numeric',
+            hour: 'numeric', minute: '2-digit',
+            timeZone: 'America/Los_Angeles'
+        });
+        forecastTimeDisplay.textContent = fullTime + ' — ' + pct + '%';
+    }
+}
+
+function setForecastLoading(loading) {
+    _forecastLoading = loading;
+    if (loading && forecastMinutes > 0) {
+        forecastBanner.classList.remove('hidden');
+        if (forecastProgressBar) forecastProgressBar.style.width = '0%';
+        const target = new Date(Date.now() + forecastMinutes * 60000);
+        const fullTime = target.toLocaleString('en-US', {
+            weekday: 'long', month: 'short', day: 'numeric',
+            hour: 'numeric', minute: '2-digit',
+            timeZone: 'America/Los_Angeles'
+        });
+        forecastTimeDisplay.textContent = fullTime + ' — 0%';
+    } else {
+        if (forecastProgressBar) forecastProgressBar.style.width = '100%';
+        if (forecastMinutes > 0) {
+            const target = new Date(Date.now() + forecastMinutes * 60000);
+            const fullTime = target.toLocaleString('en-US', {
+                weekday: 'long', month: 'short', day: 'numeric',
+                hour: 'numeric', minute: '2-digit',
+                timeZone: 'America/Los_Angeles'
+            });
+            forecastTimeDisplay.textContent = fullTime + ' \u2714';
+        }
+        // Fade progress bar after completion
+        setTimeout(() => {
+            if (forecastProgressBar && !_forecastLoading) forecastProgressBar.style.width = '0%';
+        }, 1500);
+    }
+}
+
+function manageAutoRefresh() {
+    clearInterval(autoRefreshTimers.currents);
+    clearInterval(autoRefreshTimers.field);
+    clearInterval(autoRefreshTimers.wind);
+
+    if (forecastMinutes === 0) {
+        autoRefreshTimers.currents = setInterval(loadCurrents, 60000);
+        autoRefreshTimers.field = setInterval(loadCurrentField, 300000);
+        autoRefreshTimers.wind = setInterval(loadWindField, 300000);
+    }
+}
+
+async function reloadEnvironmentalData() {
+    manageAutoRefresh();
+    setForecastLoading(true);
+
+    let loaded = 0;
+    const total = forecastMinutes > 48 * 60 ? 2 : 3;
+
+    try {
+        const promises = [
+            loadCurrents().then(() => { loaded++; setForecastProgress(loaded, total); }),
+            loadCurrentField().then(() => { loaded++; setForecastProgress(loaded, total); }),
+        ];
+        if (forecastMinutes <= 48 * 60) {
+            promises.push(loadWindField().then(() => { loaded++; setForecastProgress(loaded, total); }));
+        }
+        await Promise.allSettled(promises);
+    } finally {
+        setForecastLoading(false);
+    }
+}
+
+// --- GO button ---
+if (timelineGoBtn) {
+    timelineGoBtn.addEventListener('click', () => {
+        if (forecastMinutes > 0) {
+            reloadEnvironmentalData();
+        }
+    });
+}
+
+// --- NOW button ---
+if (timelineNowBtn) {
+    timelineNowBtn.addEventListener('click', () => {
+        forecastMinutes = 0;
+        if (_selectedHourEl) _selectedHourEl.classList.remove('selected');
+        _selectedHourEl = null;
+        timelineGoBtn.classList.add('hidden');
+        updateTimeShiftUI();
+        reloadEnvironmentalData();
+    });
+}
+
+// --- Calendar button — open date/time picker ---
+if (timelineCalBtn) {
+    timelineCalBtn.addEventListener('click', () => {
+        const target = new Date(Date.now() + forecastMinutes * 60000);
+        const laDate = target.toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' });
+        const laTime = target.toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit', timeZone: 'America/Los_Angeles' });
+        if (forecastDateInput) forecastDateInput.value = laDate;
+        if (forecastTimeInput) forecastTimeInput.value = laTime;
+
+        // Min = today, no max (tides are unlimited)
+        const now = new Date();
+        const todayStr = now.toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' });
+        if (forecastDateInput) {
+            forecastDateInput.min = todayStr;
+            forecastDateInput.removeAttribute('max');
+        }
+
+        if (timePickerPanel) timePickerPanel.classList.remove('hidden');
+    });
+}
+
+// --- Date/time picker Go button ---
+if (forecastGoBtn) {
+    forecastGoBtn.addEventListener('click', () => {
+        const dateVal = forecastDateInput ? forecastDateInput.value : '';
+        const timeVal = forecastTimeInput ? forecastTimeInput.value : '12:00';
+        if (!dateVal) return;
+
+        const targetStr = `${dateVal}T${timeVal}:00`;
+        const target = new Date(targetStr);
+        const nowMs = Date.now();
+        const diffMs = target.getTime() - nowMs;
+
+        if (diffMs <= 0) {
+            forecastMinutes = 0;
+        } else {
+            forecastMinutes = Math.round(diffMs / 60000);
+        }
+
+        // Highlight corresponding hour on the strip if within 48h
+        if (_selectedHourEl) _selectedHourEl.classList.remove('selected');
+        _selectedHourEl = null;
+        if (forecastMinutes > 0 && forecastMinutes <= 48 * 60) {
+            const hourSlot = Math.round(forecastMinutes / 60);
+            const hourEls = timelineTrack.querySelectorAll('.timeline-hour');
+            if (hourEls[hourSlot]) {
+                _selectedHourEl = hourEls[hourSlot];
+                _selectedHourEl.classList.add('selected');
+            }
+        }
+
+        if (timePickerPanel) timePickerPanel.classList.add('hidden');
+        timelineGoBtn.classList.add('hidden');
+        updateTimeShiftUI();
+        reloadEnvironmentalData();
+    });
+}
+
+// --- Date/time picker Cancel ---
+if (forecastCancelBtn) {
+    forecastCancelBtn.addEventListener('click', () => {
+        if (timePickerPanel) timePickerPanel.classList.add('hidden');
+    });
+}
+
+// Build the timeline on load
+buildTimeline();
