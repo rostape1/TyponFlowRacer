@@ -10,6 +10,7 @@ const vessels = new Map();       // mmsi → vessel data
 const markers = new Map();       // mmsi → Leaflet marker
 const trackLines = new Map();    // mmsi → Leaflet polyline
 const currentMarkers = new Map(); // station_id → Leaflet marker
+let currentStationsData = [];    // latest current station data from API
 let currentLayer = null;         // Leaflet layer group for currents
 let ownPosition = null;
 let ownVessel = null;  // full own vessel data (for SOG/COG)
@@ -441,11 +442,11 @@ function buildPopupHtml(v) {
             ? 'popup-value cpa-warn'
             : 'popup-value';
 
-    // Get tidal current at vessel position (for own vessel popup)
+    // Get tidal current at vessel position
     let tideStr = '—';
-    if (v.mmsi === OWN_MMSI && tidalFlow && v.lat != null) {
+    if (v.lat != null && tidalFlow) {
         const tc = tidalFlow._interpolateAt(v.lat, v.lon);
-        if (tc && tc.speed > 0.05) {
+        if (tc && tc.speed > 0.01) {
             const tidDir = (Math.atan2(tc.vx, tc.vy) * 180 / Math.PI + 360) % 360;
             tideStr = tc.speed.toFixed(1) + ' kn / ' + tidDir.toFixed(0) + '°';
         }
@@ -471,7 +472,7 @@ function buildPopupHtml(v) {
         ${v.ship_category && v.ship_category !== 'Unknown' ? `<div class="popup-row"><span class="popup-label">Type</span><span class="popup-value">${v.ship_category}</span></div>` : ''}
         <div class="popup-row"><span class="popup-label">SOG</span><span class="popup-value">${v.sog != null ? v.sog.toFixed(1) + ' kn' : '—'}</span></div>
         <div class="popup-row"><span class="popup-label">COG</span><span class="popup-value">${v.cog != null ? v.cog.toFixed(0) + '°' : '—'}</span></div>
-        ${v.mmsi === OWN_MMSI ? `<div class="popup-row"><span class="popup-label">Tide</span><span class="popup-value" style="color:#00d4ff">${tideStr}</span></div>` : ''}
+                <div class="popup-row"><span class="popup-label">Current</span><span class="popup-value" style="color:#00d4ff">${tideStr}</span></div>
         <div class="popup-row"><span class="popup-label">Wind</span><span class="popup-value" style="color:#aa46be">${windStr}</span></div>
         <div class="popup-row"><span class="popup-label">Avg Speed</span><span class="popup-value">${v.avg_speed != null ? v.avg_speed + ' kn' : '—'}</span></div>
         <div class="popup-row"><span class="popup-label">Distance</span><span class="popup-value">${dist}</span></div>
@@ -600,7 +601,13 @@ function updateMarker(v) {
             zIndexOffset: v.mmsi === OWN_MMSI ? 1000 : 0,
         })
             .bindPopup(buildPopupHtml(v), { className: 'vessel-popup', maxWidth: 260 })
-            .on('popupopen', () => loadSpeedChart(v.mmsi));
+            .on('popupopen', (e) => {
+                // Rebuild popup content on open to get latest current/wind data
+                const mmsi = v.mmsi;
+                const vessel = vessels.get ? vessels.get(mmsi) : v;
+                if (vessel) e.target.getPopup().setContent(buildPopupHtml(vessel));
+                loadSpeedChart(mmsi);
+            });
         if (!isHidden) marker.addTo(map);
         markers.set(v.mmsi, marker);
     }
@@ -903,7 +910,9 @@ async function loadCurrents() {
         const timeParam = forecastMinutes > 0 ? `?time=${forecastMinutes}` : '';
         const res = await fetch(`/api/currents${timeParam}`);
         if (!res.ok) return;
+        if (res.headers.get('X-From-Cache')) _notifyCachedData();
         const stations = await res.json();
+        currentStationsData = stations;
 
         // Clear old markers
         currentLayer.clearLayers();
@@ -973,6 +982,7 @@ async function loadCurrentField() {
         const timeParam = forecastMinutes > 0 ? `?time=${forecastMinutes}` : '';
         const res = await fetch(`/api/current-field${timeParam}`);
         if (!res.ok) return;
+        if (res.headers.get('X-From-Cache')) _notifyCachedData();
         const data = await res.json();
         if (data.error) {
             console.log('SFBOFS not available:', data.error);
@@ -1087,6 +1097,7 @@ async function loadWindField() {
         const timeParam = forecastMinutes > 0 ? `?time=${forecastMinutes}` : '';
         const res = await fetch(`/api/wind-field${timeParam}`);
         if (!res.ok) return;
+        if (res.headers.get('X-From-Cache')) _notifyCachedData();
         const data = await res.json();
         if (data.error) {
             console.log('Wind data not available:', data.error);
@@ -1135,6 +1146,7 @@ async function loadTideHeight() {
         const timeParam = forecastMinutes > 0 ? `?time=${forecastMinutes}` : '';
         const res = await fetch(`/api/tide-height${timeParam}`);
         if (!res.ok) { console.log('Tide API returned', res.status); return; }
+        if (res.headers.get('X-From-Cache')) _notifyCachedData();
         const data = await res.json();
         console.log('Tide data:', Array.isArray(data) ? data.length + ' stations' : data);
         if (Array.isArray(data)) {
@@ -1585,3 +1597,107 @@ if (forecastCancelBtn) {
 
 // Build the timeline on load
 buildTimeline();
+
+// =============================================================================
+// OFFLINE SUPPORT — pre-fetch environmental data for offline PWA use
+// =============================================================================
+
+const offlineBanner = document.getElementById('offline-banner');
+const offlineCacheAge = document.getElementById('offline-cache-age');
+const offlineDlBtn = document.getElementById('offline-download');
+const offlineDlPanel = document.getElementById('offline-dl-panel');
+const offlineDlBar = document.getElementById('offline-dl-bar');
+const offlineDlStatus = document.getElementById('offline-dl-status');
+
+let _isOffline = !navigator.onLine;
+let _downloadingOffline = false;
+
+// Called by load* functions when they get cached data from the service worker
+function _notifyCachedData() {
+    // Show banner if offline
+    if (_isOffline && offlineBanner) {
+        offlineBanner.classList.remove('hidden');
+    }
+}
+
+// --- Offline/online detection ---
+function updateOfflineBanner() {
+    if (_isOffline) {
+        if (offlineBanner) offlineBanner.classList.remove('hidden');
+    } else {
+        if (offlineBanner) offlineBanner.classList.add('hidden');
+    }
+}
+
+window.addEventListener('offline', () => {
+    _isOffline = true;
+    updateOfflineBanner();
+    // Stop auto-refresh timers — no point when offline
+    clearInterval(autoRefreshTimers.currents);
+    clearInterval(autoRefreshTimers.field);
+    clearInterval(autoRefreshTimers.wind);
+    clearInterval(autoRefreshTimers.tide);
+});
+
+window.addEventListener('online', () => {
+    _isOffline = false;
+    updateOfflineBanner();
+    // Restart auto-refresh if in real-time mode
+    if (forecastMinutes === 0) {
+        manageAutoRefresh();
+        // Refresh data now that we're back online
+        reloadEnvironmentalData();
+    }
+});
+
+updateOfflineBanner();
+
+// --- Download 24h of environmental data for offline use ---
+async function downloadForOffline() {
+    if (_downloadingOffline) return;
+    _downloadingOffline = true;
+
+    const btn = offlineDlBtn;
+    if (btn) btn.classList.add('downloading');
+    if (offlineDlPanel) offlineDlPanel.classList.remove('hidden');
+
+    const endpoints = ['/api/tide-height', '/api/currents', '/api/current-field', '/api/wind-field'];
+    const hours = 24;
+    const total = endpoints.length * hours;
+    let completed = 0;
+
+    function updateProgress() {
+        const pct = Math.round((completed / total) * 100);
+        if (offlineDlBar) offlineDlBar.style.width = pct + '%';
+        if (offlineDlStatus) offlineDlStatus.textContent = `${completed} / ${total}`;
+    }
+    updateProgress();
+
+    // Fetch in batches to avoid overwhelming the server
+    for (let h = 0; h < hours; h++) {
+        const minutes = h * 60;
+        const timeParam = minutes > 0 ? `?time=${minutes}` : '';
+        const batch = endpoints.map(ep =>
+            fetch(ep + timeParam)
+                .then(() => { completed++; updateProgress(); })
+                .catch(() => { completed++; updateProgress(); })
+        );
+        await Promise.all(batch);
+    }
+
+    // Done
+    _downloadingOffline = false;
+    if (btn) {
+        btn.classList.remove('downloading');
+        btn.classList.add('done');
+        setTimeout(() => btn.classList.remove('done'), 3000);
+    }
+    if (offlineDlStatus) offlineDlStatus.textContent = 'Done! 24h cached for offline use.';
+    setTimeout(() => {
+        if (offlineDlPanel) offlineDlPanel.classList.add('hidden');
+    }, 3000);
+}
+
+if (offlineDlBtn) {
+    offlineDlBtn.addEventListener('click', downloadForOffline);
+}

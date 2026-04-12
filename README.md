@@ -18,6 +18,7 @@ A lightweight AIS vessel tracker for sailboats. Connects to a WiFi AIS receiver,
 - **Forecast timeline** — scrollable 48-hour timeline strip with hour/day marks; tap an hour, click GO, see real % progress. Calendar picker for unlimited long-range tide forecasts beyond 48h
 - **PWA support** — installable on iPhone/iPad via "Add to Home Screen" for full-screen native feel
 - Offline-capable with locally cached map tiles and current data
+- **Offline pre-fetch** — download 24 hours of tide, wind, and current data for offline use on your phone (tap the download arrow in the timeline strip while online)
 - Demo mode with simulated vessel movements in SF Bay
 
 ## Quick Start
@@ -113,12 +114,7 @@ Edit `config.py` or set environment variables:
 
 ## Database Location
 
-The SQLite database is stored at **`~/.ais_tracker/ais_tracker.db`**, NOT in the project folder. This is because the project lives on iCloud Drive, and SQLite's file locking does not work on cloud-synced filesystems.
-
-All position data is kept permanently for post-voyage analysis. To check database size:
-```bash
-ls -lh ~/ais_tracker.db
-```
+The SQLite database is stored at **`ais_tracker.db`** in the project folder (synced via iCloud Drive). All position data is kept permanently for post-voyage analysis.
 
 ## Architecture
 

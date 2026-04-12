@@ -116,6 +116,21 @@ body {
     color: #7a8fa6;
 }
 
+#tide-toggle {
+    background: rgba(0, 212, 255, 0.2);
+    border: 1px solid rgba(0, 212, 255, 0.3);
+    color: #00d4ff;
+    font-size: 11px;
+    padding: 2px 8px;
+    border-radius: 3px;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+#tide-toggle:hover {
+    background: rgba(0, 212, 255, 0.3);
+}
+
 #tide-toggle.tide-off {
     background: rgba(100, 100, 100, 0.2);
     border-color: rgba(100, 100, 100, 0.3);
@@ -920,4 +935,108 @@ body.panel-collapsed #panel-toggle {
     font-size: 9px;
     color: #4a6a8a;
     text-align: center;
+}
+
+/* Offline banner */
+.offline-banner {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    z-index: 1002;
+    background: rgba(231, 76, 60, 0.18);
+    backdrop-filter: blur(4px);
+    border-bottom: 1px solid rgba(231, 76, 60, 0.35);
+    color: #e74c3c;
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0.5px;
+    text-align: center;
+    padding: 5px 16px;
+}
+
+.offline-banner.hidden {
+    display: none;
+}
+
+#offline-cache-age {
+    font-weight: 400;
+    opacity: 0.8;
+    margin-left: 6px;
+}
+
+/* Download button in timeline */
+.timeline-dl-btn {
+    background: rgba(46, 204, 113, 0.12);
+    border: none;
+    border-left: 1px solid rgba(100, 150, 200, 0.12);
+    color: #2ecc71;
+    font-size: 16px;
+    padding: 0 10px;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+.timeline-dl-btn:hover { background: rgba(46, 204, 113, 0.25); }
+.timeline-dl-btn.downloading {
+    color: #f39c12;
+    animation: pulse-dl 1s ease-in-out infinite;
+}
+.timeline-dl-btn.done {
+    color: #2ecc71;
+}
+
+@keyframes pulse-dl {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.4; }
+}
+
+/* Offline download progress panel */
+.offline-dl-panel {
+    position: fixed;
+    bottom: 90px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 1002;
+    background: rgba(10, 22, 40, 0.95);
+    backdrop-filter: blur(12px);
+    border: 1px solid rgba(46, 204, 113, 0.3);
+    border-radius: 8px;
+    padding: 14px 18px;
+    min-width: 260px;
+    text-align: center;
+}
+
+.offline-dl-panel.hidden {
+    display: none;
+}
+
+.offline-dl-title {
+    font-size: 11px;
+    font-weight: 600;
+    color: #2ecc71;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-bottom: 10px;
+}
+
+.offline-dl-bar-track {
+    width: 100%;
+    height: 6px;
+    background: rgba(100, 150, 200, 0.15);
+    border-radius: 3px;
+    overflow: hidden;
+    margin-bottom: 6px;
+}
+
+.offline-dl-bar-fill {
+    height: 100%;
+    width: 0%;
+    background: #2ecc71;
+    border-radius: 3px;
+    transition: width 0.2s ease;
+}
+
+.offline-dl-status {
+    font-size: 10px;
+    color: #7a8fa6;
 }

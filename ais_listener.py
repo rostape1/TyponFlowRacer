@@ -21,7 +21,7 @@ async def ais_listener_tcp(raw_queue: asyncio.Queue, host: str, port: int):
                     break
                 sentence = line.decode("ascii", errors="ignore").strip()
                 if sentence:
-                    logger.info(f"RAW: {sentence}")
+                    logger.debug(f"RAW: {sentence}")
                     await raw_queue.put(sentence)
 
         except (ConnectionRefusedError, ConnectionResetError, OSError) as e:
@@ -55,7 +55,7 @@ class _UdpProtocol(asyncio.DatagramProtocol):
                 line, self.buffer = self.buffer.split("\n", 1)
                 sentence = line.strip()
                 if sentence:
-                    logger.info(f"RAW (UDP from {addr[0]}): {sentence}")
+                    logger.debug(f"RAW (UDP from {addr[0]}): {sentence}")
                     self.raw_queue.put_nowait(sentence)
         except Exception as e:
             logger.debug(f"UDP parse error: {e}")

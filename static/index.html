@@ -17,6 +17,12 @@
 <body>
     <div id="map"></div>
 
+    <!-- Offline banner -->
+    <div id="offline-banner" class="offline-banner hidden">
+        OFFLINE — using cached data
+        <span id="offline-cache-age"></span>
+    </div>
+
     <!-- Forecast banner -->
     <div id="forecast-banner" class="forecast-banner hidden">
         FORECAST: <span id="forecast-time-display"></span>
@@ -31,6 +37,7 @@
         <button id="timeline-go" class="timeline-go hidden" title="Load forecast">GO</button>
         <button id="timeline-now" class="timeline-now-btn" title="Reset to now">NOW</button>
         <button id="timeline-calendar" class="timeline-cal-btn" title="Pick a date for tide forecast">&#x1F4C5;</button>
+        <button id="offline-download" class="timeline-dl-btn" title="Download 24h for offline use">&#x2B07;</button>
     </div>
 
     <!-- Status bar -->
@@ -41,6 +48,15 @@
         <button id="flow-toggle" title="Toggle tidal flow animation">Flow: ON</button>
         <button id="wind-toggle" title="Toggle wind overlay">Wind: OFF</button>
         <button id="tide-toggle" title="Toggle tide height stations">Tide: OFF</button>
+    </div>
+
+    <!-- Offline download progress -->
+    <div id="offline-dl-panel" class="offline-dl-panel hidden">
+        <div class="offline-dl-title">Downloading for Offline</div>
+        <div class="offline-dl-bar-track">
+            <div id="offline-dl-bar" class="offline-dl-bar-fill"></div>
+        </div>
+        <div id="offline-dl-status" class="offline-dl-status">0 / 96</div>
     </div>
 
     <!-- Date/time picker panel -->

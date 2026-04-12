@@ -13,7 +13,9 @@ _db_lock = asyncio.Lock()
 
 
 async def init_db(db_path: str = DB_PATH) -> aiosqlite.Connection:
-    os.makedirs(os.path.dirname(db_path), exist_ok=True)
+    db_dir = os.path.dirname(db_path)
+    if db_dir:
+        os.makedirs(db_dir, exist_ok=True)
     db = await aiosqlite.connect(db_path)
     db.row_factory = aiosqlite.Row
     await db.execute("PRAGMA journal_mode=WAL")

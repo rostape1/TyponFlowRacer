@@ -175,6 +175,22 @@ class TidalFlowOverlay {
         if (this.grid) {
             const result = this._interpolateAtGrid(lat, lon);
             if (result) return result;
+
+            // If exact cell was land/no-data, search nearby grid cells (spiral out)
+            const b = this.grid.bounds;
+            if (lat >= b.south && lat <= b.north && lon >= b.west && lon <= b.east) {
+                const stepLat = (b.north - b.south) / (this.grid.ny - 1);
+                const stepLon = (b.east - b.west) / (this.grid.nx - 1);
+                for (let r = 1; r <= 5; r++) {
+                    for (let dy = -r; dy <= r; dy++) {
+                        for (let dx = -r; dx <= r; dx++) {
+                            if (Math.abs(dy) !== r && Math.abs(dx) !== r) continue; // only ring
+                            const nearby = this._interpolateAtGrid(lat + dy * stepLat, lon + dx * stepLon);
+                            if (nearby && nearby.speed > 0.01) return nearby;
+                        }
+                    }
+                }
+            }
         }
 
         // Fallback to IDW station interpolation
