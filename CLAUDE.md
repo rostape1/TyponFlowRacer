@@ -37,7 +37,7 @@ Environmental data flows independently:
 
 | File | Purpose |
 |------|---------|
-| `main.py` | Entry point. Async orchestration: selects AIS source, runs decoder, DB init, starts server |
+| `main.py` | Entry point. Async orchestration: selects AIS source, runs decoder, DB init, starts server, background environmental data refresh |
 | `server.py` | FastAPI routes + WebSocket broadcast. All API endpoints defined here |
 | `config.py` | Env var config (`AIS_HOST`, `AIS_PORT`, `AISSTREAM_API_KEY`, `OWN_MMSI`, `DB_PATH`, etc.) |
 | `database.py` | SQLite async ORM: `upsert_vessel`, `insert_position`, `get_vessel_track`, `get_stats` |
@@ -49,6 +49,8 @@ Environmental data flows independently:
 | `sfbofs.py` | NOAA SF Bay hydrodynamic model: S3 NetCDF download, FVCOM unstructured→regular grid regrid |
 | `wind.py` | Open-Meteo HRRR wind grid + NDBC buoy observations, dual color schemes |
 | `download_offline.py` | Pre-cache tiles, currents, wind data for offline use |
+| `README.md` | User-facing documentation: features, setup, architecture, deployment |
+| `CLAUDE.md` | AI assistant context: tech stack, file map, API endpoints, patterns |
 
 ### Frontend (`static/`)
 
