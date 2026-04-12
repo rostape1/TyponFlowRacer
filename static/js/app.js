@@ -793,13 +793,28 @@ function connectWebSocket() {
 }
 
 // --- Panel toggle ---
+const _isMobile = window.innerWidth <= 600;
+
+function getPanelArrow(collapsed) {
+    if (_isMobile) return collapsed ? '\u25B2' : '\u25BC';  // ▲ / ▼
+    return collapsed ? '\u203A' : '\u2039';  // › / ‹
+}
+
 document.getElementById('panel-toggle').addEventListener('click', () => {
     const panel = document.getElementById('panel');
     panel.classList.toggle('collapsed');
     document.body.classList.toggle('panel-collapsed');
     const btn = document.getElementById('panel-toggle');
-    btn.textContent = panel.classList.contains('collapsed') ? '\u203A' : '\u2039';
+    btn.textContent = getPanelArrow(panel.classList.contains('collapsed'));
 });
+
+// Auto-collapse panel on mobile to maximize map space
+if (_isMobile) {
+    const panel = document.getElementById('panel');
+    panel.classList.add('collapsed');
+    document.body.classList.add('panel-collapsed');
+    document.getElementById('panel-toggle').textContent = getPanelArrow(true);
+}
 
 // --- Vessel search ---
 document.getElementById('vessel-search').addEventListener('input', () => updatePanel());

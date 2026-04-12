@@ -31,13 +31,15 @@
 
     <!-- Timeline strip (Windy-style) -->
     <div id="timeline-strip">
+        <div class="timeline-btn-row">
+            <button id="timeline-now" class="timeline-now-btn" title="Reset to now">NOW</button>
+            <button id="timeline-calendar" class="timeline-cal-btn" title="Pick a date for tide forecast">&#x1F4C5;</button>
+            <button id="offline-download" class="timeline-dl-btn" title="Download 24h for offline use">&#x2B07;</button>
+            <button id="timeline-go" class="timeline-go hidden" title="Load forecast">GO</button>
+        </div>
         <div id="timeline-scroll">
             <div id="timeline-track"><!-- populated by JS --></div>
         </div>
-        <button id="timeline-go" class="timeline-go hidden" title="Load forecast">GO</button>
-        <button id="timeline-now" class="timeline-now-btn" title="Reset to now">NOW</button>
-        <button id="timeline-calendar" class="timeline-cal-btn" title="Pick a date for tide forecast">&#x1F4C5;</button>
-        <button id="offline-download" class="timeline-dl-btn" title="Download 24h for offline use">&#x2B07;</button>
     </div>
 
     <!-- Status bar -->
