@@ -1,7 +1,7 @@
 {
-  "name": "AIS Tracker",
-  "short_name": "AIS",
-  "description": "Real-time AIS vessel tracker for sailboats",
+  "name": "Typon Flowracer",
+  "short_name": "Flowracer",
+  "description": "Read the flow. Own your line.",
   "start_url": "/",
   "display": "standalone",
   "background_color": "#0a1628",
