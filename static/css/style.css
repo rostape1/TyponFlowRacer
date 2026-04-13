@@ -1273,6 +1273,12 @@ body.panel-collapsed #panel-toggle {
         display: none !important;
     }
 
+    /* === Leaflet layer switcher: offset for iPhone safe area === */
+    .leaflet-top.leaflet-left {
+        top: 44px !important;
+        left: 44px !important;
+    }
+
     /* === Hide panel toggle on mobile (use Vessels button instead) === */
     #panel-toggle {
         display: none !important;
