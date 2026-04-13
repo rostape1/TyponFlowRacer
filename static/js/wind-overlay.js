@@ -45,7 +45,7 @@ class WindOverlay {
                 accent: '#aa46be',
             },
         };
-        this.scheme = options.colorScheme || 'green';
+        this.scheme = options.colorScheme || 'purple';
         this.colorStops = this.colorSchemes[this.scheme].stops;
 
         this._initCanvas();
@@ -217,6 +217,8 @@ class WindOverlay {
         ctx.fillRect(0, 0, W, H);
         ctx.globalCompositeOperation = 'source-over';
 
+        this._numberLabels = [];
+
         for (let i = 0; i < this.particles.length; i++) {
             const p = this.particles[i];
             p.age++;
@@ -244,12 +246,70 @@ class WindOverlay {
             const newPt = this.map.latLngToContainerPoint([p.lat, p.lon]);
 
             const [r, g, b] = this._speedToColor(wind.speed);
-            ctx.strokeStyle = `rgba(${r},${g},${b},0.9)`;
-            ctx.lineWidth = this.lineWidth;
+
+            // Every 5th particle: flash speed number during age 30-80
+            const isNumberParticle = (i % 5 === 0);
+            if (isNumberParticle && p.age >= 30 && p.age <= 80) {
+                // Collect for drawing after fade pass (so numbers stay crisp)
+                let alpha;
+                if (p.age < 40) alpha = (p.age - 30) / 10;        // fade in
+                else if (p.age <= 70) alpha = 1;                    // hold
+                else alpha = (80 - p.age) / 10;                     // fade out
+                this._numberLabels.push({ x: newPt.x, y: newPt.y, speed: wind.speed, r, g, b, alpha });
+            } else {
+                // Normal arrow trail
+                ctx.strokeStyle = `rgba(${r},${g},${b},0.9)`;
+                ctx.lineWidth = this.lineWidth;
+                ctx.beginPath();
+                ctx.moveTo(oldPt.x, oldPt.y);
+                ctx.lineTo(newPt.x, newPt.y);
+                ctx.stroke();
+
+                // Draw arrowhead at particle tip
+                const dx = newPt.x - oldPt.x;
+                const dy = newPt.y - oldPt.y;
+                const len = Math.sqrt(dx * dx + dy * dy);
+                if (len > 1) {
+                    const angle = Math.atan2(dy, dx);
+                    const headLen = 5;
+                    ctx.fillStyle = `rgba(${r},${g},${b},0.9)`;
+                    ctx.beginPath();
+                    ctx.moveTo(newPt.x, newPt.y);
+                    ctx.lineTo(newPt.x - headLen * Math.cos(angle - 0.5), newPt.y - headLen * Math.sin(angle - 0.5));
+                    ctx.lineTo(newPt.x - headLen * Math.cos(angle + 0.5), newPt.y - headLen * Math.sin(angle + 0.5));
+                    ctx.closePath();
+                    ctx.fill();
+                }
+            }
+        }
+
+        // Draw speed number labels on top (after fade pass, so they stay crisp)
+        for (const lbl of this._numberLabels) {
+            const text = Math.round(lbl.speed).toString();
+            ctx.font = 'bold 13px -apple-system, BlinkMacSystemFont, sans-serif';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            // Dark background pill
+            const metrics = ctx.measureText(text);
+            const pw = metrics.width + 8;
+            const ph = 16;
+            ctx.fillStyle = `rgba(10, 22, 40, ${(lbl.alpha * 0.85).toFixed(2)})`;
+            const rx = lbl.x - pw / 2, ry = lbl.y - ph / 2, rr = 4;
             ctx.beginPath();
-            ctx.moveTo(oldPt.x, oldPt.y);
-            ctx.lineTo(newPt.x, newPt.y);
-            ctx.stroke();
+            if (ctx.roundRect) {
+                ctx.roundRect(rx, ry, pw, ph, rr);
+            } else {
+                ctx.moveTo(rx + rr, ry);
+                ctx.arcTo(rx + pw, ry, rx + pw, ry + ph, rr);
+                ctx.arcTo(rx + pw, ry + ph, rx, ry + ph, rr);
+                ctx.arcTo(rx, ry + ph, rx, ry, rr);
+                ctx.arcTo(rx, ry, rx + pw, ry, rr);
+                ctx.closePath();
+            }
+            ctx.fill();
+            // Text
+            ctx.fillStyle = `rgba(${lbl.r},${lbl.g},${lbl.b},${lbl.alpha.toFixed(2)})`;
+            ctx.fillText(text, lbl.x, lbl.y);
         }
 
         requestAnimationFrame(() => this._animate());

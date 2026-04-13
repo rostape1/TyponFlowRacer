@@ -10,6 +10,7 @@ import asyncio
 import json
 import logging
 import math
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.request import urlopen, Request
@@ -115,47 +116,61 @@ def _fetch_grid(forecast_hour: int = 0) -> dict | None:
     success_count = 0
     is_forecast = forecast_hour > 0
 
-    for iy, lat in enumerate(lats):
-        for ix, lon in enumerate(lons):
+    def _fetch_point(iy, ix, lat, lon):
+        """Fetch a single grid point and return (iy, ix, u, v, gust) or None."""
+        if is_forecast:
+            url = OPEN_METEO_FORECAST_URL.format(
+                lat=lat, lon=lon, hours=forecast_hour + 1
+            )
+        else:
+            url = OPEN_METEO_URL.format(lat=lat, lon=lon)
+        text = _fetch_url(url)
+        if not text:
+            return None
+        try:
+            data = json.loads(text)
             if is_forecast:
-                url = OPEN_METEO_FORECAST_URL.format(
-                    lat=lat, lon=lon, hours=forecast_hour + 1
-                )
+                hourly = data.get("hourly", {})
+                speeds = hourly.get("wind_speed_10m", [])
+                dirs = hourly.get("wind_direction_10m", [])
+                gusts = hourly.get("wind_gusts_10m", [])
+                idx = min(forecast_hour, len(speeds) - 1) if speeds else -1
+                if idx < 0:
+                    return None
+                speed_kn = speeds[idx] or 0
+                direction = dirs[idx] or 0
+                gust_kn = gusts[idx] or 0
             else:
-                url = OPEN_METEO_URL.format(lat=lat, lon=lon)
-            text = _fetch_url(url)
-            if not text:
-                continue
+                current = data.get("current", {})
+                speed_kn = current.get("wind_speed_10m", 0) or 0
+                direction = current.get("wind_direction_10m", 0) or 0
+                gust_kn = current.get("wind_gusts_10m", 0) or 0
 
-            try:
-                data = json.loads(text)
+            dir_rad = direction * math.pi / 180
+            u = round(-speed_kn * math.sin(dir_rad), 2)
+            v = round(-speed_kn * math.cos(dir_rad), 2)
+            gust = round(gust_kn, 1)
+            return (iy, ix, u, v, gust)
+        except (json.JSONDecodeError, KeyError, TypeError) as e:
+            logger.debug(f"Parse error for ({lat},{lon}): {e}")
+            return None
 
-                if is_forecast:
-                    # Extract the target hour from hourly arrays
-                    hourly = data.get("hourly", {})
-                    speeds = hourly.get("wind_speed_10m", [])
-                    dirs = hourly.get("wind_direction_10m", [])
-                    gusts = hourly.get("wind_gusts_10m", [])
-                    idx = min(forecast_hour, len(speeds) - 1) if speeds else -1
-                    if idx < 0:
-                        continue
-                    speed_kn = speeds[idx] or 0
-                    direction = dirs[idx] or 0
-                    gust_kn = gusts[idx] or 0
-                else:
-                    current = data.get("current", {})
-                    speed_kn = current.get("wind_speed_10m", 0) or 0
-                    direction = current.get("wind_direction_10m", 0) or 0
-                    gust_kn = current.get("wind_gusts_10m", 0) or 0
+    # Fetch all grid points in parallel
+    with ThreadPoolExecutor(max_workers=20) as pool:
+        futures = {}
+        for iy, lat in enumerate(lats):
+            for ix, lon in enumerate(lons):
+                f = pool.submit(_fetch_point, iy, ix, lat, lon)
+                futures[f] = (iy, ix)
 
-                # Convert meteorological "from" direction + speed to u/v components
-                dir_rad = direction * math.pi / 180
-                u_grid[iy][ix] = round(-speed_kn * math.sin(dir_rad), 2)
-                v_grid[iy][ix] = round(-speed_kn * math.cos(dir_rad), 2)
-                gust_grid[iy][ix] = round(gust_kn, 1)
+        for f in as_completed(futures):
+            result = f.result()
+            if result:
+                iy, ix, u, v, gust = result
+                u_grid[iy][ix] = u
+                v_grid[iy][ix] = v
+                gust_grid[iy][ix] = gust
                 success_count += 1
-            except (json.JSONDecodeError, KeyError, TypeError) as e:
-                logger.debug(f"Parse error for ({lat},{lon}): {e}")
 
     if success_count < GRID_NX * GRID_NY * 0.5:
         logger.warning(f"Too few grid points fetched: {success_count}/{GRID_NX * GRID_NY}")

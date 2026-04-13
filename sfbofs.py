@@ -277,9 +277,29 @@ async def get_current_field(forecast_hour: int = 0) -> dict | None:
     if _fetch_lock is None:
         _fetch_lock = asyncio.Lock()
 
-    # Return stale cache immediately if available, refresh in background
+    # If we have stale data, return it immediately and refresh in background
     stale_data = _grid_cache.get(forecast_hour)
+    if stale_data:
+        # Kick off background refresh (don't await it)
+        async def _bg_refresh():
+            async with _fetch_lock:
+                # Double-check after acquiring lock
+                cached_bg = _grid_cache.get(forecast_hour)
+                cached_time_bg = _cache_times.get(forecast_hour)
+                if cached_bg and cached_time_bg:
+                    age_bg = (datetime.now(timezone.utc) - cached_time_bg).total_seconds()
+                    if age_bg < CACHE_TTL:
+                        return
+                loop = asyncio.get_event_loop()
+                result = await loop.run_in_executor(None, _fetch_and_process, forecast_hour)
+                if result:
+                    _grid_cache[forecast_hour] = result
+                    _cache_times[forecast_hour] = datetime.now(timezone.utc)
 
+        asyncio.ensure_future(_bg_refresh())
+        return stale_data
+
+    # No stale data — must wait for download
     async with _fetch_lock:
         # Double-check after acquiring lock (another request may have completed)
         cached = _grid_cache.get(forecast_hour)
@@ -297,10 +317,6 @@ async def get_current_field(forecast_hour: int = 0) -> dict | None:
             _grid_cache[forecast_hour] = result
             _cache_times[forecast_hour] = datetime.now(timezone.utc)
             return result
-
-    # Return stale data if online fetch failed
-    if stale_data:
-        return stale_data
 
     return None
 

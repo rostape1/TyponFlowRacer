@@ -15,8 +15,9 @@ A lightweight AIS vessel tracker for sailboats. Connects to a WiFi AIS receiver,
 - **High-resolution tidal current visualization** powered by NOAA SFBOFS hydrodynamic model (see below)
 - **Tidal current heatmap** — semi-transparent color overlay showing current speed across the bay (Windy-style), with independent toggle. NOAA charts remain visible underneath for shallow water reference
 - **Tide height stations** — 14 NOAA tide stations across SF Bay showing real-time water level (ft MLLW) and next high/low tide with toggleable markers
-- **Wind overlay** with animated particles from HRRR model
-- **Forecast timeline** — scrollable 48-hour timeline strip with hour/day marks; tap an hour, click GO, see real % progress. Calendar picker for unlimited long-range tide forecasts beyond 48h
+- **Wind overlay** with arrow-tipped animated particles from HRRR model (purple theme, with flashing speed numbers)
+- **Forecast timeline** — scrollable 48-hour timeline strip on desktop; mobile shows quick-access NOW/+1h/+2h/+3h/+4h buttons and date picker. Calendar picker for unlimited long-range tide forecasts beyond 48h
+- **Mobile-optimized UI** — 3-row bottom bar (layer toggles, forecast buttons, status line) with collapsible stack button; dark-themed Leaflet controls
 - **PWA support** — installable on iPhone/iPad via "Add to Home Screen" for full-screen native feel
 - Offline-capable with locally cached map tiles and current data
 - **Automatic forecast persistence** — server fetches and saves 48h of wind, current field, tidal currents, and tide height data to disk on startup (refreshes every 30 min). Forecast mode works fully offline after a single online session.
@@ -196,3 +197,23 @@ Other hosting options: **Railway**, **Render**, or **Oracle Cloud** (most genero
 The frontend can be wrapped as a native iOS app using **Capacitor** (Ionic's native bridge). The existing HTML/JS/CSS runs inside a WebView — no rewrite needed. For the app version, AIS data comes from **AISstream.io** instead of a local receiver, subscribing by bounding box based on the user's map view. No backend required for core functionality.
 
 Stack: Capacitor + existing frontend + AISstream.io WebSocket API + GPS for location. Offline support via cached map tiles and last-known vessel positions in IndexedDB. A lightweight backend would only be needed for user accounts, saved regions, or push notifications.
+
+**Vector chart upgrade for native app:** In a Capacitor WebView, MapLibre GL JS can render S-57 vector charts locally on the device GPU (Metal/OpenGL via WebGL). Convert NOAA's free S-57 ENC data to .pmtiles (~5-20MB for SF Bay) and bundle with the app or download once. Only 5-6 key layers need styling (DEPARE depth areas, DEPCNT depth contours, LNDARE land, SOUNDG soundings, OBSTRN obstructions). This gives Garmin/Navionics-style crisp rendering at any zoom with full offline support — no raster tile downloads needed. MapLibre GL JS handles the chart layer; Leaflet stays for vessels, particles, and overlays.
+
+## Note: Vector Nautical Charts (Investigated April 2026)
+
+We investigated replacing NOAA's raster chart tiles with true vector tiles for crisper rendering and smaller file sizes. Summary of findings:
+
+**What NOAA offers:** All their web services (ArcGIS REST, WMTS, WMS) render ENC vector data server-side and serve raster images. There are no public Mapbox-style vector tile (pbf) endpoints. The underlying data is S-57 ENC format, available for free download from [encdirect.noaa.gov](https://encdirect.noaa.gov/).
+
+**Self-hosted vector tile pipeline:** Converting S-57 → GeoJSON (via GDAL/ogr2ogr) → .pmtiles (via tippecanoe) is technically straightforward. A SF Bay .pmtiles file would be ~5-20MB. Tools: `brew install gdal tippecanoe`.
+
+**The blocker: styling.** S-57 has dozens of object classes (DEPARE, DEPCNT, LNDARE, SOUNDG, OBSTRN, etc.) that all need proper nautical styling. No ready-made MapLibre/Leaflet style sheets exist for this. Every open-source marine project either uses desktop-native C++ rendering (OpenCPN) or NOAA's pre-rendered raster tiles. Building a web nautical chart renderer from scratch would be a significant effort.
+
+**How Garmin/Navionics do it:** They render vector charts on-device using native C++/Metal/OpenGL rendering engines with proprietary chart data (~50-200MB per region). This is why their charts are crisp at any zoom and work offline — it's all local GPU rendering, no tile server. OpenCPN does the same in desktop C++. None of these renderers are extractable for web use.
+
+**Possible future approach — MapLibre GL JS:** Instead of styling all S-57 layers, a tractable middle ground would be using MapLibre GL JS (WebGL vector renderer in the browser) and only styling the 5-6 layers that matter: depth areas (DEPARE), depth contours (DEPCNT), land (LNDARE), soundings (SOUNDG), obstructions (OBSTRN), and maybe channels. This would give GPU-accelerated crisp rendering at any zoom, and a single .pmtiles file (~5-20MB for SF Bay) would replace thousands of raster tiles (~50-80MB cached). The tradeoff is switching from Leaflet's raster tile layer to MapLibre GL for the chart layer.
+
+**OpenSeaMap** is community-contributed seamarks only (buoys, lights) — no depth contours or shallow water shading. Already used as the "Nautical Marks" overlay.
+
+**Conclusion:** The current NOAA raster tiles (`gis.charttools.noaa.gov`) are the best available option for now — free, authoritative, correctly styled, and well-cached by the service worker. The most viable upgrade path would be MapLibre GL JS + a minimal S-57 style for key depth/land layers, converting NOAA's free ENC data to .pmtiles locally. Revisit if NOAA publishes vector tile endpoints or if an open-source nautical style sheet emerges.

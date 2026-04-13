@@ -142,6 +142,8 @@ Local server runs at `http://localhost:8888`. Deploys to Fly.io via `fly deploy`
 - **Offline mode** — Service Worker automatically caches all external map tiles (CartoDB, OSM, NOAA charts, OpenSeaMap) on first view via `ais-tiles-v1` cache. `download_offline.py` can additionally pre-cache tiles, currents, wind for areas not yet viewed.
 - **PWA offline pre-fetch** — Download button (arrow icon in timeline strip) pre-fetches 24h of tide, current, wind, and current-field data for offline PWA use. Service Worker caches environmental API responses (`ais-env-data-v1` cache) with network-first strategy; falls back to cached data when offline. `X-From-Cache` response header signals staleness to the app. Offline banner shown when serving cached data.
 - **Data freshness indicators** — Wind and current field legends show green/yellow dot with relative age (e.g. "3m ago" / "2h 30m ago"). Green = data < 45 min old, yellow = stale.
+- **Wind grid fetched in parallel** — 72 grid points fetched concurrently via ThreadPoolExecutor (20 workers) instead of sequentially. Reduces wind data load from minutes to ~3 seconds.
+- **SFBOFS returns stale cache immediately** — if disk cache exists, `/api/current-field` returns it instantly while refreshing the 57MB NetCDF download in the background. No more blocking on slow S3 downloads.
 - **Position data kept permanently** — for post-voyage analysis
 
 ## Key Patterns
@@ -158,5 +160,9 @@ Local server runs at `http://localhost:8888`. Deploys to Fly.io via `fly deploy`
 
 - Dark theme: `#0a1628` background, `#c8d6e5` text
 - Glassmorphism: `backdrop-filter: blur(12px)` on panels
+- Leaflet zoom/layer controls: dark nautical theme (desktop), hidden on mobile (pinch-to-zoom)
 - Ship type colors: Sailing=#3498db, Cargo=#2ecc71, Tanker=#e74c3c, Own=#f39c12
-- Own vessel arrows: white dashed=heading, green=COG, cyan=tidal current, purple dashed=wind
+- Wind particles: purple arrow-tipped trails with flashing speed numbers (every 5th particle). Default color scheme: purple
+- Tidal flow particles: smooth colored line trails (blue→cyan→green→yellow→red by speed)
+- **Mobile bottom bar**: 3-row stack (layer toggles → forecast quick buttons → status line), collapsible via hamburger button (default: expanded). Timeline scroll strip hidden on mobile.
+- **Mobile forecast quick buttons**: NOW, +1h, +2h, +3h, +4h, Set FCST TIME (opens date/time picker)

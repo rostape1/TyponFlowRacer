@@ -59,6 +59,16 @@
         <button id="vessels-toggle" title="Toggle vessel list">Vessels: OFF</button>
     </div>
 
+    <!-- Forecast quick buttons (mobile only, replaces timeline scroll) -->
+    <div id="forecast-quick-btns" class="forecast-quick-btns">
+        <button id="fcst-now" class="fcst-quick-btn fcst-now-btn">NOW</button>
+        <button class="fcst-quick-btn fcst-hour-btn" data-hours="1">+1h</button>
+        <button class="fcst-quick-btn fcst-hour-btn" data-hours="2">+2h</button>
+        <button class="fcst-quick-btn fcst-hour-btn" data-hours="3">+3h</button>
+        <button class="fcst-quick-btn fcst-hour-btn" data-hours="4">+4h</button>
+        <button id="fcst-set-time" class="fcst-quick-btn fcst-set-btn">Set FCST TIME</button>
+    </div>
+
     <!-- Mobile vessel list (shown when vessels toggle is ON) -->
     <div id="mobile-vessel-list" class="mobile-vessel-list hidden"></div>
 
@@ -103,15 +113,6 @@
             <span>0</span><span>8</span><span>15</span><span>25</span><span>35+</span>
         </div>
         <div class="wind-legend-source" id="wind-legend-source"></div>
-    </div>
-
-    <!-- Own vessel arrow legend -->
-    <div id="arrow-legend">
-        <div class="arrow-legend-title">OWN VESSEL</div>
-        <div class="arrow-legend-row"><span class="arrow-swatch" style="background:#ffffff"></span> Heading</div>
-        <div class="arrow-legend-row"><span class="arrow-swatch" style="background:#2ecc71"></span> COG</div>
-        <div class="arrow-legend-row"><span class="arrow-swatch" style="background:#00d4ff"></span> Tide</div>
-        <div class="arrow-legend-row"><span class="arrow-swatch" style="background:#aa46be"></span> Wind</div>
     </div>
 
     <!-- Side panel -->

@@ -752,7 +752,7 @@ function connectWebSocket() {
 const _isMobile = window.innerWidth <= 600;
 
 function getPanelArrow(collapsed) {
-    if (_isMobile) return '';  // grab bar styled via CSS
+    if (_isMobile) return collapsed ? '\u2630' : '\u2715';  // ☰ / ✕
     return collapsed ? '\u203A' : '\u2039';  // › / ‹
 }
 
@@ -773,22 +773,27 @@ if (_isMobile) {
 
     // Hide layers tray on mobile (toggled via layers button)
     const layersTray = document.getElementById('layers-tray');
-    if (layersTray) layersTray.classList.add('hidden');
+    if (layersTray && window.innerWidth <= 600) layersTray.classList.remove('hidden');
 }
 
-// --- Layers tray toggle (mobile) ---
+// --- Layers tray + forecast quick buttons toggle (mobile) ---
 const _layersBtn = document.getElementById('layers-btn');
 const _layersTray = document.getElementById('layers-tray');
+const _fcstQuickBtns = document.getElementById('forecast-quick-btns');
+
+// Default: expanded on mobile
+if (window.innerWidth <= 600) {
+    document.body.classList.add('mobile-controls-open');
+}
+
 if (_layersBtn && _layersTray) {
     _layersBtn.addEventListener('click', (e) => {
         e.stopPropagation();
-        _layersTray.classList.toggle('hidden');
+        const isOpen = document.body.classList.toggle('mobile-controls-open');
+        _layersTray.classList.toggle('hidden', !isOpen);
+        if (_fcstQuickBtns) _fcstQuickBtns.classList.toggle('hidden', !isOpen);
     });
-    document.addEventListener('click', (e) => {
-        if (!_layersTray.contains(e.target) && e.target !== _layersBtn) {
-            _layersTray.classList.add('hidden');
-        }
-    });
+    // Do NOT auto-close on outside click — user must tap ☰ to collapse
 }
 
 // --- Mobile vessels toggle ---
@@ -1165,7 +1170,7 @@ const windColorToggle = document.getElementById('wind-color-toggle');
 if (windColorToggle) {
     function updateColorDots() {
         windColorToggle.querySelectorAll('.color-dot').forEach(dot => {
-            dot.classList.toggle('active', dot.dataset.scheme === (windOverlay ? windOverlay.scheme : 'green'));
+            dot.classList.toggle('active', dot.dataset.scheme === (windOverlay ? windOverlay.scheme : 'purple'));
         });
     }
     updateColorDots();
@@ -1702,6 +1707,72 @@ if (forecastCancelBtn) {
 
 // Build the timeline on load
 buildTimeline();
+
+// =============================================================================
+// MOBILE FORECAST QUICK BUTTONS
+// =============================================================================
+
+(function() {
+    const fcstNowBtn = document.getElementById('fcst-now');
+    const fcstSetTimeBtn = document.getElementById('fcst-set-time');
+    const hourBtns = document.querySelectorAll('.fcst-hour-btn');
+    const allFcstBtns = document.querySelectorAll('.fcst-quick-btn');
+
+    function clearFcstActive() {
+        allFcstBtns.forEach(b => b.classList.remove('active'));
+    }
+
+    // NOW button
+    if (fcstNowBtn) {
+        fcstNowBtn.classList.add('active'); // default active
+        fcstNowBtn.addEventListener('click', () => {
+            clearFcstActive();
+            fcstNowBtn.classList.add('active');
+            forecastMinutes = 0;
+            if (_selectedHourEl) _selectedHourEl.classList.remove('selected');
+            _selectedHourEl = null;
+            timelineGoBtn.classList.add('hidden');
+            updateTimeShiftUI();
+            reloadEnvironmentalData();
+        });
+    }
+
+    // +1h, +2h, +3h, +4h buttons
+    hourBtns.forEach(btn => {
+        btn.addEventListener('click', () => {
+            const hours = parseInt(btn.dataset.hours);
+            clearFcstActive();
+            btn.classList.add('active');
+            forecastMinutes = hours * 60;
+            // Also update the desktop timeline if visible
+            if (_selectedHourEl) _selectedHourEl.classList.remove('selected');
+            _selectedHourEl = null;
+            updateTimeShiftUI();
+            reloadEnvironmentalData();
+        });
+    });
+
+    // Set FCST TIME button — opens the date/time picker
+    if (fcstSetTimeBtn) {
+        fcstSetTimeBtn.addEventListener('click', () => {
+            // Same logic as the calendar button
+            const target = new Date(Date.now() + forecastMinutes * 60000);
+            const laDate = target.toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' });
+            const laTime = target.toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit', timeZone: 'America/Los_Angeles' });
+            if (forecastDateInput) forecastDateInput.value = laDate;
+            if (forecastTimeInput) forecastTimeInput.value = laTime;
+
+            const now = new Date();
+            const todayStr = now.toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' });
+            if (forecastDateInput) {
+                forecastDateInput.min = todayStr;
+                forecastDateInput.removeAttribute('max');
+            }
+
+            if (timePickerPanel) timePickerPanel.classList.remove('hidden');
+        });
+    }
+})();
 
 // =============================================================================
 // OFFLINE SUPPORT — pre-fetch environmental data for offline PWA use

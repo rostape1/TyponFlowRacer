@@ -21,6 +21,56 @@ body {
     z-index: 801 !important;
 }
 
+/* Leaflet zoom & layer controls — dark nautical theme */
+.leaflet-bar {
+    border: 1px solid rgba(100, 150, 200, 0.2) !important;
+    border-radius: 6px !important;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3) !important;
+    overflow: hidden;
+}
+
+.leaflet-bar a {
+    background: rgba(10, 22, 40, 0.92) !important;
+    color: #c8d6e5 !important;
+    border-bottom: 1px solid rgba(100, 150, 200, 0.15) !important;
+    width: 36px !important;
+    height: 36px !important;
+    line-height: 36px !important;
+    font-size: 18px !important;
+}
+
+.leaflet-bar a:last-child {
+    border-bottom: none !important;
+}
+
+.leaflet-bar a:hover {
+    background: rgba(100, 150, 200, 0.15) !important;
+    color: #e2e8f0 !important;
+}
+
+.leaflet-control-layers {
+    background: rgba(10, 22, 40, 0.92) !important;
+    border: 1px solid rgba(100, 150, 200, 0.2) !important;
+    border-radius: 6px !important;
+    color: #c8d6e5 !important;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3) !important;
+}
+
+.leaflet-control-layers-toggle {
+    background-color: rgba(10, 22, 40, 0.92) !important;
+    width: 36px !important;
+    height: 36px !important;
+}
+
+.leaflet-control-layers-separator {
+    border-top-color: rgba(100, 150, 200, 0.15) !important;
+}
+
+/* Forecast quick buttons — hidden on desktop */
+#forecast-quick-btns {
+    display: none;
+}
+
 /* Map fills the entire viewport */
 #map {
     position: absolute;
@@ -517,42 +567,6 @@ body.panel-collapsed #panel-toggle {
 .tide-station-icon {
     background: none !important;
     border: none !important;
-}
-
-/* Own vessel arrow legend */
-#arrow-legend {
-    position: fixed;
-    bottom: 90px;
-    left: 202px;
-    z-index: 1000;
-    background: rgba(10, 22, 40, 0.88);
-    backdrop-filter: blur(8px);
-    border: 1px solid rgba(100, 150, 200, 0.15);
-    border-radius: 6px;
-    padding: 8px 10px;
-    font-size: 10px;
-    color: #7a8fa6;
-}
-.arrow-legend-title {
-    font-size: 10px;
-    color: #a0b0c0;
-    margin-bottom: 4px;
-    font-weight: 600;
-    letter-spacing: 0.5px;
-}
-.arrow-legend-row {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    padding: 1px 0;
-    font-size: 10px;
-    color: #c8d6e5;
-}
-.arrow-swatch {
-    display: inline-block;
-    width: 14px;
-    height: 3px;
-    border-radius: 1px;
 }
 
 /* Own vessel icon — no background box */
@@ -1093,14 +1107,20 @@ body.panel-collapsed #panel-toggle {
    Responsive — mobile portrait (MUST be last to override base)
    ============================================================ */
 @media (max-width: 600px) {
-    /* === Control strip: merged bottom bar, 44px === */
+    /* === Hide the scrollable timeline on mobile === */
+    #timeline-strip {
+        display: none !important;
+    }
+
+    /* === Status bar: narrow bottom row === */
     #status-bar {
-        height: 44px;
+        height: 32px;
         flex-wrap: nowrap;
-        justify-content: flex-end;
+        justify-content: flex-start;
         align-items: center;
-        padding: 0 10px 0 200px;
+        padding: 0 10px;
         gap: 8px;
+        z-index: 1001;
     }
 
     /* Connection status: show as dot only */
@@ -1126,78 +1146,43 @@ body.panel-collapsed #panel-toggle {
     #vessel-count { font-size: 11px; }
     #message-count { display: none; }
 
-    /* Layers button: visible on mobile */
+    /* === Layers button: visible on mobile, in status bar === */
     #layers-btn {
         display: flex;
         align-items: center;
         justify-content: center;
-        min-width: 44px;
-        min-height: 44px;
+        margin-left: auto;
         background: rgba(100, 150, 200, 0.1);
         border: 1px solid rgba(100, 150, 200, 0.2);
         border-radius: 4px;
         color: #7a8fa6;
-        font-size: 18px;
         cursor: pointer;
         transition: all 0.2s;
+        /* Large by default (collapsed state) */
+        min-width: 48px;
+        min-height: 28px;
+        font-size: 20px;
     }
     #layers-btn:active { background: rgba(100, 150, 200, 0.25); }
 
-    /* === Timeline button row: fixed to left of control strip === */
-    .timeline-btn-row {
-        position: fixed;
-        bottom: 0;
-        left: 44px;
-        height: 44px;
-        display: flex;
-        z-index: 1002;
-        background: rgba(10, 22, 40, 0.95);
-        border-top: 1px solid rgba(100, 150, 200, 0.15);
+    /* When controls are open, make the button smaller */
+    body.mobile-controls-open #layers-btn {
+        min-width: 36px;
+        min-height: 24px;
+        font-size: 16px;
     }
 
-    .timeline-btn-row button {
-        flex: 0 0 auto;
-        min-width: 52px;
-        min-height: 44px;
-        font-size: 14px;
-        border: none;
-        border-right: 1px solid rgba(100, 150, 200, 0.1);
-    }
-
-    .timeline-btn-row button:last-child {
-        border-right: none;
-    }
-
-    .timeline-btn-row .timeline-go.hidden {
-        display: none;
-    }
-
-    /* === Timeline scroll: single row above control strip === */
-    #timeline-strip {
-        height: 42px;
-        bottom: 44px;
-        flex-wrap: nowrap;
-    }
-
-    #timeline-scroll {
-        width: 100%;
-        height: 42px;
-    }
-
-    #timeline-strip .timeline-day-label { font-size: 9px; }
-    #timeline-strip .timeline-hour { min-width: 40px; font-size: 9px; }
-
-    /* === Layers tray: slide-up panel === */
+    /* === Layers tray: Row 1, above forecast row === */
     #layers-tray {
         position: fixed;
-        bottom: 44px;
+        bottom: 76px; /* 32px status + 44px forecast */
         left: 0;
         right: 0;
         z-index: 1003;
         display: flex;
         justify-content: center;
-        gap: 10px;
-        padding: 10px 16px;
+        gap: 6px;
+        padding: 8px 10px;
         background: rgba(10, 22, 40, 0.95);
         backdrop-filter: blur(8px);
         border-top: 1px solid rgba(100, 150, 200, 0.15);
@@ -1212,16 +1197,93 @@ body.panel-collapsed #panel-toggle {
 
     #layers-tray button {
         font-size: 12px;
-        padding: 8px 14px;
-        min-height: 38px;
+        padding: 6px 10px;
+        min-height: 34px;
+        flex: 1;
+        text-align: center;
     }
 
-    /* === Panel: slides up from above 86px bar === */
+    /* === Forecast quick buttons: Row 2, above status bar === */
+    #forecast-quick-btns {
+        display: flex;
+        position: fixed;
+        bottom: 32px; /* above status bar */
+        left: 0;
+        right: 0;
+        z-index: 1002;
+        height: 44px;
+        background: rgba(10, 22, 40, 0.95);
+        backdrop-filter: blur(8px);
+        border-top: 1px solid rgba(100, 150, 200, 0.12);
+        align-items: center;
+        justify-content: center;
+        gap: 0;
+        transition: transform 0.2s ease, opacity 0.2s ease;
+    }
+
+    #forecast-quick-btns.hidden {
+        transform: translateY(100%);
+        opacity: 0;
+        pointer-events: none;
+    }
+
+    .fcst-quick-btn {
+        flex: 1;
+        height: 100%;
+        border: none;
+        background: transparent;
+        color: #7a8fa6;
+        font-size: 12px;
+        font-weight: 600;
+        cursor: pointer;
+        border-right: 1px solid rgba(100, 150, 200, 0.1);
+        transition: all 0.15s;
+    }
+
+    .fcst-quick-btn:last-child {
+        border-right: none;
+    }
+
+    .fcst-quick-btn:active {
+        background: rgba(100, 150, 200, 0.15);
+    }
+
+    .fcst-now-btn {
+        color: #5dade2;
+    }
+
+    .fcst-now-btn.active {
+        background: rgba(93, 173, 226, 0.2);
+        color: #5dade2;
+    }
+
+    .fcst-hour-btn.active {
+        background: rgba(243, 156, 18, 0.25);
+        color: #f39c12;
+    }
+
+    .fcst-set-btn {
+        color: #a0b0c0;
+        font-size: 10px;
+        letter-spacing: 0.3px;
+    }
+
+    /* === Hide Leaflet zoom controls on mobile (pinch to zoom) === */
+    .leaflet-control-zoom {
+        display: none !important;
+    }
+
+    /* === Hide panel toggle on mobile (use Vessels button instead) === */
+    #panel-toggle {
+        display: none !important;
+    }
+
+    /* === Panel: slides up from above the 3-row bar === */
     #panel {
         width: 100%;
         height: 30vh;
         top: auto;
-        bottom: 86px;
+        bottom: 120px; /* 32 + 44 + 44 */
         border-left: none;
         border-top: 1px solid rgba(100, 150, 200, 0.12);
     }
@@ -1230,45 +1292,48 @@ body.panel-collapsed #panel-toggle {
         transform: translateY(100vh);
     }
 
-    /* Panel toggle: ship icon button in control strip on mobile */
-    #panel-toggle {
-        position: fixed;
-        top: auto;
-        bottom: 0;
-        right: auto;
-        left: 0;
-        width: 44px;
-        height: 44px;
-        border-radius: 0;
-        border: none;
-        border-right: 1px solid rgba(100, 150, 200, 0.1);
-        background: rgba(10, 22, 40, 0.95);
-        border-top: 1px solid rgba(100, 150, 200, 0.15);
-        padding: 0;
-        font-size: 16px;
-        color: #5dade2;
-        cursor: pointer;
-        z-index: 1003;
-    }
-
-    #panel-toggle::after {
-        content: none;
-    }
-
-    body.panel-collapsed #panel-toggle {
-        right: auto;
-        bottom: 0;
-        color: #7a8fa6;
-    }
-
     .vessel-toggle {
         width: 32px;
         height: 32px;
         font-size: 16px;
     }
 
-    /* === Legends: reposition above 86px bar === */
-    #flow-legend { bottom: 92px; }
-    #wind-legend { bottom: 176px; }
-    #arrow-legend { bottom: 92px; }
+    /* === Legends: reposition above 3-row bar (32+44+44=120) === */
+    #flow-legend { bottom: 126px; }
+    #wind-legend { bottom: 210px; }
+
+    /* When controls collapsed, move legends down */
+    body:not(.mobile-controls-open) #flow-legend { bottom: 38px; }
+    body:not(.mobile-controls-open) #wind-legend { bottom: 122px; }
+
+    /* === Mobile vessel list === */
+    .mobile-vessel-list {
+        bottom: 120px;
+    }
+
+    body:not(.mobile-controls-open) .mobile-vessel-list {
+        bottom: 32px;
+    }
+
+    /* === Leaflet controls: larger touch targets === */
+    .leaflet-bar a {
+        width: 44px !important;
+        height: 44px !important;
+        line-height: 44px !important;
+        font-size: 20px !important;
+    }
+
+    /* === Time picker and offline download panels === */
+    .time-picker-panel {
+        bottom: 126px;
+    }
+    .offline-dl-panel {
+        bottom: 126px;
+    }
+    body:not(.mobile-controls-open) .time-picker-panel {
+        bottom: 38px;
+    }
+    body:not(.mobile-controls-open) .offline-dl-panel {
+        bottom: 38px;
+    }
 }
