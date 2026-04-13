@@ -13,6 +13,7 @@ A lightweight AIS vessel tracker for sailboats. Connects to a WiFi AIS receiver,
 - CPA/TCPA collision risk warnings with color-coded alerts
 - Speed history charts (2-hour track) with acceleration/deceleration coloring
 - **High-resolution tidal current visualization** powered by NOAA SFBOFS hydrodynamic model (see below)
+- **Tidal current heatmap** — semi-transparent color overlay showing current speed across the bay (Windy-style), with independent toggle. NOAA charts remain visible underneath for shallow water reference
 - **Tide height stations** — 14 NOAA tide stations across SF Bay showing real-time water level (ft MLLW) and next high/low tide with toggleable markers
 - **Wind overlay** with animated particles from HRRR model
 - **Forecast timeline** — scrollable 48-hour timeline strip with hour/day marks; tap an hour, click GO, see real % progress. Calendar picker for unlimited long-range tide forecasts beyond 48h
@@ -59,6 +60,8 @@ The app loads `.env` automatically. In auto mode (no flags), it tries the local 
 ## Tidal Current Visualization
 
 The app shows animated tidal current flow using particle trails on the map, similar to Windy.com. Color indicates current speed: **blue** (slack) → **cyan** → **green** → **yellow** → **orange** → **red** (strong). A legend in the bottom-left corner shows the scale and data source.
+
+A **heatmap overlay** renders the same speed data as a semi-transparent color layer beneath the particles, giving an at-a-glance view of current strength across the entire bay. When the heatmap is active, particles render in white for visibility. The heatmap can be toggled independently via the **Heatmap: ON/OFF** button — it defaults to ON alongside the flow animation.
 
 ### Data Sources (layered, highest priority first)
 

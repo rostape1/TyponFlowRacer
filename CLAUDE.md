@@ -58,7 +58,7 @@ Environmental data flows independently:
 |------|---------|
 | `index.html` | Single page: map container, side panel, legends, forecast timeline, modals |
 | `js/app.js` (~1700 lines) | Main app: Leaflet map, vessel markers, popups, CPA/TCPA, speed charts, search, forecast UI, offline pre-fetch |
-| `js/tidal-flow.js` | Canvas particle animation for tidal currents (2000-3000 particles, bilinear interpolation) |
+| `js/tidal-flow.js` | Canvas particle animation + speed heatmap for tidal currents (2000-3000 particles, bilinear interpolation, offscreen-rendered color overlay) |
 | `js/wind-overlay.js` | Canvas particle animation for wind (800 particles, NDBC station markers) |
 | `css/style.css` | Dark nautical theme, glassmorphism panels, responsive layout |
 | `sw.js` | Service Worker: cache-first for external CDN tiles (CartoDB, OSM, NOAA, OpenSeaMap via `ais-tiles-v1` cache), network-first for HTML/JS, network-first+cache-fallback for environmental APIs (offline support) |
@@ -151,7 +151,7 @@ Local server runs at `http://localhost:8888`. Deploys to Fly.io via `fly deploy`
 - **Network failures** auto-reconnect with 5s backoff
 - **SFBOFS unavailable** → falls back to station-based IDW interpolation
 - **Frontend marker management** — `Map<mmsi, Marker>` for O(1) updates
-- **Canvas overlays** reposition on map pan/zoom events
+- **Canvas overlays** reposition on map pan/zoom events. Tidal heatmap uses separate pane (z-index 449) below particles (451) and wind (450)
 - **Forecast** — `forecastMinutes` offset applied to all environmental API queries
 
 ## UI Conventions
