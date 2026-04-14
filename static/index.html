@@ -32,9 +32,6 @@
     <!-- Timeline strip (Windy-style) -->
     <div id="timeline-strip">
         <div class="timeline-btn-row">
-            <button id="timeline-now" class="timeline-now-btn" title="Reset to now">NOW</button>
-            <button id="timeline-calendar" class="timeline-cal-btn" title="Pick a date for tide forecast">&#x1F4C5;</button>
-            <button id="offline-download" class="timeline-dl-btn" title="Download 24h for offline use">&#x2B07;</button>
             <button id="timeline-go" class="timeline-go hidden" title="Load forecast">GO</button>
         </div>
         <div id="timeline-scroll">
@@ -47,11 +44,15 @@
         <span id="connection-status" class="status-disconnected">Disconnected</span>
         <span id="vessel-count">0 vessels</span>
         <span id="message-count">0 messages</span>
+        <span id="offline-dl-age" class="offline-dl-age"></span>
         <button id="layers-btn" class="layers-btn" title="Map layers">&#x2630;</button>
     </div>
 
     <!-- Layer toggles (desktop: inline in status area, mobile: slide-up tray) -->
     <div id="layers-tray" class="layers-tray">
+        <button id="timeline-now" class="timeline-now-btn" title="Reset to now">NOW</button>
+        <button id="timeline-calendar" class="timeline-cal-btn" title="Pick a date for tide forecast">&#x1F4C5;</button>
+        <button id="offline-download" class="timeline-dl-btn" title="Download 24h for offline use">&#x2B07;</button>
         <button id="flow-toggle" title="Toggle tidal flow animation">Flow: ON</button>
         <button id="heatmap-toggle" title="Toggle current speed heatmap">Heatmap: ON</button>
         <button id="wind-toggle" title="Toggle wind overlay">Wind: OFF</button>
@@ -79,6 +80,7 @@
             <div id="offline-dl-bar" class="offline-dl-bar-fill"></div>
         </div>
         <div id="offline-dl-status" class="offline-dl-status">0 / 96</div>
+        <div id="offline-dl-last" class="offline-dl-last"></div>
     </div>
 
     <!-- Date/time picker panel -->

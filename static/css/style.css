@@ -105,6 +105,11 @@ body {
     gap: 6px;
 }
 
+.offline-dl-age {
+    color: #4a6a8a;
+    font-size: 10px;
+}
+
 .status-connected::before,
 .status-disconnected::before {
     content: '';
@@ -124,15 +129,62 @@ body {
     box-shadow: 0 0 6px #e74c3c;
 }
 
-#flow-toggle {
-    background: rgba(60, 160, 220, 0.2);
-    border: 1px solid rgba(60, 160, 220, 0.3);
-    color: #5dade2;
+/* Shared toggle button base */
+#layers-tray button {
     font-size: 11px;
+    font-weight: 600;
     padding: 2px 8px;
+    height: 28px;
     border-radius: 3px;
     cursor: pointer;
     transition: all 0.2s;
+    border: 1px solid rgba(100, 100, 100, 0.3);
+    background: rgba(100, 100, 100, 0.2);
+    color: #7a8fa6;
+    white-space: nowrap;
+}
+
+/* NOW button — blue */
+.timeline-now-btn {
+    background: rgba(60, 160, 220, 0.2) !important;
+    border-color: rgba(60, 160, 220, 0.3) !important;
+    color: #5dade2 !important;
+}
+.timeline-now-btn:hover {
+    background: rgba(60, 160, 220, 0.3) !important;
+}
+
+/* Calendar button — magenta/pink */
+.timeline-cal-btn {
+    background: rgba(232, 90, 180, 0.2) !important;
+    border-color: rgba(232, 90, 180, 0.3) !important;
+    color: #e85ab4 !important;
+    font-size: 14px !important;
+}
+.timeline-cal-btn:hover {
+    background: rgba(232, 90, 180, 0.3) !important;
+}
+
+/* Download button — green */
+.timeline-dl-btn {
+    background: rgba(46, 204, 113, 0.2) !important;
+    border-color: rgba(46, 204, 113, 0.3) !important;
+    color: #2ecc71 !important;
+    font-size: 14px !important;
+}
+.timeline-dl-btn:hover {
+    background: rgba(46, 204, 113, 0.3) !important;
+}
+.timeline-dl-btn.downloading {
+    color: #f39c12 !important;
+    animation: pulse-dl 1s infinite;
+}
+
+/* Flow toggle — blue */
+#flow-toggle {
+    background: rgba(60, 160, 220, 0.2);
+    border-color: rgba(60, 160, 220, 0.3);
+    color: #5dade2;
 }
 
 #flow-toggle:hover {
@@ -145,15 +197,11 @@ body {
     color: #7a8fa6;
 }
 
+/* Heatmap toggle — orange */
 #heatmap-toggle {
     background: rgba(220, 120, 30, 0.2);
-    border: 1px solid rgba(220, 120, 30, 0.3);
+    border-color: rgba(220, 120, 30, 0.3);
     color: #e8a040;
-    font-size: 11px;
-    padding: 2px 8px;
-    border-radius: 3px;
-    cursor: pointer;
-    transition: all 0.2s;
 }
 
 #heatmap-toggle:hover {
@@ -166,15 +214,11 @@ body {
     color: #7a8fa6;
 }
 
+/* Wind toggle — purple */
 #wind-toggle {
     background: rgba(170, 70, 190, 0.2);
-    border: 1px solid rgba(170, 70, 190, 0.3);
+    border-color: rgba(170, 70, 190, 0.3);
     color: #bb8fce;
-    font-size: 11px;
-    padding: 2px 8px;
-    border-radius: 3px;
-    cursor: pointer;
-    transition: all 0.2s;
 }
 
 #wind-toggle:hover {
@@ -187,15 +231,11 @@ body {
     color: #7a8fa6;
 }
 
+/* Tide toggle — cyan */
 #tide-toggle {
     background: rgba(0, 212, 255, 0.2);
-    border: 1px solid rgba(0, 212, 255, 0.3);
+    border-color: rgba(0, 212, 255, 0.3);
     color: #00d4ff;
-    font-size: 11px;
-    padding: 2px 8px;
-    border-radius: 3px;
-    cursor: pointer;
-    transition: all 0.2s;
 }
 
 #tide-toggle:hover {
@@ -214,7 +254,7 @@ body {
     top: 0;
     right: 0;
     width: 340px;
-    height: calc(100vh - 88px);
+    height: calc(100vh - 74px);
     z-index: 1000;
     background: rgba(10, 22, 40, 0.94);
     backdrop-filter: blur(12px);
@@ -442,6 +482,7 @@ body.panel-collapsed #panel-toggle {
     padding: 8px 10px;
     font-size: 10px;
     color: #7a8fa6;
+    width: 210px;
     display: none;
 }
 
@@ -457,7 +498,7 @@ body.panel-collapsed #panel-toggle {
 }
 
 .flow-legend-bar {
-    width: 160px;
+    width: 100%;
     height: 10px;
     border-radius: 3px;
     margin-bottom: 3px;
@@ -468,7 +509,7 @@ body.panel-collapsed #panel-toggle {
     justify-content: space-between;
     font-size: 9px;
     color: #5a7a9a;
-    width: 160px;
+    width: 100%;
 }
 
 .flow-legend-source {
@@ -492,6 +533,7 @@ body.panel-collapsed #panel-toggle {
     padding: 8px 10px;
     font-size: 10px;
     color: #7a8fa6;
+    width: 210px;
     display: none;
 }
 
@@ -536,7 +578,7 @@ body.panel-collapsed #panel-toggle {
 }
 
 .wind-legend-bar {
-    width: 160px;
+    width: 100%;
     height: 10px;
     border-radius: 3px;
     margin-bottom: 3px;
@@ -547,7 +589,7 @@ body.panel-collapsed #panel-toggle {
     justify-content: space-between;
     font-size: 9px;
     color: #5a7a9a;
-    width: 160px;
+    width: 100%;
 }
 
 .wind-legend-source {
@@ -699,7 +741,7 @@ body.panel-collapsed #panel-toggle {
     left: 0;
     right: 0;
     z-index: 1000;
-    height: 54px;
+    height: 40px;
     background: rgba(10, 22, 40, 0.95);
     backdrop-filter: blur(8px);
     border-top: 1px solid rgba(100, 150, 200, 0.12);
@@ -809,53 +851,7 @@ body.panel-collapsed #panel-toggle {
 .timeline-go:hover { background: #e67e22; }
 .timeline-go.hidden { display: none; }
 
-/* NOW button in timeline */
-.timeline-now-btn {
-    background: rgba(93, 173, 226, 0.15);
-    border: none;
-    border-left: 1px solid rgba(100, 150, 200, 0.12);
-    color: #5dade2;
-    font-size: 10px;
-    font-weight: 700;
-    padding: 0 10px;
-    cursor: pointer;
-    letter-spacing: 0.3px;
-    transition: all 0.2s;
-}
-.timeline-now-btn:hover { background: rgba(93, 173, 226, 0.25); }
-
-/* Calendar button */
-.timeline-cal-btn {
-    background: rgba(100, 150, 200, 0.1);
-    border: none;
-    border-left: 1px solid rgba(100, 150, 200, 0.12);
-    color: #7a8fa6;
-    font-size: 16px;
-    padding: 0 10px;
-    cursor: pointer;
-    transition: all 0.2s;
-}
-.timeline-cal-btn:hover { background: rgba(100, 150, 200, 0.2); color: #c8d6e5; }
-
-/* Download button in timeline */
-.timeline-dl-btn {
-    background: rgba(46, 204, 113, 0.12);
-    border: none;
-    border-left: 1px solid rgba(100, 150, 200, 0.12);
-    color: #2ecc71;
-    font-size: 16px;
-    padding: 0 10px;
-    cursor: pointer;
-    transition: all 0.2s;
-}
-.timeline-dl-btn:hover { background: rgba(46, 204, 113, 0.25); }
-.timeline-dl-btn.downloading {
-    color: #f39c12;
-    animation: pulse-dl 1s ease-in-out infinite;
-}
-.timeline-dl-btn.done {
-    color: #2ecc71;
-}
+/* NOW / Calendar / Download buttons are in #layers-tray — styled via shared rule + overrides above */
 
 @keyframes pulse-dl {
     0%, 100% { opacity: 1; }
@@ -870,13 +866,8 @@ body.panel-collapsed #panel-toggle {
 /* Vessels toggle button */
 #vessels-toggle {
     background: rgba(243, 156, 18, 0.2);
-    border: 1px solid rgba(243, 156, 18, 0.3);
+    border-color: rgba(243, 156, 18, 0.3);
     color: #f39c12;
-    font-size: 11px;
-    padding: 2px 8px;
-    border-radius: 3px;
-    cursor: pointer;
-    transition: all 0.2s;
 }
 
 #vessels-toggle:hover {
@@ -918,13 +909,13 @@ body.panel-collapsed #panel-toggle {
 /* Layers tray: on desktop, sits in the status bar area (right side) */
 #layers-tray {
     position: fixed;
-    bottom: 0;
+    bottom: 72px; /* 32px status + 40px timeline */
     right: 16px;
     z-index: 1001;
     display: flex;
-    gap: 8px;
+    gap: 5px;
     align-items: center;
-    padding: 6px 0;
+    padding: 4px 10px;
 }
 
 /* Layers button: hidden on desktop */
@@ -1103,6 +1094,12 @@ body.panel-collapsed #panel-toggle {
     color: #7a8fa6;
 }
 
+.offline-dl-last {
+    font-size: 9px;
+    color: #4a6a8a;
+    margin-top: 4px;
+}
+
 /* ============================================================
    Responsive — mobile portrait (MUST be last to override base)
    ============================================================ */
@@ -1175,7 +1172,7 @@ body.panel-collapsed #panel-toggle {
     /* === Layers tray: Row 1, above forecast row === */
     #layers-tray {
         position: fixed;
-        bottom: 76px; /* 32px status + 44px forecast */
+        bottom: 92px; /* 32px status + 60px forecast (44px btn + 16px padding) */
         left: 0;
         right: 0;
         z-index: 1003;
@@ -1198,9 +1195,15 @@ body.panel-collapsed #panel-toggle {
     #layers-tray button {
         font-size: 12px;
         padding: 6px 10px;
-        min-height: 34px;
+        height: 44px;
         flex: 1;
         text-align: center;
+    }
+
+    /* Hide desktop NOW/calendar on mobile (mobile has its own forecast buttons) */
+    #layers-tray .timeline-now-btn,
+    #layers-tray .timeline-cal-btn {
+        display: none;
     }
 
     /* === Forecast quick buttons: Row 2, above status bar === */
@@ -1211,13 +1214,12 @@ body.panel-collapsed #panel-toggle {
         left: 0;
         right: 0;
         z-index: 1002;
-        height: 44px;
         background: rgba(10, 22, 40, 0.95);
         backdrop-filter: blur(8px);
-        border-top: 1px solid rgba(100, 150, 200, 0.12);
-        align-items: center;
+        border-top: 1px solid rgba(100, 150, 200, 0.15);
         justify-content: center;
-        gap: 0;
+        gap: 6px;
+        padding: 8px 10px;
         transition: transform 0.2s ease, opacity 0.2s ease;
     }
 
@@ -1229,15 +1231,16 @@ body.panel-collapsed #panel-toggle {
 
     .fcst-quick-btn {
         flex: 1;
-        height: 100%;
-        border: none;
-        background: transparent;
+        height: 44px;
+        background: rgba(100, 100, 100, 0.2);
+        border: 1px solid rgba(100, 100, 100, 0.3);
+        border-radius: 3px;
         color: #7a8fa6;
         font-size: 12px;
         font-weight: 600;
         cursor: pointer;
-        border-right: 1px solid rgba(100, 150, 200, 0.1);
-        transition: all 0.15s;
+        transition: all 0.2s;
+        text-align: center;
     }
 
     .fcst-quick-btn:last-child {
@@ -1245,27 +1248,30 @@ body.panel-collapsed #panel-toggle {
     }
 
     .fcst-quick-btn:active {
-        background: rgba(100, 150, 200, 0.15);
-    }
-
-    .fcst-now-btn {
-        color: #5dade2;
+        background: rgba(46, 204, 113, 0.3);
     }
 
     .fcst-now-btn.active {
-        background: rgba(93, 173, 226, 0.2);
-        color: #5dade2;
+        background: rgba(46, 204, 113, 0.2);
+        border-color: rgba(46, 204, 113, 0.3);
+        color: #2ecc71;
     }
 
     .fcst-hour-btn.active {
-        background: rgba(243, 156, 18, 0.25);
-        color: #f39c12;
+        background: rgba(232, 90, 180, 0.2);
+        border-color: rgba(232, 90, 180, 0.3);
+        color: #e85ab4;
     }
 
     .fcst-set-btn {
-        color: #a0b0c0;
         font-size: 10px;
         letter-spacing: 0.3px;
+    }
+
+    .fcst-set-btn.active {
+        background: rgba(232, 90, 180, 0.2);
+        border-color: rgba(232, 90, 180, 0.3);
+        color: #e85ab4;
     }
 
     /* === Hide Leaflet zoom controls on mobile (pinch to zoom) === */
@@ -1314,7 +1320,7 @@ body.panel-collapsed #panel-toggle {
 
     /* === Mobile vessel list === */
     .mobile-vessel-list {
-        bottom: 120px;
+        bottom: 156px;
     }
 
     body:not(.mobile-controls-open) .mobile-vessel-list {

@@ -1,4 +1,4 @@
-const CACHE_NAME = 'ais-tracker-v5';
+const CACHE_NAME = 'ais-tracker-v6';
 const ENV_CACHE = 'ais-env-data-v1';
 const TILE_CACHE = 'ais-tiles-v1';
 
@@ -46,12 +46,21 @@ self.addEventListener('activate', (event) => {
   self.clients.claim();
 });
 
-// Handle messages from the app (e.g. clear env cache)
+// Prefer cached env data when available (stale-while-revalidate).
+// After a download, the cache has 24h of data — serve it instantly,
+// then update the cache in the background if online.
+let _envCacheFirst = false;
+
+// Handle messages from the app
 self.addEventListener('message', (event) => {
   if (event.data && event.data.type === 'CLEAR_ENV_CACHE') {
+    _envCacheFirst = false;
     caches.delete(ENV_CACHE).then(() => {
       if (event.ports[0]) event.ports[0].postMessage({ cleared: true });
     });
+  }
+  if (event.data && event.data.type === 'ENV_CACHE_READY') {
+    _envCacheFirst = true;
   }
 });
 
@@ -63,40 +72,66 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // Environmental API endpoints: network-first with cache fallback for offline
+  // Environmental API endpoints: cache-first when downloaded, network-first otherwise
   if (ENV_API_PATHS.some(p => url.pathname === p)) {
-    event.respondWith(
-      fetch(event.request).then((response) => {
-        if (response.ok) {
-          const clone = response.clone();
-          caches.open(ENV_CACHE).then((cache) => cache.put(event.request, clone));
-        }
-        return response;
-      }).catch(() => {
-        // Offline — try cache
-        return caches.open(ENV_CACHE).then((cache) =>
+    if (_envCacheFirst) {
+      // Stale-while-revalidate: serve from cache instantly, update in background
+      event.respondWith(
+        caches.open(ENV_CACHE).then((cache) =>
           cache.match(event.request).then((cached) => {
+            const networkFetch = fetch(event.request).then((response) => {
+              if (response.ok) cache.put(event.request, response.clone());
+              return response;
+            }).catch(() => null);
+
             if (cached) {
-              // Clone and rebuild with a header so the app knows it's cached
-              return cached.arrayBuffer().then((body) => {
-                const headers = new Headers(cached.headers);
-                headers.set('X-From-Cache', 'true');
-                return new Response(body, {
-                  status: cached.status,
-                  statusText: cached.statusText,
-                  headers: headers,
-                });
-              });
+              // Serve cached immediately, refresh in background
+              networkFetch; // fire-and-forget
+              const headers = new Headers(cached.headers);
+              headers.set('X-From-Cache', 'true');
+              return cached.arrayBuffer().then((body) =>
+                new Response(body, { status: cached.status, statusText: cached.statusText, headers })
+              );
             }
-            // No cached data available
-            return new Response(JSON.stringify({ offline: true, error: 'No cached data available' }), {
-              status: 503,
-              headers: { 'Content-Type': 'application/json', 'X-From-Cache': 'true' },
+            // Nothing cached — wait for network
+            return networkFetch.then((resp) => {
+              if (resp) return resp;
+              return new Response(JSON.stringify({ offline: true, error: 'No cached data available' }), {
+                status: 503,
+                headers: { 'Content-Type': 'application/json', 'X-From-Cache': 'true' },
+              });
             });
           })
-        );
-      })
-    );
+        )
+      );
+    } else {
+      // Network-first with cache fallback (before any download)
+      event.respondWith(
+        fetch(event.request).then((response) => {
+          if (response.ok) {
+            const clone = response.clone();
+            caches.open(ENV_CACHE).then((cache) => cache.put(event.request, clone));
+          }
+          return response;
+        }).catch(() =>
+          caches.open(ENV_CACHE).then((cache) =>
+            cache.match(event.request).then((cached) => {
+              if (cached) {
+                return cached.arrayBuffer().then((body) => {
+                  const headers = new Headers(cached.headers);
+                  headers.set('X-From-Cache', 'true');
+                  return new Response(body, { status: cached.status, statusText: cached.statusText, headers });
+                });
+              }
+              return new Response(JSON.stringify({ offline: true, error: 'No cached data available' }), {
+                status: 503,
+                headers: { 'Content-Type': 'application/json', 'X-From-Cache': 'true' },
+              });
+            })
+          )
+        )
+      );
+    }
     return;
   }
 

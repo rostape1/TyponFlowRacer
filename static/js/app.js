@@ -753,7 +753,7 @@ const _isMobile = window.innerWidth <= 600;
 
 function getPanelArrow(collapsed) {
     if (_isMobile) return collapsed ? '\u2630' : '\u2715';  // ☰ / ✕
-    return collapsed ? '\u203A' : '\u2039';  // › / ‹
+    return collapsed ? '\u2039' : '\u203A';  // ‹ (open) / › (close)
 }
 
 document.getElementById('panel-toggle').addEventListener('click', () => {
@@ -792,6 +792,15 @@ if (_layersBtn && _layersTray) {
         const isOpen = document.body.classList.toggle('mobile-controls-open');
         _layersTray.classList.toggle('hidden', !isOpen);
         if (_fcstQuickBtns) _fcstQuickBtns.classList.toggle('hidden', !isOpen);
+        // Hide vessel list when closing the tray
+        if (!isOpen && _mobileVesselsOn) {
+            _mobileVesselsOn = false;
+            if (_vesselsBtn) {
+                _vesselsBtn.textContent = 'Vessels: OFF';
+                _vesselsBtn.classList.add('vessels-off');
+            }
+            if (_mobileVesselList) _mobileVesselList.classList.add('hidden');
+        }
     });
     // Do NOT auto-close on outside click — user must tap ☰ to collapse
 }
@@ -1599,23 +1608,24 @@ function manageAutoRefresh() {
 
 async function reloadEnvironmentalData() {
     manageAutoRefresh();
-    setForecastLoading(true);
+    const hasCachedDl = !!_getLastDlTime();
+    if (!hasCachedDl) setForecastLoading(true);
 
     let loaded = 0;
     const total = forecastMinutes > 48 * 60 ? 3 : 4;  // currents + field + tide (+ wind if ≤48h)
 
     try {
         const promises = [
-            loadCurrents().then(() => { loaded++; setForecastProgress(loaded, total); }),
-            loadCurrentField().then(() => { loaded++; setForecastProgress(loaded, total); }),
-            loadTideHeight().then(() => { loaded++; setForecastProgress(loaded, total); }),
+            loadCurrents().then(() => { loaded++; if (!hasCachedDl) setForecastProgress(loaded, total); }),
+            loadCurrentField().then(() => { loaded++; if (!hasCachedDl) setForecastProgress(loaded, total); }),
+            loadTideHeight().then(() => { loaded++; if (!hasCachedDl) setForecastProgress(loaded, total); }),
         ];
         if (forecastMinutes <= 48 * 60) {
-            promises.push(loadWindField().then(() => { loaded++; setForecastProgress(loaded, total); }));
+            promises.push(loadWindField().then(() => { loaded++; if (!hasCachedDl) setForecastProgress(loaded, total); }));
         }
         await Promise.allSettled(promises);
     } finally {
-        setForecastLoading(false);
+        if (!hasCachedDl) setForecastLoading(false);
     }
 }
 
@@ -1829,6 +1839,48 @@ window.addEventListener('online', () => {
 updateOfflineBanner();
 
 // --- Download 24h of environmental data for offline use ---
+
+const offlineDlLast = document.getElementById('offline-dl-last');
+const offlineDlAge = document.getElementById('offline-dl-age');
+
+function _notifySwCacheReady() {
+    if (navigator.serviceWorker && navigator.serviceWorker.controller) {
+        navigator.serviceWorker.controller.postMessage({ type: 'ENV_CACHE_READY' });
+    }
+}
+
+function _getLastDlTime() {
+    return localStorage.getItem('ais_offline_dl_time');
+}
+
+// If a previous download exists, tell SW to use cache-first
+if (_getLastDlTime()) _notifySwCacheReady();
+
+function _updateLastDlDisplay() {
+    const last = _getLastDlTime();
+    if (!last) {
+        if (offlineDlLast) offlineDlLast.textContent = '';
+        if (offlineDlAge) offlineDlAge.textContent = '';
+        if (offlineDlBtn) offlineDlBtn.title = 'Download 24h for offline use';
+        return;
+    }
+    const ageMins = Math.floor((Date.now() - new Date(last).getTime()) / 60000);
+    let ageText;
+    if (ageMins < 1) ageText = 'just now';
+    else if (ageMins < 60) ageText = `${ageMins}m ago`;
+    else {
+        const h = Math.floor(ageMins / 60);
+        const m = ageMins % 60;
+        ageText = m > 0 ? `${h}h ${m}m ago` : `${h}h ago`;
+    }
+    if (offlineDlLast) offlineDlLast.textContent = `Last downloaded: ${ageText}`;
+    if (offlineDlAge) offlineDlAge.textContent = `DL: ${ageText}`;
+    if (offlineDlBtn) offlineDlBtn.title = `Download 24h · Last: ${ageText}`;
+}
+
+// Show last download time on load
+_updateLastDlDisplay();
+
 async function downloadForOffline() {
     if (_downloadingOffline) return;
     _downloadingOffline = true;
@@ -1836,7 +1888,45 @@ async function downloadForOffline() {
     const btn = offlineDlBtn;
     if (btn) btn.classList.add('downloading');
     if (offlineDlPanel) offlineDlPanel.classList.remove('hidden');
+    if (offlineDlStatus) offlineDlStatus.textContent = 'Checking for new data\u2026';
+    if (offlineDlBar) offlineDlBar.style.width = '0%';
 
+    // Probe wind & SFBOFS hour-0 to check if data has changed since last download
+    const probeEndpoints = ['/api/wind-field', '/api/current-field'];
+    const storedTimestamps = {};
+    let needsDownload = false;
+
+    try {
+        const probes = await Promise.all(probeEndpoints.map(ep => fetch(ep).then(r => r.json()).catch(() => null)));
+        for (let i = 0; i < probeEndpoints.length; i++) {
+            const key = `ais_offline_dl_${probeEndpoints[i].replace('/api/', '')}`;
+            const data = probes[i];
+            const fetchedAt = data?.grid?.fetched_at || data?.fetched_at || null;
+            const stored = localStorage.getItem(key);
+            storedTimestamps[key] = fetchedAt;
+            if (!stored || stored !== fetchedAt) {
+                needsDownload = true;
+            }
+        }
+    } catch {
+        needsDownload = true; // On error, download anyway
+    }
+
+    // Also force download if never downloaded before
+    if (!_getLastDlTime()) needsDownload = true;
+
+    if (!needsDownload) {
+        _downloadingOffline = false;
+        if (btn) btn.classList.remove('downloading');
+        if (offlineDlStatus) offlineDlStatus.textContent = 'Data is up to date!';
+        _updateLastDlDisplay();
+        setTimeout(() => {
+            if (offlineDlPanel) offlineDlPanel.classList.add('hidden');
+        }, 2000);
+        return;
+    }
+
+    // Download all 24h of data
     const endpoints = ['/api/tide-height', '/api/currents', '/api/current-field', '/api/wind-field'];
     const hours = 24;
     const total = endpoints.length * hours;
@@ -1861,6 +1951,13 @@ async function downloadForOffline() {
         await Promise.all(batch);
     }
 
+    // Save timestamps and switch SW to cache-first
+    localStorage.setItem('ais_offline_dl_time', new Date().toISOString());
+    for (const [key, val] of Object.entries(storedTimestamps)) {
+        if (val) localStorage.setItem(key, val);
+    }
+    _notifySwCacheReady();
+
     // Done
     _downloadingOffline = false;
     if (btn) {
@@ -1869,6 +1966,7 @@ async function downloadForOffline() {
         setTimeout(() => btn.classList.remove('done'), 3000);
     }
     if (offlineDlStatus) offlineDlStatus.textContent = 'Done! 24h cached for offline use.';
+    _updateLastDlDisplay();
     setTimeout(() => {
         if (offlineDlPanel) offlineDlPanel.classList.add('hidden');
     }, 3000);

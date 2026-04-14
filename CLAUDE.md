@@ -27,7 +27,7 @@ main.py process_decoded()
 
 Environmental data flows independently:
 - `/api/current-field` → SFBOFS NetCDF grid (or station IDW fallback) → `tidal-flow.js` particles
-- `/api/wind-field` → Open-Meteo HRRR grid + NDBC buoys → `wind-overlay.js` particles
+- `/api/wind-field` → NOAA HRRR grid + NDBC buoys → `wind-overlay.js` particles
 - `/api/tide-height` → NOAA CO-OPS harmonic predictions → timeline display
 - `/api/currents` → 6 tidal current stations → interpolated overlay
 
@@ -47,7 +47,7 @@ Environmental data flows independently:
 | `currents.py` | NOAA CO-OPS tidal current API, 6 stations, inverse distance weighting interpolation |
 | `tides.py` | NOAA tide height predictions, 14 stations, harmonic interpolation |
 | `sfbofs.py` | NOAA SF Bay hydrodynamic model: S3 NetCDF download, FVCOM unstructured→regular grid regrid |
-| `wind.py` | Open-Meteo HRRR wind grid + NDBC buoy observations, dual color schemes |
+| `wind.py` | NOAA HRRR wind grid via Open-Meteo (72 points, parallel fetch via ThreadPoolExecutor) + NDBC buoy observations, dual color schemes |
 | `download_offline.py` | Pre-cache tiles, currents, wind data for offline use |
 | `README.md` | User-facing documentation: features, setup, architecture, deployment |
 | `CLAUDE.md` | AI assistant context: tech stack, file map, API endpoints, patterns |
@@ -57,11 +57,11 @@ Environmental data flows independently:
 | File | Purpose |
 |------|---------|
 | `index.html` | Single page: map container, side panel, legends, forecast timeline, modals |
-| `js/app.js` (~1700 lines) | Main app: Leaflet map, vessel markers, popups, CPA/TCPA, speed charts, search, forecast UI, offline pre-fetch |
+| `js/app.js` (~1900 lines) | Main app: Leaflet map, vessel markers, popups, CPA/TCPA, speed charts, search, forecast UI, mobile quick buttons, offline pre-fetch |
 | `js/tidal-flow.js` | Canvas particle animation + speed heatmap for tidal currents (2000-3000 particles, bilinear interpolation, offscreen-rendered color overlay) |
-| `js/wind-overlay.js` | Canvas particle animation for wind (800 particles, NDBC station markers) |
-| `css/style.css` | Dark nautical theme, glassmorphism panels, responsive layout |
-| `sw.js` | Service Worker: cache-first for external CDN tiles (CartoDB, OSM, NOAA, OpenSeaMap via `ais-tiles-v1` cache), network-first for HTML/JS, network-first+cache-fallback for environmental APIs (offline support) |
+| `js/wind-overlay.js` | Canvas particle animation for wind (800 arrow-tipped particles with speed number flashing, NDBC station markers, dual color schemes) |
+| `css/style.css` | Dark nautical theme, glassmorphism panels, responsive 3-row mobile layout, Leaflet control styling |
+| `sw.js` | Service Worker: cache-first for external CDN tiles (CartoDB, OSM, NOAA, OpenSeaMap via `ais-tiles-v1` cache), network-first for HTML/JS, stale-while-revalidate for environmental APIs after download (`ais-env-data-v1` cache) |
 
 ## Database Schema
 
@@ -101,7 +101,7 @@ The `time` parameter is minutes offset from now (used by forecast timeline).
 | AISstream.io | Cloud AIS via WebSocket | API key in `.env` | Continuous stream |
 | NOAA SFBOFS | SF Bay hydrodynamic NetCDF (~57MB) | Public S3 | 6 hours |
 | NOAA CO-OPS | Tidal currents + tide heights | No key | 6 hours |
-| Open-Meteo | HRRR wind forecast grid | No key | 30 min |
+| Open-Meteo | HRRR wind forecast grid (shown as "NOAA HRRR" in UI) | No key | 30 min |
 | NDBC NOAA | Real-time buoy observations | Public | 10 min |
 
 ## Configuration
@@ -140,8 +140,8 @@ Local server runs at `http://localhost:8888`. Deploys to Fly.io via `fly deploy`
 - **Offline forecast persistence** — All 48h of forecast data (wind grid, SFBOFS current field, tidal currents, tide heights) is saved to JSON files on disk after each refresh cycle. On restart (even offline), forecast caches load from disk immediately so forecast mode works without internet.
 - **Offline cache files** — `static/data/wind_forecasts.json` (48h wind grid), `static/data/sfbofs_forecasts.json` (48h current field), `static/data/tides/*.json` (14 station predictions), `static/data/currents/*.json` (6 station predictions), plus hour-0 files `wind_field.json`, `wind_stations.json`, `sfbofs_field.json`
 - **Offline mode** — Service Worker automatically caches all external map tiles (CartoDB, OSM, NOAA charts, OpenSeaMap) on first view via `ais-tiles-v1` cache. `download_offline.py` can additionally pre-cache tiles, currents, wind for areas not yet viewed.
-- **PWA offline pre-fetch** — Download button (arrow icon in timeline strip) pre-fetches 24h of tide, current, wind, and current-field data for offline PWA use. Service Worker caches environmental API responses (`ais-env-data-v1` cache) with network-first strategy; falls back to cached data when offline. `X-From-Cache` response header signals staleness to the app. Offline banner shown when serving cached data.
-- **Data freshness indicators** — Wind and current field legends show green/yellow dot with relative age (e.g. "3m ago" / "2h 30m ago"). Green = data < 45 min old, yellow = stale.
+- **PWA offline pre-fetch** — Download button (in bottom button bar) pre-fetches 24h of tide, current, wind, and current-field data for offline PWA use. Probes wind/SFBOFS `fetched_at` before downloading — skips if data unchanged since last download. Tracks last download time in localStorage, shown in status bar ("DL: 2h ago") and download panel. After download, Service Worker switches to **stale-while-revalidate** for env API requests — serves cached data instantly, refreshes in background if online. `X-From-Cache` response header signals cached data to the app. Loading progress bar suppressed when serving from cache.
+- **Data freshness indicators** — Wind and current field legends show green/yellow dot with relative age (e.g. "3m ago" / "2h 30m ago"). Green = data < 45 min old, yellow = stale. Both legends are same width (210px).
 - **Wind grid fetched in parallel** — 72 grid points fetched concurrently via ThreadPoolExecutor (20 workers) instead of sequentially. Reduces wind data load from minutes to ~3 seconds.
 - **SFBOFS returns stale cache immediately** — if disk cache exists, `/api/current-field` returns it instantly while refreshing the 57MB NetCDF download in the background. No more blocking on slow S3 downloads.
 - **Position data kept permanently** — for post-voyage analysis
@@ -154,6 +154,7 @@ Local server runs at `http://localhost:8888`. Deploys to Fly.io via `fly deploy`
 - **SFBOFS unavailable** → falls back to station-based IDW interpolation
 - **Frontend marker management** — `Map<mmsi, Marker>` for O(1) updates
 - **Canvas overlays** reposition on map pan/zoom events. Tidal heatmap uses separate pane (z-index 449) below particles (451) and wind (450)
+- **Wind particle rendering** — arrow-tipped trails drawn per-frame on canvas. Every 5th particle flashes its speed number (dark pill + colored text) during age 30-80 with fade in/hold/fade out. Numbers drawn after the canvas fade pass to stay crisp. Default color scheme: purple.
 - **Forecast** — `forecastMinutes` offset applied to all environmental API queries
 
 ## UI Conventions
@@ -164,5 +165,7 @@ Local server runs at `http://localhost:8888`. Deploys to Fly.io via `fly deploy`
 - Ship type colors: Sailing=#3498db, Cargo=#2ecc71, Tanker=#e74c3c, Own=#f39c12
 - Wind particles: purple arrow-tipped trails with flashing speed numbers (every 5th particle). Default color scheme: purple
 - Tidal flow particles: smooth colored line trails (blue→cyan→green→yellow→red by speed)
-- **Mobile bottom bar**: 3-row stack (layer toggles → forecast quick buttons → status line), collapsible via hamburger button (default: expanded). Timeline scroll strip hidden on mobile.
+- **Desktop bottom bar**: Timeline strip (scrollable hours + GO button) above status bar. Button bar above timeline with NOW, calendar, download, and layer toggles (Flow, Heatmap, Wind, Tide, Vessels). All buttons are 28px tall with consistent toggle styling.
+- **Mobile bottom bar**: 3-row stack (layer toggles + download → forecast quick buttons → status line), collapsible via hamburger button (default: expanded). Timeline scroll strip hidden on mobile. Vessel list auto-closes when tray is collapsed.
 - **Mobile forecast quick buttons**: NOW, +1h, +2h, +3h, +4h, Set FCST TIME (opens date/time picker)
+- **Button colors**: Flow=blue, Heatmap=orange, Wind=purple, Tide=cyan, Vessels=orange, NOW=blue, Calendar=magenta, Download=green. Active forecast hours=magenta (#e85ab4). OFF state=dim gray for all.

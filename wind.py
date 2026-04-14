@@ -183,7 +183,7 @@ def _fetch_grid(forecast_hour: int = 0) -> dict | None:
         "nx": GRID_NX,
         "ny": GRID_NY,
         "model": "HRRR 3km",
-        "source": "Open-Meteo (NOAA HRRR)",
+        "source": "NOAA HRRR",
         "fetched_at": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
         "forecast_hour": forecast_hour,
         "u": u_grid,

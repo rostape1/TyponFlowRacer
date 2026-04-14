@@ -18,11 +18,12 @@ A lightweight AIS vessel tracker for sailboats. Connects to a WiFi AIS receiver,
 - **Wind overlay** with arrow-tipped animated particles from HRRR model (purple theme, with flashing speed numbers)
 - **Forecast timeline** — scrollable 48-hour timeline strip on desktop; mobile shows quick-access NOW/+1h/+2h/+3h/+4h buttons and date picker. Calendar picker for unlimited long-range tide forecasts beyond 48h
 - **Mobile-optimized UI** — 3-row bottom bar (layer toggles, forecast buttons, status line) with collapsible stack button; dark-themed Leaflet controls
+- **Desktop bottom bar** — button bar above timeline with NOW, calendar, download, and layer toggles (Flow, Heatmap, Wind, Tide, Vessels). Uniform 28px toggle-style buttons with distinct colors per layer
 - **PWA support** — installable on iPhone/iPad via "Add to Home Screen" for full-screen native feel
 - Offline-capable with locally cached map tiles and current data
 - **Automatic forecast persistence** — server fetches and saves 48h of wind, current field, tidal currents, and tide height data to disk on startup (refreshes every 30 min). Forecast mode works fully offline after a single online session.
 - **Data freshness indicators** — wind and current field legends show green/yellow dot with relative age (e.g. "3m ago" / "2h 30m ago")
-- **Offline pre-fetch** — download 24 hours of tide, wind, and current data for offline use on your phone (tap the download arrow in the timeline strip while online)
+- **Smart offline pre-fetch** — download 24 hours of environmental data for offline use. Probes server for new data before downloading — skips if nothing has changed. Shows last download time in status bar. After download, Service Worker switches to cache-first (stale-while-revalidate) so forecast time shifts load instantly from local cache with no loading bar
 - Demo mode with simulated vessel movements in SF Bay
 
 ## Quick Start
