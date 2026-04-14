@@ -87,13 +87,17 @@ NDBC_URL = "https://www.ndbc.noaa.gov/data/realtime2/{station}.txt"
 MS_TO_KN = 1.94384
 
 
+_last_fetch_error = None
+
 def _fetch_url(url: str, timeout: int = 15) -> str | None:
     """Fetch URL content as string."""
+    global _last_fetch_error
     try:
         req = Request(url, headers={"User-Agent": "AIS-Tracker/1.0"})
         with urlopen(req, timeout=timeout) as resp:
             return resp.read().decode("utf-8")
     except (URLError, TimeoutError, OSError) as e:
+        _last_fetch_error = str(e)
         logger.debug(f"Fetch failed: {url} — {e}")
         return None
 
@@ -114,10 +118,12 @@ def _fetch_grid(forecast_hour: int = 0) -> dict | None:
     gust_grid = [[0.0] * GRID_NX for _ in range(GRID_NY)]
 
     success_count = 0
+    first_error = None
     is_forecast = forecast_hour > 0
 
     def _fetch_point(iy, ix, lat, lon):
         """Fetch a single grid point and return (iy, ix, u, v, gust) or None."""
+        nonlocal first_error
         if is_forecast:
             url = OPEN_METEO_FORECAST_URL.format(
                 lat=lat, lon=lon, hours=forecast_hour + 1
@@ -126,6 +132,8 @@ def _fetch_grid(forecast_hour: int = 0) -> dict | None:
             url = OPEN_METEO_URL.format(lat=lat, lon=lon)
         text = _fetch_url(url)
         if not text:
+            if first_error is None:
+                first_error = f"fetch returned empty for ({lat:.2f},{lon:.2f})"
             return None
         try:
             data = json.loads(text)
@@ -173,7 +181,8 @@ def _fetch_grid(forecast_hour: int = 0) -> dict | None:
                 success_count += 1
 
     if success_count < GRID_NX * GRID_NY * 0.5:
-        logger.warning(f"Too few grid points fetched: {success_count}/{GRID_NX * GRID_NY}")
+        err_detail = first_error or _last_fetch_error or "unknown"
+        logger.warning(f"Too few grid points fetched: {success_count}/{GRID_NX * GRID_NY} — {err_detail}")
         return None
 
     logger.info(f"Wind grid fetched: {success_count}/{GRID_NX * GRID_NY} points from Open-Meteo (HRRR) forecast_hour={forecast_hour}")
