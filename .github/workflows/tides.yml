@@ -1,0 +1,45 @@
+name: Fetch Tides & Currents
+
+on:
+  schedule:
+    - cron: '23 5,17 * * *'  # 2x/day (predictions are deterministic)
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Restore data cache
+        uses: actions/cache/restore@v4
+        with:
+          path: static/data
+          key: env-data
+
+      - name: Fetch tide predictions
+        run: python .github/scripts/fetch_tides.py
+
+      - name: Fetch current predictions
+        run: python .github/scripts/fetch_currents.py
+
+      - name: Save data cache
+        uses: actions/cache/save@v4
+        with:
+          path: static/data
+          key: env-data-${{ github.run_id }}-tides
+
+      - name: Trigger deploy
+        uses: peter-evans/repository-dispatch@v3
+        with:
+          event-type: data-updated
+          client-payload: '{"source": "tides"}'

@@ -1,0 +1,276 @@
+#!/usr/bin/env python3
+"""
+Fetch SFBOFS current field data from NOAA S3 and output per-hour JSON files.
+
+Downloads NetCDF files from the NOAA SF Bay Operational Forecast System,
+extracts surface u/v velocity, regrids to regular lat/lon, and writes
+JSON files for hours 0-48.
+
+Requires: netCDF4, scipy, numpy
+"""
+
+import json
+import logging
+import os
+import sys
+import tempfile
+from concurrent.futures import ProcessPoolExecutor, as_completed
+from datetime import datetime, timezone, timedelta
+from pathlib import Path
+from urllib.request import urlopen, Request
+from urllib.error import URLError
+
+import numpy as np
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+logger = logging.getLogger(__name__)
+
+S3_BUCKET = "https://noaa-nos-ofs-pds.s3.amazonaws.com"
+MODEL_RUNS = ["21", "15", "09", "03"]
+
+BOUNDS = {
+    "south": 37.40,
+    "north": 38.05,
+    "west": -122.65,
+    "east": -122.10,
+}
+
+GRID_SPACING = 0.002  # ~200m
+
+OUTPUT_DIR = Path(__file__).resolve().parent.parent.parent / "static" / "data" / "sfbofs"
+
+
+def _s3_url(date_str: str, run_hour: str, forecast_hour: int = 0) -> str:
+    d = datetime.strptime(date_str, "%Y%m%d")
+    return (
+        f"{S3_BUCKET}/sfbofs/netcdf/{d.year}/{d.month:02d}/{d.day:02d}/"
+        f"sfbofs.t{run_hour}z.{date_str}.fields.n{forecast_hour:03d}.nc"
+    )
+
+
+def _download_file(url: str, dest: str) -> bool:
+    try:
+        req = Request(url, headers={"User-Agent": "AIS-Tracker/1.0"})
+        with urlopen(req, timeout=120) as resp:
+            with open(dest, "wb") as f:
+                while True:
+                    chunk = resp.read(65536)
+                    if not chunk:
+                        break
+                    f.write(chunk)
+        return True
+    except (URLError, TimeoutError, OSError) as e:
+        logger.debug(f"Download failed: {url} — {e}")
+        return False
+
+
+def _find_latest_run() -> tuple[str, str] | None:
+    now = datetime.now(timezone.utc)
+    for days_back in range(2):
+        d = now - timedelta(days=days_back)
+        date_str = d.strftime("%Y%m%d")
+        for run in MODEL_RUNS:
+            run_hour = int(run)
+            if days_back == 0 and now.hour < run_hour + 3:
+                continue
+            url = _s3_url(date_str, run, forecast_hour=0)
+            try:
+                req = Request(url, method="HEAD", headers={"User-Agent": "AIS-Tracker/1.0"})
+                with urlopen(req, timeout=10):
+                    logger.info(f"Found SFBOFS run: {date_str} t{run}z")
+                    return (date_str, run)
+            except (URLError, TimeoutError, OSError):
+                continue
+    return None
+
+
+def _extract_and_regrid(nc_path: str, forecast_hour: int) -> dict | None:
+    import netCDF4 as nc
+    from scipy.interpolate import griddata
+
+    try:
+        ds = nc.Dataset(nc_path, "r")
+    except Exception as e:
+        logger.error(f"Failed to open NetCDF: {e}")
+        return None
+
+    try:
+        lat_var = lon_var = u_var = v_var = None
+        for name in ["latc", "lat"]:
+            if name in ds.variables:
+                lat_var = name
+                break
+        for name in ["lonc", "lon"]:
+            if name in ds.variables:
+                lon_var = name
+                break
+        for name in ["u", "water_u"]:
+            if name in ds.variables:
+                u_var = name
+                break
+        for name in ["v", "water_v"]:
+            if name in ds.variables:
+                v_var = name
+                break
+
+        if not all([lat_var, lon_var, u_var, v_var]):
+            logger.error(f"Missing variables. Found: lat={lat_var}, lon={lon_var}, u={u_var}, v={v_var}")
+            return None
+
+        lats = ds.variables[lat_var][:]
+        lons = ds.variables[lon_var][:]
+
+        if np.max(lons) > 180:
+            lons = np.where(lons > 180, lons - 360, lons)
+
+        u_data = ds.variables[u_var]
+        v_data = ds.variables[v_var]
+
+        if u_data.ndim == 3:
+            u_surface = u_data[0, 0, :]
+            v_surface = v_data[0, 0, :]
+        elif u_data.ndim == 2:
+            u_surface = u_data[0, :]
+            v_surface = v_data[0, :]
+        else:
+            u_surface = u_data[:]
+            v_surface = v_data[:]
+
+        if hasattr(u_surface, 'filled'):
+            u_surface = u_surface.filled(0.0)
+            v_surface = v_surface.filled(0.0)
+
+        u_surface = np.array(u_surface, dtype=np.float64)
+        v_surface = np.array(v_surface, dtype=np.float64)
+        lats = np.array(lats, dtype=np.float64)
+        lons = np.array(lons, dtype=np.float64)
+
+        # m/s to knots
+        MS_TO_KN = 1.94384
+        u_surface *= MS_TO_KN
+        v_surface *= MS_TO_KN
+
+        margin = 0.05
+        mask = (
+            (lats >= BOUNDS["south"] - margin) &
+            (lats <= BOUNDS["north"] + margin) &
+            (lons >= BOUNDS["west"] - margin) &
+            (lons <= BOUNDS["east"] + margin)
+        )
+
+        lats_sub = lats[mask]
+        lons_sub = lons[mask]
+        u_sub = u_surface[mask]
+        v_sub = v_surface[mask]
+
+        if len(lats_sub) < 10:
+            logger.error("Too few points in bounding box")
+            return None
+
+        ny = int((BOUNDS["north"] - BOUNDS["south"]) / GRID_SPACING) + 1
+        nx = int((BOUNDS["east"] - BOUNDS["west"]) / GRID_SPACING) + 1
+
+        grid_lat = np.linspace(BOUNDS["south"], BOUNDS["north"], ny)
+        grid_lon = np.linspace(BOUNDS["west"], BOUNDS["east"], nx)
+        grid_lon_2d, grid_lat_2d = np.meshgrid(grid_lon, grid_lat)
+
+        points = np.column_stack([lons_sub, lats_sub])
+        u_grid = griddata(points, u_sub, (grid_lon_2d, grid_lat_2d), method="linear", fill_value=0.0)
+        v_grid = griddata(points, v_sub, (grid_lon_2d, grid_lat_2d), method="linear", fill_value=0.0)
+
+        u_grid = np.round(u_grid, 3)
+        v_grid = np.round(v_grid, 3)
+
+        return {
+            "bounds": BOUNDS,
+            "nx": nx,
+            "ny": ny,
+            "source": "NOAA SFBOFS",
+            "fetched_at": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
+            "forecast_hour": forecast_hour,
+            "u": u_grid.tolist(),
+            "v": v_grid.tolist(),
+        }
+    finally:
+        ds.close()
+
+
+def _process_hour(args: tuple) -> tuple[int, dict | None]:
+    """Download and process a single forecast hour. Designed for multiprocessing."""
+    forecast_hour, date_str, run_hour = args
+    url = _s3_url(date_str, run_hour, forecast_hour=forecast_hour)
+
+    with tempfile.NamedTemporaryFile(suffix=".nc", delete=False) as tmp:
+        tmp_path = tmp.name
+
+    try:
+        if not _download_file(url, tmp_path):
+            logger.warning(f"Failed to download hour {forecast_hour}")
+            return (forecast_hour, None)
+
+        result = _extract_and_regrid(tmp_path, forecast_hour)
+        return (forecast_hour, result)
+    finally:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+
+
+def main():
+    run_info = _find_latest_run()
+    if not run_info:
+        logger.error("No SFBOFS data available on S3")
+        sys.exit(1)
+
+    date_str, run_hour = run_info
+
+    # Check if we already have this run cached
+    meta_path = OUTPUT_DIR.parent / "meta.json"
+    if meta_path.exists():
+        try:
+            meta = json.loads(meta_path.read_text())
+            if meta.get("sfbofs_run") == f"{date_str}_t{run_hour}z":
+                logger.info(f"SFBOFS data already up to date ({date_str} t{run_hour}z), skipping")
+                return
+        except Exception:
+            pass
+
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+
+    # Process all 49 forecast hours in parallel
+    hours = list(range(49))
+    args = [(h, date_str, run_hour) for h in hours]
+
+    success = 0
+    with ProcessPoolExecutor(max_workers=4) as pool:
+        futures = {pool.submit(_process_hour, a): a[0] for a in args}
+        for future in as_completed(futures):
+            hour, result = future.result()
+            if result:
+                out_path = OUTPUT_DIR / f"hour_{hour:02d}.json"
+                out_path.write_text(json.dumps(result))
+                success += 1
+                logger.info(f"Wrote hour {hour:02d} ({success}/{len(hours)})")
+            else:
+                logger.warning(f"Failed hour {hour}")
+
+    logger.info(f"SFBOFS complete: {success}/{len(hours)} hours processed")
+
+    # Update meta
+    meta = {}
+    if meta_path.exists():
+        try:
+            meta = json.loads(meta_path.read_text())
+        except Exception:
+            pass
+    meta["sfbofs_run"] = f"{date_str}_t{run_hour}z"
+    meta["sfbofs_updated"] = datetime.now(timezone.utc).isoformat()
+    meta_path.write_text(json.dumps(meta, indent=2))
+
+    if success == 0:
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()

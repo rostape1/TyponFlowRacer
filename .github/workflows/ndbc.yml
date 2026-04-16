@@ -1,0 +1,42 @@
+name: Fetch NDBC Buoy Observations
+
+on:
+  schedule:
+    - cron: '*/10 * * * *'  # Every 10 min, matching buoy update frequency
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Restore data cache
+        uses: actions/cache/restore@v4
+        with:
+          path: static/data
+          key: env-data
+
+      - name: Fetch NDBC stations
+        run: python .github/scripts/fetch_ndbc.py
+
+      - name: Save data cache
+        uses: actions/cache/save@v4
+        with:
+          path: static/data
+          key: env-data-${{ github.run_id }}-ndbc
+
+      - name: Trigger deploy
+        uses: peter-evans/repository-dispatch@v3
+        with:
+          event-type: data-updated
+          client-payload: '{"source": "ndbc"}'

@@ -4,53 +4,64 @@ Real-time maritime vessel tracking platform for San Francisco Bay. Combines AIS 
 
 ## Tech Stack
 
-- **Backend:** Python 3.11, FastAPI + Uvicorn (async throughout), SQLite (aiosqlite, WAL mode)
 - **Frontend:** Vanilla JS (ES6+), Leaflet 1.9.4, Canvas particle animations, no build step
-- **Deployment:** Fly.io (Docker, `sjc` region), also runs on Raspberry Pi
-- **PWA:** Service Worker (`sw.js`) + manifest for offline/installable support
+- **Data Pipeline:** GitHub Actions (scheduled Python scripts fetch/process environmental data)
+- **Hosting:** GitHub Pages (static site + pre-computed JSON data)
+- **AIS:** Direct browser WebSocket to AISstream.io (no backend proxy)
+- **PWA:** Service Worker (`sw.js`) + manifest for offline/installable on iPhone
 
 ## Architecture
 
 ```
-AIS Source (local hardware / AISstream.io / demo)
-    ↓
-ais_decoder.py (NMEA → dict via pyais)
-    ↓
-asyncio.Queue
-    ↓
-main.py process_decoded()
-    ├── database.py → SQLite (upsert vessel + insert position)
-    └── server.py → WebSocket broadcast to all connected browsers
-                        ↓
-                   app.js (update Leaflet markers in real-time)
+GitHub Actions (scheduled)          GitHub Pages (static hosting)
+├── SFBOFS: 4x/day (NetCDF→JSON)   ├── index.html + JS/CSS
+├── Wind grid: hourly (HRRR)       ├── data/sfbofs/hour_00..48.json
+├── NDBC buoys: every 10min        ├── data/wind/hour_00..48.json + stations.json
+├── Tides: 2x/day                  ├── data/tides/{14 stations}.json
+└── Currents: 2x/day               └── data/currents/{6 stations}.json
+
+Browser (PWA)
+├── AISstream.io WebSocket → aisstream.js (parse) → vessel-store.js (in-memory DB)
+├── Static JSON → data-loader.js (fetch + client-side interpolation)
+├── tidal-flow.js (SFBOFS current field particle animation)
+├── wind-overlay.js (HRRR wind particle animation)
+└── Service Worker caches everything for offline
 ```
 
-Environmental data flows independently:
-- `/api/current-field` → SFBOFS NetCDF grid (or station IDW fallback) → `tidal-flow.js` particles
-- `/api/wind-field` → NOAA HRRR grid + NDBC buoys → `wind-overlay.js` particles
-- `/api/tide-height` → NOAA CO-OPS harmonic predictions → timeline display
-- `/api/currents` → 6 tidal current stations → interpolated overlay
+Environmental data is pre-computed by GitHub Actions and served as static JSON:
+- `data/sfbofs/hour_XX.json` → `tidal-flow.js` particles
+- `data/wind/hour_XX.json` + `stations.json` → `wind-overlay.js` particles
+- `data/tides/{station}.json` → client-side interpolation → tide display
+- `data/currents/{station}.json` → client-side interpolation → current overlay
 
 ## File Map
 
-### Backend (project root)
+### Data Pipeline (`.github/`)
 
 | File | Purpose |
 |------|---------|
-| `main.py` | Entry point. Async orchestration: selects AIS source, runs decoder, DB init, starts server, background environmental data refresh |
-| `server.py` | FastAPI routes + WebSocket broadcast. All API endpoints defined here |
-| `config.py` | Env var config (`AIS_HOST`, `AIS_PORT`, `AISSTREAM_API_KEY`, `OWN_MMSI`, `DB_PATH`, etc.) |
-| `database.py` | SQLite async ORM: `upsert_vessel`, `insert_position`, `get_vessel_track`, `get_stats` |
-| `ais_decoder.py` | NMEA sentence decoding (pyais), ship type categorization, multi-part message buffering |
-| `ais_listener.py` | TCP/UDP local AIS receiver (192.168.47.10:10110), auto-detect protocol, reconnect logic |
-| `aisstream_listener.py` | WebSocket client for AISstream.io cloud API, bounding box subscription |
-| `currents.py` | NOAA CO-OPS tidal current API, 6 stations, inverse distance weighting interpolation |
-| `tides.py` | NOAA tide height predictions, 14 stations, harmonic interpolation |
-| `sfbofs.py` | NOAA SF Bay hydrodynamic model: S3 NetCDF download, FVCOM unstructured→regular grid regrid |
-| `wind.py` | NOAA HRRR wind grid via Open-Meteo (72 points, parallel fetch via ThreadPoolExecutor) + NDBC buoy observations, dual color schemes |
-| `download_offline.py` | Pre-cache tiles, currents, wind data for offline use |
-| `README.md` | User-facing documentation: features, setup, architecture, deployment |
-| `CLAUDE.md` | AI assistant context: tech stack, file map, API endpoints, patterns |
+| `scripts/fetch_sfbofs.py` | Download NOAA SFBOFS NetCDF, regrid (netCDF4+scipy), output per-hour JSON |
+| `scripts/fetch_wind.py` | Fetch HRRR wind grid via Open-Meteo (72 points, all hours in 1 request per point) |
+| `scripts/fetch_ndbc.py` | Fetch NDBC buoy real-time observations (9 stations) |
+| `scripts/fetch_tides.py` | Fetch NOAA CO-OPS tide predictions (14 stations, 3 days) |
+| `scripts/fetch_currents.py` | Fetch NOAA CO-OPS current predictions (6 stations, 3 days) |
+| `scripts/requirements.txt` | Python deps for SFBOFS processing (netCDF4, scipy, numpy) |
+| `workflows/sfbofs.yml` | Cron: every 6h after model runs |
+| `workflows/wind.yml` | Cron: hourly (HRRR updates) |
+| `workflows/ndbc.yml` | Cron: every 10 min (buoy observations) |
+| `workflows/tides.yml` | Cron: 2x/day (tides + currents, deterministic predictions) |
+| `workflows/deploy.yml` | Assembles data + static site, deploys to GitHub Pages |
+
+### Legacy Backend (project root, kept for reference/local dev)
+
+| File | Purpose |
+|------|---------|
+| `main.py` | Entry point for local backend server (FastAPI) |
+| `server.py` | FastAPI routes + WebSocket broadcast |
+| `sfbofs.py` | Original SFBOFS processing (source for fetch_sfbofs.py) |
+| `wind.py` | Original wind fetching (source for fetch_wind.py + fetch_ndbc.py) |
+| `currents.py` | Original currents fetching (source for fetch_currents.py) |
+| `tides.py` | Original tides fetching (source for fetch_tides.py) |
 
 ### Frontend (`static/`)
 
@@ -58,6 +69,11 @@ Environmental data flows independently:
 |------|---------|
 | `index.html` | Single page: map container, side panel, legends, forecast timeline, modals |
 | `js/app.js` (~1900 lines) | Main app: Leaflet map, vessel markers, popups, CPA/TCPA, speed charts, search, forecast UI, mobile quick buttons, offline pre-fetch |
+| `js/aisstream.js` | Direct browser WebSocket to AISstream.io, parses AIS messages to internal format |
+| `js/vessel-store.js` | In-memory vessel database (replaces SQLite), track history, localStorage persistence |
+| `js/data-loader.js` | Static JSON fetcher + client-side interpolation for tides/currents |
+| `js/tidal-flow.js` | Canvas particle animation + speed heatmap for tidal currents (2000-3000 particles, bilinear interpolation, offscreen-rendered color overlay) |
+| `js/wind-overlay.js` | Canvas particle animation for wind (800 arrow-tipped particles with speed number flashing, NDBC station markers, dual color schemes) |
 | `js/tidal-flow.js` | Canvas particle animation + speed heatmap for tidal currents (2000-3000 particles, bilinear interpolation, offscreen-rendered color overlay) |
 | `js/wind-overlay.js` | Canvas particle animation for wind (800 arrow-tipped particles with speed number flashing, NDBC station markers, dual color schemes) |
 | `css/style.css` | Dark nautical theme, glassmorphism panels, responsive 3-row mobile layout, Leaflet control styling |
@@ -77,22 +93,16 @@ Two tables in SQLite (`ais_tracker.db`):
 
 WAL mode + async lock serializes writes. Periodic commits every 2 seconds.
 
-## API Endpoints
+## Static Data Files
 
-| Endpoint | Description |
-|----------|-------------|
-| `GET /` | Serve index.html |
-| `GET /api/vessels` | All vessels with latest position |
-| `GET /api/vessels/{mmsi}` | Single vessel detail |
-| `GET /api/vessels/{mmsi}/track?hours=2` | Position history track |
-| `GET /api/stats` | Vessel/position counts, own vessel info |
-| `GET /api/currents?time=0` | Tidal current at 6 stations (time=minutes offset) |
-| `GET /api/current-field?time=0` | SFBOFS gridded current field (276x325) |
-| `GET /api/wind-field?time=0` | HRRR wind grid + NDBC stations |
-| `GET /api/tide-height?time=0` | Tide predictions at 14 stations |
-| `WS /ws` | Real-time vessel position updates |
-
-The `time` parameter is minutes offset from now (used by forecast timeline).
+| Path | Description |
+|------|-------------|
+| `data/sfbofs/hour_XX.json` | SFBOFS current field grid (276x325), one per forecast hour (0-48) |
+| `data/wind/hour_XX.json` | HRRR wind grid (9x8), one per forecast hour (0-48) |
+| `data/wind/stations.json` | NDBC buoy observations (9 stations) |
+| `data/tides/{station_id}.json` | Tide height predictions (3 days) per station |
+| `data/currents/{station_id}.json` | Tidal current predictions (3 days) per station |
+| `data/meta.json` | Timestamps of latest data updates |
 
 ## External Services
 
@@ -121,16 +131,36 @@ SERVER_PORT=8888           # Default local; Fly.io overrides to 8080
 
 ## Running
 
+### Production (GitHub Pages)
+
+Push to `main` branch. GitHub Actions will:
+1. Fetch all environmental data on schedule
+2. Deploy `static/` + `data/` to GitHub Pages automatically
+
+### Local Development
+
+```bash
+# Generate data locally (one-time)
+pip install -r .github/scripts/requirements.txt
+python .github/scripts/fetch_tides.py
+python .github/scripts/fetch_currents.py
+python .github/scripts/fetch_wind.py
+python .github/scripts/fetch_ndbc.py
+python .github/scripts/fetch_sfbofs.py  # needs netCDF4 + scipy
+
+# Serve the static site
+python -m http.server 8888 --directory static
+```
+
+Open **http://localhost:8888**. You'll be prompted for your AISstream.io API key on first load (stored in localStorage).
+
+### Legacy Backend (original server mode)
+
 ```bash
 pip install -r requirements.txt
 python main.py --demo              # Demo mode (simulated vessels)
-python main.py --local             # Local AIS hardware
-python main.py --aisstream         # Cloud AIS (needs API key)
-python main.py --verbose           # Verbose vessel logging (every position update)
-python main.py                     # Auto-detect (local → cloud → demo)
+python main.py --aisstream         # Cloud AIS (needs API key in .env)
 ```
-
-Local server runs at `http://localhost:8888`. Deploys to Fly.io via `fly deploy` (see `fly.toml`).
 
 ## Notable Behaviors
 

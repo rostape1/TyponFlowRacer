@@ -1,0 +1,42 @@
+name: Fetch Wind Grid (HRRR)
+
+on:
+  schedule:
+    - cron: '7 * * * *'  # Hourly, matching HRRR model updates
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Restore data cache
+        uses: actions/cache/restore@v4
+        with:
+          path: static/data
+          key: env-data
+
+      - name: Fetch wind grid
+        run: python .github/scripts/fetch_wind.py
+
+      - name: Save data cache
+        uses: actions/cache/save@v4
+        with:
+          path: static/data
+          key: env-data-${{ github.run_id }}-wind
+
+      - name: Trigger deploy
+        uses: peter-evans/repository-dispatch@v3
+        with:
+          event-type: data-updated
+          client-payload: '{"source": "wind"}'

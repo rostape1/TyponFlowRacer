@@ -1,0 +1,993 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AIS Tracker - Real-Time Vessel Tracking for Sailors</title>
+<style>
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap');
+
+    :root {
+        --bg-deep: #050d1a;
+        --bg-dark: #0a1628;
+        --bg-card: #0f1f38;
+        --bg-card-hover: #152847;
+        --border: rgba(100, 150, 200, 0.15);
+        --border-accent: rgba(93, 173, 226, 0.3);
+        --text: #c8d8e8;
+        --text-muted: #5a7a9a;
+        --text-bright: #e8f0f8;
+        --blue: #5dade2;
+        --cyan: #00d4ff;
+        --green: #2ecc71;
+        --orange: #f39c12;
+        --red: #e74c3c;
+        --purple: #bb8fce;
+        --gold: #f5c842;
+    }
+
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+        font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+        background: var(--bg-deep);
+        color: var(--text);
+        line-height: 1.6;
+        -webkit-font-smoothing: antialiased;
+    }
+
+    /* ── Hero ─────────────────────────────────── */
+    .hero {
+        position: relative;
+        min-height: 100vh;
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+        align-items: center;
+        text-align: center;
+        padding: 60px 24px;
+        overflow: hidden;
+    }
+
+    .hero::before {
+        content: '';
+        position: absolute;
+        inset: 0;
+        background:
+            radial-gradient(ellipse 80% 60% at 50% 40%, rgba(0, 212, 255, 0.06) 0%, transparent 70%),
+            radial-gradient(ellipse 60% 50% at 30% 70%, rgba(93, 173, 226, 0.04) 0%, transparent 60%),
+            radial-gradient(ellipse 40% 40% at 80% 20%, rgba(187, 143, 206, 0.03) 0%, transparent 50%);
+        pointer-events: none;
+    }
+
+    .hero-badge {
+        display: inline-block;
+        font-size: 11px;
+        font-weight: 600;
+        letter-spacing: 2px;
+        text-transform: uppercase;
+        color: var(--cyan);
+        border: 1px solid rgba(0, 212, 255, 0.3);
+        padding: 6px 16px;
+        border-radius: 20px;
+        margin-bottom: 32px;
+        background: rgba(0, 212, 255, 0.06);
+    }
+
+    .hero h1 {
+        font-size: clamp(48px, 8vw, 96px);
+        font-weight: 900;
+        letter-spacing: -2px;
+        line-height: 1.05;
+        color: var(--text-bright);
+        margin-bottom: 24px;
+    }
+
+    .hero h1 span {
+        background: linear-gradient(135deg, var(--cyan), var(--blue), var(--purple));
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        background-clip: text;
+    }
+
+    .hero-sub {
+        font-size: clamp(18px, 2.5vw, 24px);
+        font-weight: 300;
+        color: var(--text-muted);
+        max-width: 640px;
+        margin-bottom: 48px;
+        line-height: 1.5;
+    }
+
+    .hero-stats {
+        display: flex;
+        gap: 48px;
+        flex-wrap: wrap;
+        justify-content: center;
+    }
+
+    .hero-stat {
+        text-align: center;
+    }
+
+    .hero-stat .num {
+        font-size: 36px;
+        font-weight: 800;
+        color: var(--cyan);
+    }
+
+    .hero-stat .label {
+        font-size: 12px;
+        font-weight: 500;
+        text-transform: uppercase;
+        letter-spacing: 1px;
+        color: var(--text-muted);
+        margin-top: 4px;
+    }
+
+    /* ── Section Layout ───────────────────────── */
+    section {
+        max-width: 1200px;
+        margin: 0 auto;
+        padding: 100px 24px;
+    }
+
+    .section-label {
+        font-size: 11px;
+        font-weight: 600;
+        letter-spacing: 2px;
+        text-transform: uppercase;
+        color: var(--cyan);
+        margin-bottom: 16px;
+    }
+
+    .section-title {
+        font-size: clamp(32px, 4vw, 48px);
+        font-weight: 800;
+        color: var(--text-bright);
+        letter-spacing: -1px;
+        margin-bottom: 16px;
+        line-height: 1.15;
+    }
+
+    .section-desc {
+        font-size: 18px;
+        color: var(--text-muted);
+        max-width: 600px;
+        margin-bottom: 56px;
+        line-height: 1.6;
+    }
+
+    /* ── Benefits Grid ────────────────────────── */
+    .benefits {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));
+        gap: 24px;
+    }
+
+    .benefit {
+        background: var(--bg-card);
+        border: 1px solid var(--border);
+        border-radius: 16px;
+        padding: 36px;
+        transition: all 0.3s ease;
+    }
+
+    .benefit:hover {
+        background: var(--bg-card-hover);
+        border-color: var(--border-accent);
+        transform: translateY(-2px);
+    }
+
+    .benefit-icon {
+        width: 48px;
+        height: 48px;
+        border-radius: 12px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 22px;
+        margin-bottom: 20px;
+    }
+
+    .benefit h3 {
+        font-size: 20px;
+        font-weight: 700;
+        color: var(--text-bright);
+        margin-bottom: 10px;
+    }
+
+    .benefit p {
+        font-size: 15px;
+        color: var(--text-muted);
+        line-height: 1.6;
+    }
+
+    .icon-safety { background: rgba(231, 76, 60, 0.12); color: var(--red); }
+    .icon-current { background: rgba(0, 212, 255, 0.12); color: var(--cyan); }
+    .icon-wind { background: rgba(187, 143, 206, 0.12); color: var(--purple); }
+    .icon-offline { background: rgba(46, 204, 113, 0.12); color: var(--green); }
+    .icon-forecast { background: rgba(243, 156, 18, 0.12); color: var(--orange); }
+    .icon-chart { background: rgba(93, 173, 226, 0.12); color: var(--blue); }
+
+    /* ── Feature Showcase ─────────────────────── */
+    .feature-row {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 64px;
+        align-items: center;
+        margin-bottom: 100px;
+    }
+
+    .feature-row.reverse { direction: rtl; }
+    .feature-row.reverse > * { direction: ltr; }
+
+    .feature-text h3 {
+        font-size: 28px;
+        font-weight: 700;
+        color: var(--text-bright);
+        margin-bottom: 16px;
+        letter-spacing: -0.5px;
+    }
+
+    .feature-text p {
+        font-size: 16px;
+        color: var(--text-muted);
+        line-height: 1.7;
+        margin-bottom: 20px;
+    }
+
+    .feature-tags {
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+    }
+
+    .tag {
+        font-size: 11px;
+        font-weight: 600;
+        padding: 4px 12px;
+        border-radius: 12px;
+        letter-spacing: 0.5px;
+    }
+
+    .tag-cyan { background: rgba(0, 212, 255, 0.1); color: var(--cyan); border: 1px solid rgba(0, 212, 255, 0.2); }
+    .tag-purple { background: rgba(187, 143, 206, 0.1); color: var(--purple); border: 1px solid rgba(187, 143, 206, 0.2); }
+    .tag-green { background: rgba(46, 204, 113, 0.1); color: var(--green); border: 1px solid rgba(46, 204, 113, 0.2); }
+    .tag-orange { background: rgba(243, 156, 18, 0.1); color: var(--orange); border: 1px solid rgba(243, 156, 18, 0.2); }
+    .tag-blue { background: rgba(93, 173, 226, 0.1); color: var(--blue); border: 1px solid rgba(93, 173, 226, 0.2); }
+    .tag-red { background: rgba(231, 76, 60, 0.1); color: var(--red); border: 1px solid rgba(231, 76, 60, 0.2); }
+
+    .feature-visual {
+        background: var(--bg-card);
+        border: 1px solid var(--border);
+        border-radius: 16px;
+        padding: 40px;
+        text-align: center;
+        min-height: 300px;
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+        align-items: center;
+    }
+
+    /* Arrow demo */
+    .arrow-demo {
+        position: relative;
+        width: 200px;
+        height: 200px;
+    }
+
+    .arrow-demo .boat {
+        position: absolute;
+        top: 50%;
+        left: 50%;
+        width: 24px;
+        height: 24px;
+        background: var(--orange);
+        clip-path: polygon(50% 0%, 15% 100%, 85% 100%);
+        transform: translate(-50%, -50%) rotate(-15deg);
+    }
+
+    .arrow-label {
+        font-size: 11px;
+        font-weight: 600;
+        position: absolute;
+    }
+
+    /* Color ramp demo */
+    .color-ramp {
+        width: 100%;
+        max-width: 280px;
+        height: 20px;
+        border-radius: 10px;
+        margin: 12px 0;
+    }
+
+    .ramp-current {
+        background: linear-gradient(to right, #1a3a6a, #00b4d8, #2ecc71, #f1c40f, #e67e22, #e74c3c);
+    }
+
+    .ramp-wind {
+        background: linear-gradient(to right, #1a4a2a, #27ae60, #2ecc71, #a8f0c0, #ffffff);
+    }
+
+    .ramp-labels {
+        display: flex;
+        justify-content: space-between;
+        width: 100%;
+        max-width: 280px;
+        font-size: 10px;
+        color: var(--text-muted);
+    }
+
+    /* ── Specs Table ──────────────────────────── */
+    .specs-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+        gap: 1px;
+        background: var(--border);
+        border: 1px solid var(--border);
+        border-radius: 16px;
+        overflow: hidden;
+    }
+
+    .spec {
+        background: var(--bg-card);
+        padding: 28px;
+    }
+
+    .spec-label {
+        font-size: 11px;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 1px;
+        color: var(--text-muted);
+        margin-bottom: 8px;
+    }
+
+    .spec-value {
+        font-size: 18px;
+        font-weight: 600;
+        color: var(--text-bright);
+    }
+
+    .spec-note {
+        font-size: 13px;
+        color: var(--text-muted);
+        margin-top: 4px;
+    }
+
+    /* ── Data Sources ─────────────────────────── */
+    .sources {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+        gap: 16px;
+        margin-top: 40px;
+    }
+
+    .source {
+        background: var(--bg-card);
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        padding: 24px;
+        text-align: center;
+    }
+
+    .source-name {
+        font-size: 14px;
+        font-weight: 700;
+        color: var(--text-bright);
+        margin-bottom: 4px;
+    }
+
+    .source-desc {
+        font-size: 12px;
+        color: var(--text-muted);
+    }
+
+    /* ── Deployment Options ────────────────────── */
+    .deploy-cards {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+        gap: 24px;
+    }
+
+    .deploy-card {
+        background: var(--bg-card);
+        border: 1px solid var(--border);
+        border-radius: 16px;
+        padding: 36px;
+    }
+
+    .deploy-card h4 {
+        font-size: 18px;
+        font-weight: 700;
+        color: var(--text-bright);
+        margin-bottom: 8px;
+    }
+
+    .deploy-card p {
+        font-size: 14px;
+        color: var(--text-muted);
+        line-height: 1.6;
+    }
+
+    .deploy-card .deploy-tag {
+        display: inline-block;
+        font-size: 10px;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 1px;
+        padding: 3px 10px;
+        border-radius: 8px;
+        margin-bottom: 16px;
+    }
+
+    .deploy-best { background: rgba(46, 204, 113, 0.15); color: var(--green); }
+    .deploy-cloud { background: rgba(93, 173, 226, 0.15); color: var(--blue); }
+    .deploy-mobile { background: rgba(243, 156, 18, 0.15); color: var(--orange); }
+
+    /* ── CTA ───────────────────────────────────── */
+    .cta {
+        text-align: center;
+        padding: 120px 24px;
+        position: relative;
+    }
+
+    .cta::before {
+        content: '';
+        position: absolute;
+        inset: 0;
+        background: radial-gradient(ellipse 60% 50% at 50% 50%, rgba(0, 212, 255, 0.04) 0%, transparent 70%);
+        pointer-events: none;
+    }
+
+    .cta h2 {
+        font-size: clamp(36px, 5vw, 56px);
+        font-weight: 800;
+        color: var(--text-bright);
+        letter-spacing: -1px;
+        margin-bottom: 16px;
+    }
+
+    .cta p {
+        font-size: 18px;
+        color: var(--text-muted);
+        max-width: 500px;
+        margin: 0 auto 36px;
+    }
+
+    .cta-code {
+        display: inline-block;
+        font-family: 'SF Mono', 'Fira Code', monospace;
+        font-size: 16px;
+        background: var(--bg-card);
+        border: 1px solid var(--border-accent);
+        border-radius: 12px;
+        padding: 16px 32px;
+        color: var(--cyan);
+        letter-spacing: 0.5px;
+    }
+
+    .cta-code span { color: var(--text-muted); }
+
+    /* ── Footer ────────────────────────────────── */
+    .footer {
+        text-align: center;
+        padding: 40px 24px;
+        font-size: 13px;
+        color: var(--text-muted);
+        border-top: 1px solid var(--border);
+    }
+
+    /* ── Divider ───────────────────────────────── */
+    .divider {
+        max-width: 1200px;
+        margin: 0 auto;
+        border: 0;
+        border-top: 1px solid var(--border);
+    }
+
+    /* ── Responsive ────────────────────────────── */
+    @media (max-width: 768px) {
+        .feature-row,
+        .feature-row.reverse {
+            grid-template-columns: 1fr;
+            gap: 32px;
+            direction: ltr;
+        }
+
+        .hero-stats { gap: 32px; }
+
+        .benefits {
+            grid-template-columns: 1fr;
+        }
+    }
+
+    /* ── Print Styles ──────────────────────────── */
+    @media print {
+        /* Force dark background in print */
+        * {
+            -webkit-print-color-adjust: exact !important;
+            print-color-adjust: exact !important;
+            color-adjust: exact !important;
+        }
+
+        body {
+            background: var(--bg-deep) !important;
+            color: var(--text) !important;
+        }
+
+        /* Page setup */
+        @page {
+            size: A4 landscape;
+            margin: 0;
+        }
+
+        /* Remove hover effects */
+        .benefit:hover { transform: none; }
+
+        /* Page break control */
+        .hero {
+            min-height: auto;
+            padding: 60px 40px 40px;
+            page-break-after: always;
+            break-after: page;
+        }
+
+        section {
+            padding: 40px;
+        }
+
+        /* Benefits section - keep together on one page */
+        .benefits {
+            page-break-inside: avoid;
+            break-inside: avoid;
+        }
+
+        .benefit {
+            page-break-inside: avoid;
+            break-inside: avoid;
+        }
+
+        /* Each feature row stays together */
+        .feature-row {
+            page-break-inside: avoid;
+            break-inside: avoid;
+            margin-bottom: 40px;
+        }
+
+        /* Specs grid stays together */
+        .specs-grid {
+            page-break-inside: avoid;
+            break-inside: avoid;
+        }
+
+        /* Sources stay together */
+        .sources {
+            page-break-inside: avoid;
+            break-inside: avoid;
+        }
+
+        /* Deploy cards stay together */
+        .deploy-cards {
+            page-break-inside: avoid;
+            break-inside: avoid;
+        }
+
+        /* Section headers shouldn't be orphaned */
+        .section-label,
+        .section-title,
+        .section-desc {
+            page-break-after: avoid;
+            break-after: avoid;
+        }
+
+        /* Force page breaks before major sections */
+        hr.divider {
+            border: none;
+            height: 0;
+            page-break-after: always;
+            break-after: page;
+            margin: 0;
+        }
+
+        /* CTA stays on last page */
+        .cta {
+            page-break-inside: avoid;
+            break-inside: avoid;
+            padding: 60px 40px;
+        }
+
+        .footer {
+            page-break-inside: avoid;
+            break-inside: avoid;
+        }
+    }
+</style>
+</head>
+<body>
+
+<!-- ════════════════════════════════════════════ HERO ═══ -->
+<div class="hero">
+    <div class="hero-badge">Open Source &middot; Self-Hosted &middot; Free</div>
+    <h1>AIS <span>Tracker</span></h1>
+    <p class="hero-sub">
+        Real-time vessel tracking, tidal currents, wind, and collision avoidance &mdash;
+        built for sailors who want to see the full picture.
+    </p>
+    <div class="hero-stats">
+        <div class="hero-stat">
+            <div class="num">14</div>
+            <div class="label">Tide Stations</div>
+        </div>
+        <div class="hero-stat">
+            <div class="num">200m</div>
+            <div class="label">Current Resolution</div>
+        </div>
+        <div class="hero-stat">
+            <div class="num">9</div>
+            <div class="label">Wind Buoys</div>
+        </div>
+        <div class="hero-stat">
+            <div class="num">48h</div>
+            <div class="label">Forecast Range</div>
+        </div>
+    </div>
+</div>
+
+<!-- ════════════════════════════════════════════ BENEFITS ═══ -->
+<section>
+    <div class="section-label">Why Sailors Choose AIS Tracker</div>
+    <h2 class="section-title">Everything you need,<br>nothing you don't</h2>
+    <p class="section-desc">
+        No subscription fees. No account required. No ads.
+        Just real NOAA data and AIS tracking that works &mdash; even offshore without internet.
+    </p>
+
+    <div class="benefits">
+        <div class="benefit">
+            <div class="benefit-icon icon-safety">&#9888;</div>
+            <h3>Collision Avoidance</h3>
+            <p>Continuous CPA/TCPA calculation for every vessel. Color-coded danger and warning alerts so you can cook dinner below and still know if something gets too close.</p>
+        </div>
+        <div class="benefit">
+            <div class="benefit-icon icon-current">&#8635;</div>
+            <h3>High-Res Tidal Currents</h3>
+            <p>NOAA's SFBOFS hydrodynamic model at ~200m resolution. See eddies, channel acceleration, and flow patterns that point stations can't show. Animated Windy-style particles.</p>
+        </div>
+        <div class="benefit">
+            <div class="benefit-icon icon-wind">&#9729;</div>
+            <h3>Wind Overlay</h3>
+            <p>HRRR model wind forecasts plus 9 real NDBC buoy observations. Animated particles with switchable color schemes. Know what the wind is doing across the entire Bay.</p>
+        </div>
+        <div class="benefit">
+            <div class="benefit-icon icon-offline">&#9889;</div>
+            <h3>Works Offline</h3>
+            <p>Pre-download 24 hours of tide, current, and wind data before leaving the dock. Cached map tiles for all layers. Your local AIS receiver works without internet.</p>
+        </div>
+        <div class="benefit">
+            <div class="benefit-icon icon-forecast">&#9200;</div>
+            <h3>Forecast Time Travel</h3>
+            <p>Scroll through 48 hours of predicted currents and wind. Calendar picker for unlimited-range tide forecasts. Plan your departure around slack water or favorable current.</p>
+        </div>
+        <div class="benefit">
+            <div class="benefit-icon icon-chart">&#9733;</div>
+            <h3>Full Situational Awareness</h3>
+            <p>Four arrows on your vessel icon show heading, COG, current set, and wind effect simultaneously. Click any point on the water for instant environmental data.</p>
+        </div>
+    </div>
+</section>
+
+<hr class="divider">
+
+<!-- ════════════════════════════════════════════ FEATURES ═══ -->
+<section>
+    <div class="section-label">Feature Deep Dive</div>
+    <h2 class="section-title">Built for the cockpit</h2>
+    <p class="section-desc">
+        Every feature designed for quick glances under way, not extended reading at a desk.
+    </p>
+
+    <!-- Feature 1: Tidal Currents -->
+    <div class="feature-row">
+        <div class="feature-text">
+            <h3>Tidal Currents You Can Actually See</h3>
+            <p>
+                Thousands of animated particles flow across the Bay showing exactly where the current is going and how fast.
+                Unlike point-station apps that show arrows at 6 locations, AIS Tracker uses NOAA's full hydrodynamic model
+                to show current patterns everywhere &mdash; including the eddies and acceleration zones that matter for route planning.
+            </p>
+            <p>
+                Color ramp from blue (slack) through green and yellow to red (2+ knots).
+                One glance tells you where the current is and whether to ride it or avoid it.
+            </p>
+            <div class="feature-tags">
+                <span class="tag tag-cyan">SFBOFS Model</span>
+                <span class="tag tag-cyan">200m Resolution</span>
+                <span class="tag tag-blue">6 NOAA Stations</span>
+            </div>
+        </div>
+        <div class="feature-visual">
+            <div style="font-size: 13px; color: var(--text-muted); margin-bottom: 16px; font-weight: 500;">Current Speed Scale</div>
+            <div class="color-ramp ramp-current"></div>
+            <div class="ramp-labels">
+                <span>0 kn (slack)</span>
+                <span>1 kn</span>
+                <span>2 kn</span>
+                <span>4+ kn</span>
+            </div>
+            <div style="margin-top: 32px; font-size: 12px; color: var(--text-muted);">
+                <div style="margin-bottom: 6px;"><span style="color: #3498db; font-weight: 700;">&#9650;</span> Flood (incoming)</div>
+                <div><span style="color: #e67e22; font-weight: 700;">&#9650;</span> Ebb (outgoing)</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Feature 2: Collision Avoidance -->
+    <div class="feature-row reverse">
+        <div class="feature-text">
+            <h3>Collision Avoidance That's Always On</h3>
+            <p>
+                CPA/TCPA is computed continuously for every vessel, not just when you remember to check.
+                Three alert levels keep you informed without drowning you in false alarms:
+            </p>
+            <p>
+                <strong style="color: var(--red);">Collision Risk</strong> &mdash; within 600 feet in 30 minutes<br>
+                <strong style="color: var(--orange);">Close Approach</strong> &mdash; within 0.5 nm in 60 minutes<br>
+                <strong style="color: var(--text-muted);">Diverging / Parallel</strong> &mdash; no concern
+            </p>
+            <p>
+                Visible both in vessel popups and the side panel list, so you catch it whether you're studying the chart or scanning the vessel list.
+            </p>
+            <div class="feature-tags">
+                <span class="tag tag-red">Real-Time CPA</span>
+                <span class="tag tag-orange">3 Alert Levels</span>
+                <span class="tag tag-green">Always Computing</span>
+            </div>
+        </div>
+        <div class="feature-visual">
+            <div style="text-align: left; width: 100%; max-width: 260px;">
+                <div style="padding: 12px 16px; background: rgba(231, 76, 60, 0.1); border: 1px solid rgba(231, 76, 60, 0.3); border-radius: 8px; margin-bottom: 10px;">
+                    <div style="font-size: 12px; color: var(--red); font-weight: 700;">COLLISION RISK</div>
+                    <div style="font-size: 11px; color: var(--text-muted);">CPA 0.05 nm in 12 min</div>
+                </div>
+                <div style="padding: 12px 16px; background: rgba(243, 156, 18, 0.1); border: 1px solid rgba(243, 156, 18, 0.3); border-radius: 8px; margin-bottom: 10px;">
+                    <div style="font-size: 12px; color: var(--orange); font-weight: 700;">Close Approach</div>
+                    <div style="font-size: 11px; color: var(--text-muted);">CPA 0.3 nm in 25 min</div>
+                </div>
+                <div style="padding: 12px 16px; background: rgba(100, 150, 200, 0.06); border: 1px solid var(--border); border-radius: 8px;">
+                    <div style="font-size: 12px; color: var(--text); font-weight: 600;">Diverging</div>
+                    <div style="font-size: 11px; color: var(--text-muted);">Vessels separating</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Feature 3: Your Vessel Icon -->
+    <div class="feature-row">
+        <div class="feature-text">
+            <h3>Four Forces at a Glance</h3>
+            <p>
+                Your vessel icon shows four directional arrows simultaneously &mdash; heading, course over ground,
+                tidal current set, and wind effect. Instantly understand why your COG differs from your heading
+                and how much the current and wind are pushing you off course.
+            </p>
+            <p>
+                Arrow lengths are proportional to force strength. A long cyan arrow means strong current set.
+                A long purple arrow means significant wind effect. No mental math required.
+            </p>
+            <div class="feature-tags">
+                <span class="tag tag-cyan">Current Set</span>
+                <span class="tag tag-purple">Wind Effect</span>
+                <span class="tag tag-green">COG</span>
+                <span class="tag tag-orange">Heading</span>
+            </div>
+        </div>
+        <div class="feature-visual">
+            <div style="text-align: left; max-width: 220px;">
+                <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 14px;">
+                    <div style="width: 36px; border-top: 2px dashed white;"></div>
+                    <span style="font-size: 13px; color: white; font-weight: 600;">Heading</span>
+                </div>
+                <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 14px;">
+                    <div style="width: 36px; border-top: 2.5px solid var(--green);"></div>
+                    <span style="font-size: 13px; color: var(--green); font-weight: 600;">Course (COG)</span>
+                </div>
+                <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 14px;">
+                    <div style="width: 36px; border-top: 2.5px solid var(--cyan);"></div>
+                    <span style="font-size: 13px; color: var(--cyan); font-weight: 600;">Current Set</span>
+                </div>
+                <div style="display: flex; align-items: center; gap: 12px;">
+                    <div style="width: 36px; border-top: 2px dashed var(--purple);"></div>
+                    <span style="font-size: 13px; color: var(--purple); font-weight: 600;">Wind Effect</span>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Feature 4: Offline -->
+    <div class="feature-row reverse">
+        <div class="feature-text">
+            <h3>Offline? No Problem.</h3>
+            <p>
+                Before leaving the dock, tap the download button to cache 24 hours of environmental data.
+                Map tiles are cached automatically as you browse. Your local AIS receiver doesn't need internet at all.
+            </p>
+            <p>
+                When you lose connectivity, the app switches seamlessly to cached data.
+                An offline banner tells you how fresh the data is. When internet returns, everything refreshes automatically.
+            </p>
+            <p>
+                Install as a PWA on your phone or tablet for a full-screen native app experience &mdash; no App Store required.
+            </p>
+            <div class="feature-tags">
+                <span class="tag tag-green">24h Pre-Download</span>
+                <span class="tag tag-green">PWA Install</span>
+                <span class="tag tag-blue">Auto-Fallback</span>
+            </div>
+        </div>
+        <div class="feature-visual">
+            <div style="text-align: center;">
+                <div style="font-size: 48px; margin-bottom: 16px;">&#9889;</div>
+                <div style="font-size: 14px; font-weight: 600; color: var(--green); margin-bottom: 8px;">OFFLINE MODE</div>
+                <div style="font-size: 12px; color: var(--text-muted); line-height: 1.8;">
+                    Map tiles &bull; Cached<br>
+                    Tidal currents &bull; 24h cached<br>
+                    Wind field &bull; 24h cached<br>
+                    Tide heights &bull; 24h cached<br>
+                    AIS positions &bull; Local receiver
+                </div>
+            </div>
+        </div>
+    </div>
+</section>
+
+<hr class="divider">
+
+<!-- ════════════════════════════════════════════ DATA SOURCES ═══ -->
+<section>
+    <div class="section-label">Trusted Data</div>
+    <h2 class="section-title">Powered by NOAA</h2>
+    <p class="section-desc">
+        All environmental data comes from official NOAA sources. No proprietary models, no black boxes.
+    </p>
+
+    <div class="sources">
+        <div class="source">
+            <div class="source-name">SFBOFS</div>
+            <div class="source-desc">Hydrodynamic tidal current model<br>102k+ grid cells, ~200m resolution</div>
+        </div>
+        <div class="source">
+            <div class="source-name">NOAA CO-OPS</div>
+            <div class="source-desc">Tidal current predictions<br>6 stations across SF Bay</div>
+        </div>
+        <div class="source">
+            <div class="source-name">NOAA CO-OPS</div>
+            <div class="source-desc">Tide height predictions<br>14 stations, harmonic-based</div>
+        </div>
+        <div class="source">
+            <div class="source-name">HRRR</div>
+            <div class="source-desc">High-resolution wind forecasts<br>Up to 48 hours ahead</div>
+        </div>
+        <div class="source">
+            <div class="source-name">NDBC</div>
+            <div class="source-desc">Real-time buoy observations<br>9 coastal stations</div>
+        </div>
+        <div class="source">
+            <div class="source-name">AISstream.io</div>
+            <div class="source-desc">Cloud AIS data<br>Free API, global coverage</div>
+        </div>
+    </div>
+</section>
+
+<hr class="divider">
+
+<!-- ════════════════════════════════════════════ SPECS ═══ -->
+<section>
+    <div class="section-label">Technical Specifications</div>
+    <h2 class="section-title">Under the hood</h2>
+    <p class="section-desc">Lightweight, fast, and built with proven open-source technology.</p>
+
+    <div class="specs-grid">
+        <div class="spec">
+            <div class="spec-label">Backend</div>
+            <div class="spec-value">Python + FastAPI</div>
+            <div class="spec-note">Async I/O, WebSocket broadcasts</div>
+        </div>
+        <div class="spec">
+            <div class="spec-label">Frontend</div>
+            <div class="spec-value">Vanilla JS + Leaflet</div>
+            <div class="spec-note">Zero frameworks, zero build step</div>
+        </div>
+        <div class="spec">
+            <div class="spec-label">Database</div>
+            <div class="spec-value">SQLite</div>
+            <div class="spec-note">Persistent voyage history, WAL mode</div>
+        </div>
+        <div class="spec">
+            <div class="spec-label">Map Layers</div>
+            <div class="spec-value">4 Tile Sources</div>
+            <div class="spec-note">Dark, Street, NOAA Charts, Sea Marks</div>
+        </div>
+        <div class="spec">
+            <div class="spec-label">AIS Sources</div>
+            <div class="spec-value">3 Modes</div>
+            <div class="spec-note">Local receiver, Cloud API, Demo</div>
+        </div>
+        <div class="spec">
+            <div class="spec-label">Animations</div>
+            <div class="spec-value">Canvas Particles</div>
+            <div class="spec-note">3000 current + 800 wind particles</div>
+        </div>
+        <div class="spec">
+            <div class="spec-label">Current Model</div>
+            <div class="spec-value">~200m Grid</div>
+            <div class="spec-note">SFBOFS regridded to 276x325</div>
+        </div>
+        <div class="spec">
+            <div class="spec-label">Offline Support</div>
+            <div class="spec-value">Full PWA</div>
+            <div class="spec-note">Service Worker + 24h data cache</div>
+        </div>
+        <div class="spec">
+            <div class="spec-label">Runs On</div>
+            <div class="spec-value">Anything</div>
+            <div class="spec-note">Pi, laptop, cloud, phone (PWA)</div>
+        </div>
+    </div>
+</section>
+
+<hr class="divider">
+
+<!-- ════════════════════════════════════════════ DEPLOY ═══ -->
+<section>
+    <div class="section-label">Deployment</div>
+    <h2 class="section-title">Run it your way</h2>
+    <p class="section-desc">From a Raspberry Pi in the nav station to a cloud server monitoring your fleet.</p>
+
+    <div class="deploy-cards">
+        <div class="deploy-card">
+            <div class="deploy-tag deploy-best">Recommended</div>
+            <h4>Raspberry Pi on Board</h4>
+            <p>
+                Connect to your WiFi AIS receiver. Access from any phone, tablet, or laptop on the boat network.
+                No internet required for AIS tracking. Auto-starts on boot via systemd.
+            </p>
+        </div>
+        <div class="deploy-card">
+            <div class="deploy-tag deploy-cloud">Cloud</div>
+            <h4>Fly.io / Railway / Render</h4>
+            <p>
+                Deploy to the cloud with one command. Uses AISstream.io for vessel data. Access from anywhere.
+                Free tier available on most platforms. Great for monitoring a home port remotely.
+            </p>
+        </div>
+        <div class="deploy-card">
+            <div class="deploy-tag deploy-mobile">Mobile</div>
+            <h4>Phone / Tablet PWA</h4>
+            <p>
+                Install from your browser &mdash; no App Store. Full-screen native feel on iOS and Android.
+                Pre-download data before going offshore. Cached map tiles work without internet.
+            </p>
+        </div>
+    </div>
+</section>
+
+<!-- ════════════════════════════════════════════ CTA ═══ -->
+<div class="cta">
+    <h2>Start tracking in<br>60 seconds</h2>
+    <p>No account. No subscription. No credit card. Just install and go.</p>
+    <div class="cta-code">
+        <span>$</span> pip install -r requirements.txt && python main.py
+    </div>
+</div>
+
+<!-- ════════════════════════════════════════════ FOOTER ═══ -->
+<div class="footer">
+    AIS Tracker &mdash; Open source vessel tracking for sailors &middot; Powered by NOAA data &middot; Built with care
+</div>
+
+</body>
+</html>

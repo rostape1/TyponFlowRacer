@@ -1,3 +1,6 @@
+# OS files
+.DS_Store
+
 # Map tiles (large offline cache)
 static/tiles/
 

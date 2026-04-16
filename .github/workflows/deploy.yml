@@ -1,0 +1,57 @@
+name: Deploy to GitHub Pages
+
+on:
+  repository_dispatch:
+    types: [data-updated]
+  push:
+    branches: [main]
+    paths:
+      - 'static/**'
+      - '.github/workflows/deploy.yml'
+  workflow_dispatch:
+
+permissions:
+  pages: write
+  id-token: write
+  contents: read
+
+concurrency:
+  group: pages-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Restore data cache
+        uses: actions/cache/restore@v4
+        with:
+          path: static/data
+          key: env-data
+          restore-keys: |
+            env-data-
+
+      - name: List data files
+        run: |
+          echo "=== Data directory ==="
+          find static/data -type f -name "*.json" | head -50 || echo "No data files yet"
+          echo "=== Total size ==="
+          du -sh static/data 2>/dev/null || echo "No data dir"
+
+      - name: Setup Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: static
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

@@ -4,15 +4,15 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Typon Flowracer</title>
-    <link rel="manifest" href="/static/manifest.json">
+    <link rel="manifest" href="manifest.json">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <meta name="theme-color" content="#0a1628">
-    <link rel="apple-touch-icon" href="/static/icons/icon-192.png">
+    <link rel="apple-touch-icon" href="icons/icon-192.png">
     <!-- Try local Leaflet first, fall back to CDN -->
-    <link rel="stylesheet" href="/static/lib/leaflet.css"
+    <link rel="stylesheet" href="lib/leaflet.css"
           onerror="this.onerror=null;this.href='https://unpkg.com/leaflet@1.9.4/dist/leaflet.css'" />
-    <link rel="stylesheet" href="/static/css/style.css" />
+    <link rel="stylesheet" href="css/style.css" />
 </head>
 <body>
     <div id="map"></div>
@@ -150,10 +150,13 @@
             });
         }
 
-        loadScript('/static/lib/leaflet.js', 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.js')
-            .then(() => loadScript('/static/js/tidal-flow.js'))
-            .then(() => loadScript('/static/js/wind-overlay.js'))
-            .then(() => loadScript('/static/js/app.js'));
+        loadScript('lib/leaflet.js', 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.js')
+            .then(() => loadScript('js/tidal-flow.js'))
+            .then(() => loadScript('js/wind-overlay.js'))
+            .then(() => loadScript('js/aisstream.js'))
+            .then(() => loadScript('js/vessel-store.js'))
+            .then(() => loadScript('js/data-loader.js'))
+            .then(() => loadScript('js/app.js'));
 
         // Register service worker for PWA
         if ('serviceWorker' in navigator) {

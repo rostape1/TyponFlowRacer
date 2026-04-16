@@ -429,7 +429,7 @@ function buildPopupHtml(v) {
         <div class="popup-row"><span class="popup-label">COG</span><span class="popup-value">${v.cog != null ? v.cog.toFixed(0) + '°' : '—'}</span></div>
                 <div class="popup-row"><span class="popup-label">Current</span><span class="popup-value" style="color:#00d4ff">${tideStr}</span></div>
         <div class="popup-row"><span class="popup-label">Wind</span><span class="popup-value" style="color:#aa46be">${windStr}</span></div>
-        <div class="popup-row"><span class="popup-label">Avg Speed</span><span class="popup-value">${v.avg_speed != null ? v.avg_speed + ' kn' : '—'}</span></div>
+        <div class="popup-row"><span class="popup-label">Avg Speed</span><span class="popup-value">${(() => { const a = vesselStore.getAvgSpeed(v.mmsi); return a != null ? a + ' kn' : '—'; })()}</span></div>
         <div class="popup-row"><span class="popup-label">Distance</span><span class="popup-value">${dist}</span></div>
         <div class="popup-row"><span class="popup-label">Bearing</span><span class="popup-value">${bearing}</span></div>
         ${eta ? `<div class="popup-row"><span class="popup-label">ETA from ${OWN_NAME}</span><span class="popup-value">${eta}</span></div>` : ''}
@@ -450,7 +450,11 @@ function buildSpeedChart(points, color) {
 
     const W = 220, H = 90, PAD = 22;
     const speeds = points.map(p => p.sog != null ? p.sog : 0);
-    const times = points.map(p => new Date(p.timestamp + 'Z').getTime());
+    const times = points.map(p => {
+        if (p.time) return typeof p.time === 'number' ? p.time : new Date(p.time).getTime();
+        if (p.timestamp) return new Date(p.timestamp + 'Z').getTime();
+        return Date.now();
+    });
 
     // Auto-scale Y axis to actual speed range with 10% padding
     const rawMin = Math.min(...speeds);
@@ -516,10 +520,8 @@ async function loadSpeedChart(mmsi) {
     if (!chartEl) return;
 
     try {
-        const res = await fetch(`/api/vessels/${mmsi}/track?hours=2`);
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const track = await res.json();
-        const withSpeed = track.filter(p => p.sog != null);
+        const trackPoints = vesselStore.getTrack(mmsi, 2);
+        const withSpeed = trackPoints.filter(p => p.sog != null);
 
         const color = getVesselColor(vessels.get(mmsi) || { mmsi });
         chartEl.innerHTML = `<div class="popup-chart-label">Speed History (2h)</div>` + buildSpeedChart(withSpeed, color);
@@ -674,7 +676,7 @@ function updatePanel() {
             </div>
             <div class="vessel-meta">
                 ${v.sog != null ? `<span>${v.sog.toFixed(1)} kn</span>` : ''}
-                ${v.avg_speed != null ? `<span>avg ${v.avg_speed} kn</span>` : ''}
+                ${(() => { const a = vesselStore.getAvgSpeed(v.mmsi); return a != null ? `<span>avg ${a} kn</span>` : ''; })()}
                 ${dist ? `<span>${dist} nm</span>` : ''}
                 ${bearing ? `<span>${bearing}°</span>` : ''}
             </div>
@@ -710,43 +712,106 @@ function updatePanel() {
     if (_mobileVesselsOn) updateMobileVesselList();
 }
 
-// --- WebSocket ---
-function connectWebSocket() {
-    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const ws = new WebSocket(`${protocol}//${window.location.host}/ws`);
+// --- AISstream.io Direct WebSocket ---
+const vesselStore = new VesselStore({ staleMinutes: STALE_MINUTES, persist: true });
 
-    ws.onopen = () => {
-        document.getElementById('connection-status').textContent = 'Connected';
-        document.getElementById('connection-status').className = 'status-connected';
-    };
-
-    ws.onmessage = (event) => {
-        const data = JSON.parse(event.data);
-        messageCount++;
-
-        // Merge with existing vessel data
-        const existing = vessels.get(data.mmsi) || {};
-        const merged = { ...existing, ...data, _lastUpdate: Date.now() };
-        vessels.set(data.mmsi, merged);
-
-        // Track own position
-        if (data.mmsi === OWN_MMSI && data.lat != null) {
-            ownPosition = { lat: data.lat, lon: data.lon };
-            ownVessel = merged;
-        }
-
-        updateMarker(merged);
-        updatePanel();
-    };
-
-    ws.onclose = () => {
-        document.getElementById('connection-status').textContent = 'Disconnected';
-        document.getElementById('connection-status').className = 'status-disconnected';
-        setTimeout(connectWebSocket, 3000);
-    };
-
-    ws.onerror = () => ws.close();
+// Restore any persisted vessels to the map
+for (const v of vesselStore.getAll()) {
+    vessels.set(v.mmsi, v);
+    if (v.mmsi === OWN_MMSI && v.lat != null) {
+        ownPosition = { lat: v.lat, lon: v.lon };
+        ownVessel = v;
+    }
+    updateMarker(v);
 }
+
+// API key: stored in localStorage, prompted on first use
+function getAISStreamApiKey() {
+    let key = localStorage.getItem('aisstream_api_key');
+    if (!key) {
+        key = prompt('Enter your AISstream.io API key:');
+        if (key) localStorage.setItem('aisstream_api_key', key.trim());
+    }
+    return key ? key.trim() : null;
+}
+
+let aisClient = null;
+
+function connectAISStream() {
+    const apiKey = getAISStreamApiKey();
+    if (!apiKey) {
+        document.getElementById('connection-status').textContent = 'No API Key';
+        document.getElementById('connection-status').className = 'status-disconnected';
+        return;
+    }
+
+    aisClient = new AISStreamClient({
+        apiKey: apiKey,
+        bbox: [[37.4, -122.8], [38.2, -122.0]],
+        ownMmsi: OWN_MMSI,
+        onMessage: (data) => {
+            messageCount++;
+            const merged = vesselStore.upsert(data);
+            vessels.set(data.mmsi, merged);
+
+            if (data.mmsi === OWN_MMSI && data.lat != null) {
+                ownPosition = { lat: data.lat, lon: data.lon };
+                ownVessel = merged;
+            }
+
+            // Update track line
+            const trackPoints = vesselStore.getTrack(data.mmsi, TRACK_HOURS);
+            if (trackPoints.length > 1) {
+                const color = getVesselColor(merged);
+                const existing = trackLines.get(data.mmsi);
+                if (existing) {
+                    existing.line.setLatLngs(trackPoints.map(p => [p.lat, p.lon]));
+                    existing.points = trackPoints;
+                } else {
+                    const line = L.polyline(
+                        trackPoints.map(p => [p.lat, p.lon]),
+                        {
+                            color: color,
+                            weight: data.mmsi === OWN_MMSI ? 2.5 : 1.5,
+                            opacity: 0.6,
+                            dashArray: data.mmsi === OWN_MMSI ? null : '4 4',
+                        }
+                    );
+                    if (!hiddenVessels.has(data.mmsi)) line.addTo(map);
+                    trackLines.set(data.mmsi, { line, points: trackPoints });
+                }
+            }
+
+            updateMarker(merged);
+            updatePanel();
+        },
+        onStatus: (status) => {
+            const el = document.getElementById('connection-status');
+            if (status === 'connected') {
+                el.textContent = 'Connected';
+                el.className = 'status-connected';
+            } else {
+                el.textContent = 'Disconnected';
+                el.className = 'status-disconnected';
+            }
+        },
+    });
+    aisClient.connect();
+}
+
+// Periodically save vessel store and prune stale vessels/markers
+setInterval(() => {
+    vesselStore.saveIfNeeded();
+    const pruned = vesselStore.prune();
+    for (const mmsi of pruned) {
+        vessels.delete(mmsi);
+        const m = markers.get(mmsi);
+        if (m) { map.removeLayer(m); markers.delete(mmsi); }
+        const t = trackLines.get(mmsi);
+        if (t) { map.removeLayer(t.line); trackLines.delete(mmsi); }
+    }
+    if (pruned.length > 0) updatePanel();
+}, 30000);
 
 // --- Panel toggle ---
 const _isMobile = window.innerWidth <= 600;
@@ -867,72 +932,13 @@ if (_vesselsBtn) {
 // --- Vessel search ---
 document.getElementById('vessel-search').addEventListener('input', () => updatePanel());
 
-// --- Load initial data ---
-async function loadVessels() {
-    try {
-        const res = await fetch('/api/vessels');
-        const data = await res.json();
-        data.forEach(v => {
-            v._lastUpdate = v.pos_timestamp ? new Date(v.pos_timestamp + 'Z').getTime() : 0;
-            vessels.set(v.mmsi, v);
-
-            if (v.mmsi === OWN_MMSI && v.lat != null) {
-                ownPosition = { lat: v.lat, lon: v.lon };
-                ownVessel = v;
-            }
-
-            updateMarker(v);
-        });
-
-        // Center map on own vessel or first vessel with position
-        if (ownPosition) {
-            map.setView([ownPosition.lat, ownPosition.lon], 13);
-        } else if (data.length > 0 && data[0].lat != null) {
-            map.setView([data[0].lat, data[0].lon], 13);
-        }
-
-        updatePanel();
-
-        // Load tracks for all vessels
-        for (const v of data) {
-            if (v.lat != null) {
-                try {
-                    const trackRes = await fetch(`/api/vessels/${v.mmsi}/track?hours=${TRACK_HOURS}`);
-                    const trackData = await trackRes.json();
-                    if (trackData.length > 1) {
-                        const color = getVesselColor(v);
-                        const line = L.polyline(
-                            trackData.map(p => [p.lat, p.lon]),
-                            {
-                                color: color,
-                                weight: v.mmsi === OWN_MMSI ? 2.5 : 1.5,
-                                opacity: 0.6,
-                                dashArray: v.mmsi === OWN_MMSI ? null : '4 4',
-                            }
-                        );
-                        if (!hiddenVessels.has(v.mmsi)) line.addTo(map);
-                        trackLines.set(v.mmsi, {
-                            line,
-                            points: trackData.map(p => ({
-                                lat: p.lat,
-                                lon: p.lon,
-                                time: new Date(p.timestamp + 'Z').getTime(),
-                            })),
-                        });
-                    }
-                } catch (e) {
-                    // Track load failure is non-critical
-                }
-            }
-        }
-    } catch (e) {
-        console.error('Failed to load vessels:', e);
-    }
-}
-
 // --- Init ---
-loadVessels();
-connectWebSocket();
+// Center on SF Bay (vessels will appear as AISstream data arrives)
+if (!ownPosition) {
+    map.setView([37.81, -122.42], 12);
+}
+connectAISStream();
+updatePanel();
 
 // Refresh panel periodically to update stale status
 setInterval(updatePanel, 30000);
@@ -970,11 +976,7 @@ function createCurrentArrow(station) {
 
 async function loadCurrents() {
     try {
-        const timeParam = forecastMinutes > 0 ? `?time=${forecastMinutes}` : '';
-        const res = await fetch(`/api/currents${timeParam}`);
-        if (!res.ok) return;
-        if (res.headers.get('X-From-Cache')) _notifyCachedData();
-        const stations = await res.json();
+        const stations = await fetchCurrents(forecastMinutes);
         currentStationsData = stations;
 
         // Clear old markers
@@ -1047,11 +1049,8 @@ async function loadCurrentField() {
         if (flowSourceEl && !flowSourceEl.textContent) {
             flowSourceEl.innerHTML = '<span style="opacity:0.6">Loading current data\u2026</span>';
         }
-        const timeParam = forecastMinutes > 0 ? `?time=${forecastMinutes}` : '';
-        const res = await fetch(`/api/current-field${timeParam}`);
-        if (!res.ok) return;
-        if (res.headers.get('X-From-Cache')) _notifyCachedData();
-        const data = await res.json();
+        const data = await fetchCurrentField(forecastMinutes);
+        if (!data) return;
         if (data.error) {
             console.log('SFBOFS not available:', data.error);
             return;
@@ -1208,11 +1207,8 @@ async function loadWindField() {
         if (sourceEl && !sourceEl.textContent) {
             sourceEl.innerHTML = '<span style="opacity:0.6">Loading wind data\u2026</span>';
         }
-        const timeParam = forecastMinutes > 0 ? `?time=${forecastMinutes}` : '';
-        const res = await fetch(`/api/wind-field${timeParam}`);
-        if (!res.ok) return;
-        if (res.headers.get('X-From-Cache')) _notifyCachedData();
-        const data = await res.json();
+        const data = await fetchWindField(forecastMinutes);
+        if (!data) return;
         if (data.error) {
             console.log('Wind data not available:', data.error);
             return;
@@ -1262,12 +1258,7 @@ let tideMarkersVisible = false;
 
 async function loadTideHeight() {
     try {
-        const timeParam = forecastMinutes > 0 ? `?time=${forecastMinutes}` : '';
-        const res = await fetch(`/api/tide-height${timeParam}`);
-        if (!res.ok) { console.log('Tide API returned', res.status); return; }
-        if (res.headers.get('X-From-Cache')) _notifyCachedData();
-        const data = await res.json();
-        console.log('Tide data:', Array.isArray(data) ? data.length + ' stations' : data);
+        const data = await fetchTideHeights(forecastMinutes);
         if (Array.isArray(data)) {
             tideStations = data;
             updateTideMarkers();
@@ -1888,74 +1879,21 @@ async function downloadForOffline() {
     const btn = offlineDlBtn;
     if (btn) btn.classList.add('downloading');
     if (offlineDlPanel) offlineDlPanel.classList.remove('hidden');
-    if (offlineDlStatus) offlineDlStatus.textContent = 'Checking for new data\u2026';
+    if (offlineDlStatus) offlineDlStatus.textContent = 'Downloading data for offline use\u2026';
     if (offlineDlBar) offlineDlBar.style.width = '0%';
 
-    // Probe wind & SFBOFS hour-0 to check if data has changed since last download
-    const probeEndpoints = ['/api/wind-field', '/api/current-field'];
-    const storedTimestamps = {};
-    let needsDownload = false;
-
     try {
-        const probes = await Promise.all(probeEndpoints.map(ep => fetch(ep).then(r => r.json()).catch(() => null)));
-        for (let i = 0; i < probeEndpoints.length; i++) {
-            const key = `ais_offline_dl_${probeEndpoints[i].replace('/api/', '')}`;
-            const data = probes[i];
-            const fetchedAt = data?.grid?.fetched_at || data?.fetched_at || null;
-            const stored = localStorage.getItem(key);
-            storedTimestamps[key] = fetchedAt;
-            if (!stored || stored !== fetchedAt) {
-                needsDownload = true;
-            }
-        }
-    } catch {
-        needsDownload = true; // On error, download anyway
+        await downloadAllForOffline((completed, total) => {
+            const pct = Math.round((completed / total) * 100);
+            if (offlineDlBar) offlineDlBar.style.width = pct + '%';
+            if (offlineDlStatus) offlineDlStatus.textContent = `${completed} / ${total}`;
+        });
+    } catch (e) {
+        console.log('Offline download error:', e);
     }
 
-    // Also force download if never downloaded before
-    if (!_getLastDlTime()) needsDownload = true;
-
-    if (!needsDownload) {
-        _downloadingOffline = false;
-        if (btn) btn.classList.remove('downloading');
-        if (offlineDlStatus) offlineDlStatus.textContent = 'Data is up to date!';
-        _updateLastDlDisplay();
-        setTimeout(() => {
-            if (offlineDlPanel) offlineDlPanel.classList.add('hidden');
-        }, 2000);
-        return;
-    }
-
-    // Download all 24h of data
-    const endpoints = ['/api/tide-height', '/api/currents', '/api/current-field', '/api/wind-field'];
-    const hours = 24;
-    const total = endpoints.length * hours;
-    let completed = 0;
-
-    function updateProgress() {
-        const pct = Math.round((completed / total) * 100);
-        if (offlineDlBar) offlineDlBar.style.width = pct + '%';
-        if (offlineDlStatus) offlineDlStatus.textContent = `${completed} / ${total}`;
-    }
-    updateProgress();
-
-    // Fetch in batches to avoid overwhelming the server
-    for (let h = 0; h < hours; h++) {
-        const minutes = h * 60;
-        const timeParam = minutes > 0 ? `?time=${minutes}` : '';
-        const batch = endpoints.map(ep =>
-            fetch(ep + timeParam)
-                .then(() => { completed++; updateProgress(); })
-                .catch(() => { completed++; updateProgress(); })
-        );
-        await Promise.all(batch);
-    }
-
-    // Save timestamps and switch SW to cache-first
+    // Save timestamp and switch SW to cache-first
     localStorage.setItem('ais_offline_dl_time', new Date().toISOString());
-    for (const [key, val] of Object.entries(storedTimestamps)) {
-        if (val) localStorage.setItem(key, val);
-    }
     _notifySwCacheReady();
 
     // Done
@@ -1965,7 +1903,7 @@ async function downloadForOffline() {
         btn.classList.add('done');
         setTimeout(() => btn.classList.remove('done'), 3000);
     }
-    if (offlineDlStatus) offlineDlStatus.textContent = 'Done! 24h cached for offline use.';
+    if (offlineDlStatus) offlineDlStatus.textContent = 'Done! Data cached for offline use.';
     _updateLastDlDisplay();
     setTimeout(() => {
         if (offlineDlPanel) offlineDlPanel.classList.add('hidden');
