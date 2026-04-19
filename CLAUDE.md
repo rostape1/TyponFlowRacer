@@ -160,14 +160,16 @@ python main.py --aisstream         # Cloud AIS (needs API key in .env)
 ## Notable Behaviors
 
 - **50 vessel cap** — cloud AIS mode limits to 50 closest vessels to keep the map clean
+- **AIS API key embedded** — `DEFAULT_AISSTREAM_KEY` in `app.js` so the app auto-connects on any device. Users can override via `localStorage.setItem('aisstream_api_key', ...)`.
 - **Tide forecasts are unlimited range** — harmonic math, no model dependency. Wind limited to 49h (Open-Meteo forecast_hours), current field limited to 48h (SFBOFS)
 - **Browser-side data fetching** — Tides (14 NOAA CO-OPS stations), currents (6 stations), and wind (72-point Open-Meteo grid) are fetched directly in the browser. In-memory caches: tides/currents 6h TTL, wind 30min TTL. Service Worker caches API responses for offline use.
 - **Wind grid batched in 1 request** — All 72 grid points × 49 forecast hours fetched via single Open-Meteo API call with comma-separated coordinates. Direction→u/v conversion done in browser JS.
-- **Offline forecast persistence** — SFBOFS current field pre-computed by GitHub Actions. Tides/currents/wind cached by Service Worker after first fetch or offline download. Download button pre-fetches all data (71 items: 49 SFBOFS + 1 NDBC + 14 tide APIs + 6 current APIs + 1 wind batch).
-- **Offline mode** — Service Worker automatically caches all external map tiles (CartoDB, OSM, NOAA charts, OpenSeaMap) on first view via `ais-tiles-v1` cache. `download_offline.py` can additionally pre-cache tiles, currents, wind for areas not yet viewed.
-- **PWA offline pre-fetch** — Download button (in bottom button bar) pre-fetches SFBOFS data, NDBC stations, and triggers direct API fetches for tides, currents, and wind. Service Worker caches all responses. After download, SW switches to **stale-while-revalidate** — serves cached data instantly, refreshes in background if online. Tracks last download time in localStorage, shown in status bar ("DL: 2h ago") and download panel.
+- **Auto-download on load** — `_autoDownload()` fires 8s after page load, silently pre-fetches all data (SFBOFS, NDBC, tides, currents, wind). Retries with exponential backoff (30s→60s→…→5min) if any category fails. Retries immediately (3s grace) when network comes back online. Manual download button still works with progress panel.
+- **Per-category download badges** — Status bar shows Flow/Wind/Tide/Curr chips. Turn green when that category downloads successfully (checks actual HTTP response, not just loop completion). Persists in localStorage, resets after 6h. `_getDlStatus()` / `_setDlCategory()` in `app.js`.
+- **SFBOFS 404 handling** — download loop breaks on first 404 (model runs don't always produce all 49 hours; later hours missing is normal).
+- **Offline mode** — Service Worker automatically caches all external map tiles (CartoDB, OSM, NOAA charts, OpenSeaMap) on first view via `ais-tiles-v1` cache.
+- **PWA offline pre-fetch** — After download, SW switches to **stale-while-revalidate** — serves cached data instantly, refreshes in background if online. Tracks last download time in localStorage, shown in status bar ("DL: 2h ago").
 - **Data freshness indicators** — Wind and current field legends show green/yellow dot with relative age (e.g. "3m ago" / "2h 30m ago"). Green = data < 45 min old, yellow = stale. Wind source shows "Open-Meteo". Both legends are same width (210px).
-- **SFBOFS returns stale cache immediately** — if disk cache exists, `/api/current-field` returns it instantly while refreshing the 57MB NetCDF download in the background. No more blocking on slow S3 downloads.
 - **Position data kept permanently** — for post-voyage analysis
 
 ## Key Patterns
@@ -189,7 +191,9 @@ python main.py --aisstream         # Cloud AIS (needs API key in .env)
 - Ship type colors: Sailing=#3498db, Cargo=#2ecc71, Tanker=#e74c3c, Own=#f39c12
 - Wind particles: purple arrow-tipped trails with flashing speed numbers (every 5th particle). Default color scheme: purple
 - Tidal flow particles: smooth colored line trails (blue→cyan→green→yellow→red by speed)
-- **Desktop bottom bar**: Timeline strip (scrollable hours + GO button) above status bar. Button bar above timeline with NOW, calendar, download, and layer toggles (Flow, Heatmap, Wind, Tide, Vessels). All buttons are 28px tall with consistent toggle styling.
-- **Mobile bottom bar**: 3-row stack (layer toggles + download → forecast quick buttons → status line), collapsible via hamburger button (default: expanded). Timeline scroll strip hidden on mobile. Vessel list auto-closes when tray is collapsed.
+- **Desktop bottom bar**: Timeline strip (scrollable hours + GO button) above status bar. Button bar above timeline with NOW, calendar, download, and layer toggles (Tide Flow, Wind, Tide, Vessels). All buttons are 28px tall with consistent toggle styling.
+- **Mobile bottom bar**: 3-row stack (download full-width + layer toggles → forecast quick buttons → status line), collapsible via hamburger button (default: expanded). Timeline scroll strip hidden on mobile. Vessel list auto-closes when tray is collapsed.
 - **Mobile forecast quick buttons**: NOW, +1h, +2h, +3h, +4h, Set FCST TIME (opens date/time picker)
-- **Button colors**: Flow=blue, Heatmap=orange, Wind=purple, Tide=cyan, Vessels=orange, NOW=blue, Calendar=magenta, Download=green. Active forecast hours=magenta (#e85ab4). OFF state=dim gray for all.
+- **Mobile status bar**: `● AIS` dot+label · vessel count · [Flow][Wind][Tide][Curr] download badges · DL age · ☰ hamburger
+- **Button colors**: Tide Flow=blue, Wind=purple, Tide=cyan, Vessels=orange, NOW=blue, Calendar=magenta, Download=green. Active forecast hours=magenta (#e85ab4). OFF state=dim gray for all.
+- **Tide Flow button** — combined toggle for SFBOFS particle animation + speed heatmap (was separate Flow + Heatmap buttons)
