@@ -433,10 +433,14 @@ async function downloadAllForOffline(onProgress, onCategory) {
         if (onProgress) onProgress(completed, totalItems);
     }
 
-    // SFBOFS (49 files — still static JSON)
+    // SFBOFS (49 files — still static JSON; stop on first 404, later hours may not exist)
     let flowOk = 0;
     for (let h = 0; h <= 48; h++) {
-        try { await fetch(`${DATA_BASE}/sfbofs/hour_${String(h).padStart(2, '0')}.json`); flowOk++; } catch (e) {}
+        try {
+            const resp = await fetch(`${DATA_BASE}/sfbofs/hour_${String(h).padStart(2, '0')}.json`);
+            if (resp.ok) flowOk++;
+            else if (resp.status === 404) break;
+        } catch (e) {}
         tick();
     }
     if (onCategory) onCategory('flow', flowOk > 0);
