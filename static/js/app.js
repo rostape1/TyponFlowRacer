@@ -20,6 +20,7 @@ const hiddenVessels = new Set();  // mmsi values of vessels hidden from map
 // --- Forecast time shift ---
 let forecastMinutes = 0;  // 0 = real-time, >0 = minutes into the future
 let autoRefreshTimers = { currents: null, field: null, wind: null, tide: null };
+let tidalFlow = null;  // initialized later after TidalFlowOverlay loads
 
 // --- Color mapping ---
 const TYPE_COLORS = {
@@ -1040,7 +1041,6 @@ async function loadCurrents() {
 }
 
 // --- Tidal Flow Overlay ---
-let tidalFlow = null;
 if (typeof TidalFlowOverlay !== 'undefined') {
     tidalFlow = new TidalFlowOverlay(map, {
         particleCount: 3000,
