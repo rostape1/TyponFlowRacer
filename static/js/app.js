@@ -923,6 +923,15 @@ function updateMobileVesselList() {
     });
 }
 
+function closeMobileVesselList() {
+    _mobileVesselsOn = false;
+    if (_vesselsBtn) {
+        _vesselsBtn.textContent = 'Vessels: OFF';
+        _vesselsBtn.classList.add('vessels-off');
+    }
+    if (_mobileVesselList) _mobileVesselList.classList.add('hidden');
+}
+
 if (_vesselsBtn) {
     _vesselsBtn.classList.add('vessels-off');
     _vesselsBtn.addEventListener('click', () => {
@@ -935,6 +944,14 @@ if (_vesselsBtn) {
         }
     });
 }
+
+// Close vessel list when tapping the map
+map.on('click', () => {
+    if (_mobileVesselsOn) closeMobileVesselList();
+});
+map.on('dragstart', () => {
+    if (_mobileVesselsOn) closeMobileVesselList();
+});
 
 // --- Vessel search ---
 document.getElementById('vessel-search').addEventListener('input', () => updatePanel());
