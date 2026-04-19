@@ -40,70 +40,56 @@ def _fetch_url(url: str) -> str | None:
         return None
 
 
-def _build_url(station_id: str, date: str) -> str:
+def _build_url(station_id: str, begin_date: str, end_date: str) -> str:
     return (
-        f"{NOAA_BASE}?date={date}&station={station_id}"
-        f"&product=currents_predictions&units=english"
+        f"{NOAA_BASE}?begin_date={begin_date}&end_date={end_date}"
+        f"&station={station_id}&product=currents_predictions&units=english"
         f"&time_zone=gmt&format=json&interval=6"
     )
 
 
 def main():
     now = datetime.now(timezone.utc)
-    dates = [
-        now.strftime("%Y%m%d"),
-        (now + timedelta(days=1)).strftime("%Y%m%d"),
-        (now + timedelta(days=2)).strftime("%Y%m%d"),
-    ]
+    begin = now.strftime("%Y%m%d")
+    end = (now + timedelta(days=3)).strftime("%Y%m%d")
 
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     saved = 0
 
     for station_id, info in STATIONS.items():
-        all_predictions = []
-        for date_str in dates:
-            url = _build_url(station_id, date_str)
-            text = _fetch_url(url)
-            if not text:
-                continue
-            try:
-                parsed = json.loads(text)
-                predictions = None
-                if "current_predictions" in parsed:
-                    predictions = parsed["current_predictions"].get("cp", [])
-                elif "predictions" in parsed:
-                    predictions = parsed["predictions"]
-                if predictions:
-                    all_predictions.extend(predictions)
-            except (json.JSONDecodeError, KeyError) as e:
-                logger.debug(f"Parse error for {station_id} on {date_str}: {e}")
-
-        if not all_predictions:
-            logger.warning(f"No predictions for {station_id}")
+        url = _build_url(station_id, begin, end)
+        text = _fetch_url(url)
+        if not text:
+            logger.warning(f"Failed to fetch currents for {station_id}")
             continue
 
-        # Deduplicate by Time field
-        seen = set()
-        unique = []
-        for p in all_predictions:
-            t = p.get("Time", "")
-            if t not in seen:
-                seen.add(t)
-                unique.append(p)
+        try:
+            parsed = json.loads(text)
+            predictions = None
+            if "current_predictions" in parsed:
+                predictions = parsed["current_predictions"].get("cp", [])
+            elif "predictions" in parsed:
+                predictions = parsed["predictions"]
 
-        # Save with station metadata embedded
-        output = {
-            "station_id": station_id,
-            "name": info["name"],
-            "lat": info["lat"],
-            "lon": info["lon"],
-            "predictions": unique,
-        }
+            if not predictions:
+                logger.warning(f"No predictions for {station_id}")
+                continue
 
-        out_path = OUTPUT_DIR / f"{station_id}.json"
-        out_path.write_text(json.dumps(output))
-        saved += 1
-        logger.info(f"Saved {station_id} ({info['name']}): {len(unique)} predictions")
+            # Save with station metadata embedded
+            output = {
+                "station_id": station_id,
+                "name": info["name"],
+                "lat": info["lat"],
+                "lon": info["lon"],
+                "predictions": predictions,
+            }
+
+            out_path = OUTPUT_DIR / f"{station_id}.json"
+            out_path.write_text(json.dumps(output))
+            saved += 1
+            logger.info(f"Saved {station_id} ({info['name']}): {len(predictions)} predictions")
+        except (json.JSONDecodeError, KeyError) as e:
+            logger.warning(f"Parse error for {station_id}: {e}")
 
     logger.info(f"Currents complete: {saved}/{len(STATIONS)} stations")
 
