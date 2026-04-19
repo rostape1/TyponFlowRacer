@@ -1,8 +1,10 @@
 /**
- * Static data loader — fetches pre-computed JSON from GitHub Pages
+ * Data loader — fetches environmental data from public APIs
  * and provides client-side interpolation for tides and currents.
  *
- * Replaces the backend API calls with static file fetches.
+ * Tides & currents: direct NOAA CO-OPS API
+ * Wind grid: batched Open-Meteo API
+ * SFBOFS & NDBC: static JSON from GitHub Pages (server-side processing)
  */
 
 // Station metadata (embedded from backend Python files)
@@ -36,7 +38,25 @@ const CURRENT_STATIONS = {
 const _tideCache = new Map();   // stationId → { predictions, fetchedAt }
 const _currentCache = new Map();
 
-const DATA_BASE = 'data';  // Relative to site root
+const DATA_BASE = 'data';  // Relative to site root (for SFBOFS + NDBC static JSON)
+const NOAA_API = 'https://api.tidesandcurrents.noaa.gov/api/prod/datagetter';
+
+// --- Helpers ---
+
+function _ymd(d) {
+    return d.getUTCFullYear().toString() +
+        String(d.getUTCMonth() + 1).padStart(2, '0') +
+        String(d.getUTCDate()).padStart(2, '0');
+}
+
+function _noaaDateRange(minutesOffset = 0) {
+    const now = new Date();
+    const begin = _ymd(now);
+    // Cover at least 3 days; extend if forecast goes beyond 48h
+    const daysAhead = Math.max(3, Math.ceil(minutesOffset / 1440) + 1);
+    const end = _ymd(new Date(now.getTime() + daysAhead * 86400000));
+    return { begin, end };
+}
 
 // --- Forecast hour mapping ---
 
@@ -54,22 +74,115 @@ async function fetchCurrentField(minutesOffset = 0) {
     return res.json();
 }
 
-// --- Wind Field ---
+// --- Wind Field (batched Open-Meteo API) ---
+
+const OPEN_METEO_API = 'https://api.open-meteo.com/v1/forecast';
+const WIND_BOUNDS = { south: 37.30, north: 38.10, west: -122.95, east: -122.10 };
+const WIND_NX = 9;
+const WIND_NY = 8;
+let _windGridCache = null; // { grids: Map<hour, gridObj>, fetchedAt }
+
+async function _fetchWindGridFromAPI() {
+    // Generate 72 lat/lon pairs in row-major order (iy,ix)
+    const lats = [];
+    const lons = [];
+    for (let iy = 0; iy < WIND_NY; iy++) {
+        const lat = WIND_BOUNDS.south + iy * (WIND_BOUNDS.north - WIND_BOUNDS.south) / (WIND_NY - 1);
+        for (let ix = 0; ix < WIND_NX; ix++) {
+            const lon = WIND_BOUNDS.west + ix * (WIND_BOUNDS.east - WIND_BOUNDS.west) / (WIND_NX - 1);
+            lats.push(lat.toFixed(4));
+            lons.push(lon.toFixed(4));
+        }
+    }
+
+    const url = `${OPEN_METEO_API}?latitude=${lats.join(',')}&longitude=${lons.join(',')}`
+        + '&current=wind_speed_10m,wind_direction_10m,wind_gusts_10m'
+        + '&hourly=wind_speed_10m,wind_direction_10m,wind_gusts_10m'
+        + '&models=gfs_seamless&wind_speed_unit=kn&forecast_hours=49';
+
+    const res = await fetch(url);
+    if (!res.ok) return null;
+    const data = await res.json();
+
+    // Response is an array of 72 objects (one per coordinate pair)
+    if (!Array.isArray(data) || data.length !== lats.length) return null;
+
+    const nowStr = new Date().toISOString().slice(0, 16).replace('T', ' ') + ' UTC';
+    const grids = new Map();
+
+    for (let hour = 0; hour < 49; hour++) {
+        const u = Array.from({ length: WIND_NY }, () => new Array(WIND_NX).fill(0));
+        const v = Array.from({ length: WIND_NY }, () => new Array(WIND_NX).fill(0));
+        const gusts = Array.from({ length: WIND_NY }, () => new Array(WIND_NX).fill(0));
+
+        for (let idx = 0; idx < data.length; idx++) {
+            const iy = Math.floor(idx / WIND_NX);
+            const ix = idx % WIND_NX;
+            const point = data[idx];
+
+            let spd, dir, gst;
+            if (hour === 0 && point.current) {
+                spd = point.current.wind_speed_10m || 0;
+                dir = point.current.wind_direction_10m || 0;
+                gst = point.current.wind_gusts_10m || 0;
+            } else if (point.hourly) {
+                spd = point.hourly.wind_speed_10m?.[hour] || 0;
+                dir = point.hourly.wind_direction_10m?.[hour] || 0;
+                gst = point.hourly.wind_gusts_10m?.[hour] || 0;
+            } else {
+                continue;
+            }
+
+            const rad = dir * Math.PI / 180;
+            u[iy][ix] = Math.round(-spd * Math.sin(rad) * 100) / 100;
+            v[iy][ix] = Math.round(-spd * Math.cos(rad) * 100) / 100;
+            gusts[iy][ix] = Math.round(gst * 10) / 10;
+        }
+
+        grids.set(hour, {
+            bounds: WIND_BOUNDS,
+            nx: WIND_NX,
+            ny: WIND_NY,
+            model: 'GFS Seamless',
+            source: 'Open-Meteo',
+            fetched_at: nowStr,
+            forecast_hour: hour,
+            u,
+            v,
+            gusts,
+        });
+    }
+
+    return grids;
+}
 
 async function fetchWindField(minutesOffset = 0) {
     const hour = forecastHour(minutesOffset);
-    const gridUrl = `${DATA_BASE}/wind/hour_${String(hour).padStart(2, '0')}.json`;
-    const stationsUrl = `${DATA_BASE}/wind/stations.json`;
 
-    const [gridRes, stationsRes] = await Promise.all([
-        fetch(gridUrl),
-        minutesOffset === 0 ? fetch(stationsUrl) : Promise.resolve(null),
-    ]);
+    // Check wind grid cache (30min TTL)
+    if (!_windGridCache || Date.now() - _windGridCache.fetchedAt > 30 * 60000) {
+        try {
+            const grids = await _fetchWindGridFromAPI();
+            if (grids) {
+                _windGridCache = { grids, fetchedAt: Date.now() };
+            }
+        } catch (e) {
+            console.log('Wind grid fetch failed:', e.message);
+        }
+    }
 
-    const grid = gridRes.ok ? await gridRes.json() : null;
+    let grid = null;
+    if (_windGridCache && _windGridCache.grids.has(hour)) {
+        grid = _windGridCache.grids.get(hour);
+    }
+
+    // NDBC stations — still fetched from GitHub Pages static JSON
     let stations = [];
-    if (stationsRes && stationsRes.ok) {
-        stations = await stationsRes.json();
+    if (minutesOffset === 0) {
+        try {
+            const stationsRes = await fetch(`${DATA_BASE}/wind/stations.json`);
+            if (stationsRes.ok) stations = await stationsRes.json();
+        } catch (e) { /* optional */ }
     }
 
     if (!grid) return null;
@@ -148,17 +261,17 @@ function _findNextExtreme(predictions, targetTime) {
 
 async function fetchTideHeights(minutesOffset = 0) {
     const targetTime = new Date(Date.now() + minutesOffset * 60000);
-    const results = [];
+    const { begin, end } = _noaaDateRange(minutesOffset);
 
     const fetches = Object.entries(TIDE_STATIONS).map(async ([stationId, info]) => {
         try {
-            // Check cache
             let data = _tideCache.get(stationId);
             if (!data || Date.now() - data.fetchedAt > 6 * 3600000) {
-                const res = await fetch(`${DATA_BASE}/tides/${stationId}.json`);
+                const url = `${NOAA_API}?begin_date=${begin}&end_date=${end}&station=${stationId}&product=predictions&datum=MLLW&units=english&time_zone=gmt&format=json&interval=6`;
+                const res = await fetch(url);
                 if (!res.ok) return null;
                 const json = await res.json();
-                data = { predictions: json.predictions, fetchedAt: Date.now() };
+                data = { predictions: json.predictions || [], fetchedAt: Date.now() };
                 _tideCache.set(stationId, data);
             }
 
@@ -262,16 +375,18 @@ function _interpolateCurrent(predictions, targetTime) {
 
 async function fetchCurrents(minutesOffset = 0) {
     const targetTime = new Date(Date.now() + minutesOffset * 60000);
-    const results = [];
+    const { begin, end } = _noaaDateRange(minutesOffset);
 
     const fetches = Object.entries(CURRENT_STATIONS).map(async ([stationId, info]) => {
         try {
             let data = _currentCache.get(stationId);
             if (!data || Date.now() - data.fetchedAt > 6 * 3600000) {
-                const res = await fetch(`${DATA_BASE}/currents/${stationId}.json`);
+                const url = `${NOAA_API}?begin_date=${begin}&end_date=${end}&station=${stationId}&product=currents_predictions&units=english&time_zone=gmt&format=json&interval=6`;
+                const res = await fetch(url);
                 if (!res.ok) return null;
                 const json = await res.json();
-                data = { predictions: json.predictions, fetchedAt: Date.now() };
+                const preds = json.current_predictions?.cp || json.predictions || [];
+                data = { predictions: preds, fetchedAt: Date.now() };
                 _currentCache.set(stationId, data);
             }
 
@@ -309,34 +424,44 @@ async function fetchMeta() {
 // --- Offline download ---
 
 async function downloadAllForOffline(onProgress) {
-    const items = [];
-
-    // SFBOFS (49 files)
-    for (let h = 0; h <= 48; h++) {
-        items.push(`${DATA_BASE}/sfbofs/hour_${String(h).padStart(2, '0')}.json`);
-    }
-    // Wind (49 files + stations)
-    for (let h = 0; h <= 48; h++) {
-        items.push(`${DATA_BASE}/wind/hour_${String(h).padStart(2, '0')}.json`);
-    }
-    items.push(`${DATA_BASE}/wind/stations.json`);
-    // Tides (14 files)
-    for (const id of Object.keys(TIDE_STATIONS)) {
-        items.push(`${DATA_BASE}/tides/${id}.json`);
-    }
-    // Currents (6 files)
-    for (const id of Object.keys(CURRENT_STATIONS)) {
-        items.push(`${DATA_BASE}/currents/${id}.json`);
-    }
-
+    const { begin, end } = _noaaDateRange(0);
+    const totalItems = 49 + 1 + Object.keys(TIDE_STATIONS).length + Object.keys(CURRENT_STATIONS).length + 1;
     let completed = 0;
-    for (const url of items) {
-        try {
-            await fetch(url);
-        } catch (e) { /* continue */ }
+
+    function tick() {
         completed++;
-        if (onProgress) onProgress(completed, items.length);
+        if (onProgress) onProgress(completed, totalItems);
     }
+
+    // SFBOFS (49 files — still static JSON)
+    for (let h = 0; h <= 48; h++) {
+        try { await fetch(`${DATA_BASE}/sfbofs/hour_${String(h).padStart(2, '0')}.json`); } catch (e) {}
+        tick();
+    }
+
+    // NDBC stations (still static JSON)
+    try { await fetch(`${DATA_BASE}/wind/stations.json`); } catch (e) {}
+    tick();
+
+    // Tides — NOAA API (SW caches each response)
+    for (const stationId of Object.keys(TIDE_STATIONS)) {
+        try {
+            await fetch(`${NOAA_API}?begin_date=${begin}&end_date=${end}&station=${stationId}&product=predictions&datum=MLLW&units=english&time_zone=gmt&format=json&interval=6`);
+        } catch (e) {}
+        tick();
+    }
+
+    // Currents — NOAA API (SW caches each response)
+    for (const stationId of Object.keys(CURRENT_STATIONS)) {
+        try {
+            await fetch(`${NOAA_API}?begin_date=${begin}&end_date=${end}&station=${stationId}&product=currents_predictions&units=english&time_zone=gmt&format=json&interval=6`);
+        } catch (e) {}
+        tick();
+    }
+
+    // Wind grid — single batched Open-Meteo request
+    try { await _fetchWindGridFromAPI(); } catch (e) {}
+    tick();
 
     return completed;
 }

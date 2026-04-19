@@ -1,5 +1,5 @@
-const CACHE_NAME = 'ais-tracker-v7';
-const DATA_CACHE = 'ais-data-v1';
+const CACHE_NAME = 'ais-tracker-v8';
+const DATA_CACHE = 'ais-data-v2';
 const TILE_CACHE = 'ais-tiles-v1';
 
 // External tile CDN hosts to cache
@@ -8,6 +8,12 @@ const TILE_HOSTS = [
   'tile.openstreetmap.org',
   'gis.charttools.noaa.gov',
   'tiles.openseamap.org',
+];
+
+// External environmental API hosts to cache for offline
+const ENV_API_HOSTS = [
+  'api.tidesandcurrents.noaa.gov',
+  'api.open-meteo.com',
 ];
 
 const ASSETS = [
@@ -97,6 +103,55 @@ self.addEventListener('fetch', (event) => {
       );
     } else {
       // Network-first with cache fallback
+      event.respondWith(
+        fetch(event.request).then((response) => {
+          if (response.ok) {
+            const clone = response.clone();
+            caches.open(DATA_CACHE).then((cache) => cache.put(event.request, clone));
+          }
+          return response;
+        }).catch(() =>
+          caches.open(DATA_CACHE).then((cache) =>
+            cache.match(event.request).then((cached) => {
+              if (cached) return cached;
+              return new Response('{"error":"offline"}', {
+                status: 503,
+                headers: { 'Content-Type': 'application/json' },
+              });
+            })
+          )
+        )
+      );
+    }
+    return;
+  }
+
+  // External environmental APIs — same strategy as data JSON
+  if (ENV_API_HOSTS.some(h => url.hostname === h)) {
+    if (_dataCacheFirst) {
+      event.respondWith(
+        caches.open(DATA_CACHE).then((cache) =>
+          cache.match(event.request).then((cached) => {
+            const networkFetch = fetch(event.request).then((response) => {
+              if (response.ok) cache.put(event.request, response.clone());
+              return response;
+            }).catch(() => null);
+
+            if (cached) {
+              networkFetch;
+              return cached;
+            }
+            return networkFetch.then((resp) => {
+              if (resp) return resp;
+              return new Response('{"error":"offline"}', {
+                status: 503,
+                headers: { 'Content-Type': 'application/json' },
+              });
+            });
+          })
+        )
+      );
+    } else {
       event.respondWith(
         fetch(event.request).then((response) => {
           if (response.ok) {

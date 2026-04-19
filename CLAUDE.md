@@ -5,8 +5,8 @@ Real-time maritime vessel tracking platform for San Francisco Bay. Combines AIS 
 ## Tech Stack
 
 - **Frontend:** Vanilla JS (ES6+), Leaflet 1.9.4, Canvas particle animations, no build step
-- **Data Pipeline:** GitHub Actions (scheduled Python scripts fetch/process environmental data)
-- **Hosting:** GitHub Pages (static site + pre-computed JSON data)
+- **Data Pipeline:** GitHub Actions (SFBOFS + NDBC only); tides, currents, and wind fetched directly from APIs in browser
+- **Hosting:** GitHub Pages (static site + SFBOFS/NDBC data)
 - **AIS:** Direct browser WebSocket to AISstream.io (no backend proxy)
 - **PWA:** Service Worker (`sw.js`) + manifest for offline/installable on iPhone
 
@@ -15,24 +15,24 @@ Real-time maritime vessel tracking platform for San Francisco Bay. Combines AIS 
 ```
 GitHub Actions (scheduled)          GitHub Pages (static hosting)
 ├── SFBOFS: 4x/day (NetCDF→JSON)   ├── index.html + JS/CSS
-├── Wind grid: hourly (HRRR)       ├── data/sfbofs/hour_00..48.json
-├── NDBC buoys: every 10min        ├── data/wind/hour_00..48.json + stations.json
-├── Tides: 2x/day                  ├── data/tides/{14 stations}.json
-└── Currents: 2x/day               └── data/currents/{6 stations}.json
+└── NDBC buoys: every 10min        ├── data/sfbofs/hour_00..48.json
+                                   └── data/wind/stations.json (NDBC)
 
-Browser (PWA)
+Browser (PWA) — direct API fetches
 ├── AISstream.io WebSocket → aisstream.js (parse) → vessel-store.js (in-memory DB)
-├── Static JSON → data-loader.js (fetch + client-side interpolation)
+├── NOAA CO-OPS API → data-loader.js (tides: 14 stations, currents: 6 stations)
+├── Open-Meteo API → data-loader.js (wind grid: 9×8, batched in 1 request)
+├── Static JSON → data-loader.js (SFBOFS current field, NDBC buoy obs)
 ├── tidal-flow.js (SFBOFS current field particle animation)
-├── wind-overlay.js (HRRR wind particle animation)
-└── Service Worker caches everything for offline
+├── wind-overlay.js (wind particle animation)
+└── Service Worker caches API responses + tiles for offline
 ```
 
-Environmental data is pre-computed by GitHub Actions and served as static JSON:
-- `data/sfbofs/hour_XX.json` → `tidal-flow.js` particles
-- `data/wind/hour_XX.json` + `stations.json` → `wind-overlay.js` particles
-- `data/tides/{station}.json` → client-side interpolation → tide display
-- `data/currents/{station}.json` → client-side interpolation → current overlay
+Environmental data sources:
+- `NOAA CO-OPS API` → direct browser fetch → client-side interpolation → tide/current display
+- `Open-Meteo API` → direct browser fetch (1 batched request, 72 points × 49 hours) → wind particles
+- `data/sfbofs/hour_XX.json` → GitHub Actions pre-computed → `tidal-flow.js` particles
+- `data/wind/stations.json` → GitHub Actions NDBC fetch → `wind-overlay.js` station markers
 
 ## File Map
 
@@ -41,15 +41,10 @@ Environmental data is pre-computed by GitHub Actions and served as static JSON:
 | File | Purpose |
 |------|---------|
 | `scripts/fetch_sfbofs.py` | Download NOAA SFBOFS NetCDF, regrid (netCDF4+scipy), output per-hour JSON |
-| `scripts/fetch_wind.py` | Fetch HRRR wind grid via Open-Meteo (72 points, all hours in 1 request per point) |
 | `scripts/fetch_ndbc.py` | Fetch NDBC buoy real-time observations (9 stations) |
-| `scripts/fetch_tides.py` | Fetch NOAA CO-OPS tide predictions (14 stations, 3 days) |
-| `scripts/fetch_currents.py` | Fetch NOAA CO-OPS current predictions (6 stations, 3 days) |
 | `scripts/requirements.txt` | Python deps for SFBOFS processing (netCDF4, scipy, numpy) |
 | `workflows/sfbofs.yml` | Cron: every 6h after model runs |
-| `workflows/wind.yml` | Cron: hourly (HRRR updates) |
 | `workflows/ndbc.yml` | Cron: every 10 min (buoy observations) |
-| `workflows/tides.yml` | Cron: 2x/day (tides + currents, deterministic predictions) |
 | `workflows/deploy.yml` | Assembles data + static site, deploys to GitHub Pages |
 
 ### Legacy Backend (project root, kept for reference/local dev)
@@ -71,13 +66,11 @@ Environmental data is pre-computed by GitHub Actions and served as static JSON:
 | `js/app.js` (~1900 lines) | Main app: Leaflet map, vessel markers, popups, CPA/TCPA, speed charts, search, forecast UI, mobile quick buttons, offline pre-fetch |
 | `js/aisstream.js` | Direct browser WebSocket to AISstream.io, parses AIS messages to internal format |
 | `js/vessel-store.js` | In-memory vessel database (replaces SQLite), track history, localStorage persistence |
-| `js/data-loader.js` | Static JSON fetcher + client-side interpolation for tides/currents |
-| `js/tidal-flow.js` | Canvas particle animation + speed heatmap for tidal currents (2000-3000 particles, bilinear interpolation, offscreen-rendered color overlay) |
-| `js/wind-overlay.js` | Canvas particle animation for wind (800 arrow-tipped particles with speed number flashing, NDBC station markers, dual color schemes) |
+| `js/data-loader.js` | Direct API fetcher (NOAA CO-OPS tides/currents, Open-Meteo wind) + client-side interpolation. SFBOFS/NDBC still via static JSON. |
 | `js/tidal-flow.js` | Canvas particle animation + speed heatmap for tidal currents (2000-3000 particles, bilinear interpolation, offscreen-rendered color overlay) |
 | `js/wind-overlay.js` | Canvas particle animation for wind (800 arrow-tipped particles with speed number flashing, NDBC station markers, dual color schemes) |
 | `css/style.css` | Dark nautical theme, glassmorphism panels, responsive 3-row mobile layout, Leaflet control styling |
-| `sw.js` | Service Worker: cache-first for external CDN tiles (CartoDB, OSM, NOAA, OpenSeaMap via `ais-tiles-v1` cache), network-first for HTML/JS, stale-while-revalidate for environmental APIs after download (`ais-env-data-v1` cache) |
+| `sw.js` | Service Worker: cache-first for external CDN tiles (CartoDB, OSM, NOAA, OpenSeaMap via `ais-tiles-v1` cache), network-first for HTML/JS, network-first with cache fallback for env APIs (NOAA CO-OPS, Open-Meteo) and static data JSON via `ais-data-v2` cache, stale-while-revalidate after offline download |
 
 ## Database Schema
 
@@ -98,11 +91,16 @@ WAL mode + async lock serializes writes. Periodic commits every 2 seconds.
 | Path | Description |
 |------|-------------|
 | `data/sfbofs/hour_XX.json` | SFBOFS current field grid (276x325), one per forecast hour (0-48) |
-| `data/wind/hour_XX.json` | HRRR wind grid (9x8), one per forecast hour (0-48) |
 | `data/wind/stations.json` | NDBC buoy observations (9 stations) |
-| `data/tides/{station_id}.json` | Tide height predictions (3 days) per station |
-| `data/currents/{station_id}.json` | Tidal current predictions (3 days) per station |
-| `data/meta.json` | Timestamps of latest data updates |
+| `data/meta.json` | Timestamps of latest SFBOFS/NDBC data updates |
+
+## Browser-Fetched Data
+
+| Source | API | Data |
+|--------|-----|------|
+| Tides (14 stations) | NOAA CO-OPS (`api.tidesandcurrents.noaa.gov`) | 3-day predictions, 6-min interval |
+| Currents (6 stations) | NOAA CO-OPS (same API) | 3-day predictions, 6-min interval |
+| Wind grid (9×8 = 72 points) | Open-Meteo (`api.open-meteo.com`) | 49 forecast hours, batched in 1 request |
 
 ## External Services
 
@@ -110,8 +108,8 @@ WAL mode + async lock serializes writes. Periodic commits every 2 seconds.
 |---------|------|------|-------|
 | AISstream.io | Cloud AIS via WebSocket | API key in `.env` | Continuous stream |
 | NOAA SFBOFS | SF Bay hydrodynamic NetCDF (~57MB) | Public S3 | 6 hours |
-| NOAA CO-OPS | Tidal currents + tide heights | No key | 6 hours |
-| Open-Meteo | HRRR wind forecast grid (shown as "NOAA HRRR" in UI) | No key | 30 min |
+| NOAA CO-OPS | Tidal currents + tide heights (direct browser fetch) | No key | 6h in-memory cache |
+| Open-Meteo | Wind forecast grid (direct browser fetch, batched) | No key (free tier, non-commercial) | 30min in-memory cache |
 | NDBC NOAA | Real-time buoy observations | Public | 10 min |
 
 ## Configuration
@@ -134,21 +132,18 @@ SERVER_PORT=8888           # Default local; Fly.io overrides to 8080
 ### Production (GitHub Pages)
 
 Push to `main` branch. GitHub Actions will:
-1. Fetch all environmental data on schedule
+1. Fetch SFBOFS and NDBC data on schedule
 2. Deploy `static/` + `data/` to GitHub Pages automatically
+3. Tides, currents, and wind are fetched directly by the browser from public APIs
 
 ### Local Development
 
 ```bash
-# Generate data locally (one-time)
+# Optional: generate SFBOFS data locally
 pip install -r .github/scripts/requirements.txt
-python .github/scripts/fetch_tides.py
-python .github/scripts/fetch_currents.py
-python .github/scripts/fetch_wind.py
-python .github/scripts/fetch_ndbc.py
 python .github/scripts/fetch_sfbofs.py  # needs netCDF4 + scipy
 
-# Serve the static site
+# Serve the static site (tides/currents/wind fetch from APIs automatically)
 python -m http.server 8888 --directory static
 ```
 
@@ -165,14 +160,13 @@ python main.py --aisstream         # Cloud AIS (needs API key in .env)
 ## Notable Behaviors
 
 - **50 vessel cap** — cloud AIS mode limits to 50 closest vessels to keep the map clean
-- **Tide forecasts are unlimited range** — harmonic math, no model dependency. Wind/current field limited to 48h (HRRR/SFBOFS)
-- **Startup environmental refresh** — background task fetches all 48h of wind, current field, tidal currents, and tide height data on startup, then repeats every 30 minutes. Saves all forecast data to disk (`static/data/`) for offline use.
-- **Offline forecast persistence** — All 48h of forecast data (wind grid, SFBOFS current field, tidal currents, tide heights) is saved to JSON files on disk after each refresh cycle. On restart (even offline), forecast caches load from disk immediately so forecast mode works without internet.
-- **Offline cache files** — `static/data/wind_forecasts.json` (48h wind grid), `static/data/sfbofs_forecasts.json` (48h current field), `static/data/tides/*.json` (14 station predictions), `static/data/currents/*.json` (6 station predictions), plus hour-0 files `wind_field.json`, `wind_stations.json`, `sfbofs_field.json`
+- **Tide forecasts are unlimited range** — harmonic math, no model dependency. Wind limited to 49h (Open-Meteo forecast_hours), current field limited to 48h (SFBOFS)
+- **Browser-side data fetching** — Tides (14 NOAA CO-OPS stations), currents (6 stations), and wind (72-point Open-Meteo grid) are fetched directly in the browser. In-memory caches: tides/currents 6h TTL, wind 30min TTL. Service Worker caches API responses for offline use.
+- **Wind grid batched in 1 request** — All 72 grid points × 49 forecast hours fetched via single Open-Meteo API call with comma-separated coordinates. Direction→u/v conversion done in browser JS.
+- **Offline forecast persistence** — SFBOFS current field pre-computed by GitHub Actions. Tides/currents/wind cached by Service Worker after first fetch or offline download. Download button pre-fetches all data (71 items: 49 SFBOFS + 1 NDBC + 14 tide APIs + 6 current APIs + 1 wind batch).
 - **Offline mode** — Service Worker automatically caches all external map tiles (CartoDB, OSM, NOAA charts, OpenSeaMap) on first view via `ais-tiles-v1` cache. `download_offline.py` can additionally pre-cache tiles, currents, wind for areas not yet viewed.
-- **PWA offline pre-fetch** — Download button (in bottom button bar) pre-fetches 24h of tide, current, wind, and current-field data for offline PWA use. Probes wind/SFBOFS `fetched_at` before downloading — skips if data unchanged since last download. Tracks last download time in localStorage, shown in status bar ("DL: 2h ago") and download panel. After download, Service Worker switches to **stale-while-revalidate** for env API requests — serves cached data instantly, refreshes in background if online. `X-From-Cache` response header signals cached data to the app. Loading progress bar suppressed when serving from cache.
-- **Data freshness indicators** — Wind and current field legends show green/yellow dot with relative age (e.g. "3m ago" / "2h 30m ago"). Green = data < 45 min old, yellow = stale. Both legends are same width (210px).
-- **Wind grid fetched in parallel** — 72 grid points fetched concurrently via ThreadPoolExecutor (20 workers) instead of sequentially. Reduces wind data load from minutes to ~3 seconds.
+- **PWA offline pre-fetch** — Download button (in bottom button bar) pre-fetches SFBOFS data, NDBC stations, and triggers direct API fetches for tides, currents, and wind. Service Worker caches all responses. After download, SW switches to **stale-while-revalidate** — serves cached data instantly, refreshes in background if online. Tracks last download time in localStorage, shown in status bar ("DL: 2h ago") and download panel.
+- **Data freshness indicators** — Wind and current field legends show green/yellow dot with relative age (e.g. "3m ago" / "2h 30m ago"). Green = data < 45 min old, yellow = stale. Wind source shows "Open-Meteo". Both legends are same width (210px).
 - **SFBOFS returns stale cache immediately** — if disk cache exists, `/api/current-field` returns it instantly while refreshing the 57MB NetCDF download in the background. No more blocking on slow S3 downloads.
 - **Position data kept permanently** — for post-voyage analysis
 
