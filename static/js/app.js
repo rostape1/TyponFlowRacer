@@ -1886,6 +1886,7 @@ function _initDlBadges() {
 }
 
 _initDlBadges();
+const offlineBanner = document.getElementById('offline-banner');
 const offlineCacheAge = document.getElementById('offline-cache-age');
 const offlineDlBtn = document.getElementById('offline-download');
 const offlineDlPanel = document.getElementById('offline-dl-panel');
