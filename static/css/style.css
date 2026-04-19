@@ -223,23 +223,6 @@ body {
     color: #7a8fa6;
 }
 
-/* Heatmap toggle — orange */
-#heatmap-toggle {
-    background: rgba(220, 120, 30, 0.2);
-    border-color: rgba(220, 120, 30, 0.3);
-    color: #e8a040;
-}
-
-#heatmap-toggle:hover {
-    background: rgba(220, 120, 30, 0.3);
-}
-
-#heatmap-toggle.flow-off {
-    background: rgba(100, 100, 100, 0.2);
-    border-color: rgba(100, 100, 100, 0.3);
-    color: #7a8fa6;
-}
-
 /* Wind toggle — purple */
 #wind-toggle {
     background: rgba(170, 70, 190, 0.2);

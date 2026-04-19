@@ -1171,36 +1171,23 @@ async function loadCurrentField() {
 loadCurrentField();
 autoRefreshTimers.field = setInterval(loadCurrentField, 300000);  // Refresh every 5 minutes
 
-// Flow toggle button
+// Tide Flow toggle — controls flow animation + heatmap together
 document.getElementById('flow-toggle').addEventListener('click', () => {
     if (!tidalFlow) return;
     const btn = document.getElementById('flow-toggle');
     const legend = document.getElementById('flow-legend');
     if (tidalFlow.animating) {
         tidalFlow.stop();
-        btn.textContent = 'Flow: OFF';
+        tidalFlow.setHeatmapEnabled(false);
+        btn.textContent = 'Tide Flow: OFF';
         btn.classList.add('flow-off');
         if (legend) legend.classList.remove('visible');
     } else {
         tidalFlow.start();
-        btn.textContent = 'Flow: ON';
+        tidalFlow.setHeatmapEnabled(true);
+        btn.textContent = 'Tide Flow: ON';
         btn.classList.remove('flow-off');
         if (legend) legend.classList.add('visible');
-    }
-});
-
-// Heatmap toggle button
-document.getElementById('heatmap-toggle').addEventListener('click', () => {
-    if (!tidalFlow) return;
-    const btn = document.getElementById('heatmap-toggle');
-    if (tidalFlow.heatmapEnabled) {
-        tidalFlow.setHeatmapEnabled(false);
-        btn.textContent = 'Heatmap: OFF';
-        btn.classList.add('flow-off');
-    } else {
-        tidalFlow.setHeatmapEnabled(true);
-        btn.textContent = 'Heatmap: ON';
-        btn.classList.remove('flow-off');
     }
 });
 
