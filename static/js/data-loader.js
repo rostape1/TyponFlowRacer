@@ -423,7 +423,7 @@ async function fetchMeta() {
 
 // --- Offline download ---
 
-async function downloadAllForOffline(onProgress) {
+async function downloadAllForOffline(onProgress, onCategory) {
     const { begin, end } = _noaaDateRange(0);
     const totalItems = 49 + 1 + Object.keys(TIDE_STATIONS).length + Object.keys(CURRENT_STATIONS).length + 1;
     let completed = 0;
@@ -438,6 +438,7 @@ async function downloadAllForOffline(onProgress) {
         try { await fetch(`${DATA_BASE}/sfbofs/hour_${String(h).padStart(2, '0')}.json`); } catch (e) {}
         tick();
     }
+    if (onCategory) onCategory('flow');
 
     // NDBC stations (still static JSON)
     try { await fetch(`${DATA_BASE}/wind/stations.json`); } catch (e) {}
@@ -450,6 +451,7 @@ async function downloadAllForOffline(onProgress) {
         } catch (e) {}
         tick();
     }
+    if (onCategory) onCategory('tides');
 
     // Currents — NOAA API (SW caches each response)
     for (const stationId of Object.keys(CURRENT_STATIONS)) {
@@ -458,10 +460,12 @@ async function downloadAllForOffline(onProgress) {
         } catch (e) {}
         tick();
     }
+    if (onCategory) onCategory('currents');
 
     // Wind grid — single batched Open-Meteo request
     try { await _fetchWindGridFromAPI(); } catch (e) {}
     tick();
+    if (onCategory) onCategory('wind');
 
     return completed;
 }

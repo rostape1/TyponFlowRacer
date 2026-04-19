@@ -988,6 +988,9 @@ if (!ownPosition) {
 connectAISStream();
 updatePanel();
 
+// Auto-download all data silently in background after page settles
+setTimeout(() => downloadForOffline(true), 8000);
+
 // Refresh panel periodically to update stale status
 setInterval(updatePanel, 30000);
 
@@ -1826,7 +1829,38 @@ buildTimeline();
 // OFFLINE SUPPORT — pre-fetch environmental data for offline PWA use
 // =============================================================================
 
-const offlineBanner = document.getElementById('offline-banner');
+// --- Download status badges ---
+const DL_CATEGORIES = ['flow', 'wind', 'tides', 'currents'];
+const DL_BADGE_IDS = { flow: 'dl-flow', wind: 'dl-wind', tides: 'dl-tide', currents: 'dl-curr' };
+
+function _getDlStatus() {
+    try { return JSON.parse(localStorage.getItem('ais_dl_status') || '{}'); } catch { return {}; }
+}
+
+function _setDlCategory(cat) {
+    const s = _getDlStatus();
+    s[cat] = new Date().toISOString();
+    localStorage.setItem('ais_dl_status', JSON.stringify(s));
+    _updateDlBadge(cat, 'done');
+}
+
+function _updateDlBadge(cat, state) {
+    const el = document.getElementById(DL_BADGE_IDS[cat]);
+    if (!el) return;
+    el.classList.remove('done', 'loading');
+    if (state) el.classList.add(state);
+}
+
+function _initDlBadges() {
+    const s = _getDlStatus();
+    const sixHours = 6 * 3600 * 1000;
+    for (const cat of DL_CATEGORIES) {
+        const ts = s[cat] ? new Date(s[cat]).getTime() : 0;
+        _updateDlBadge(cat, ts && (Date.now() - ts < sixHours) ? 'done' : null);
+    }
+}
+
+_initDlBadges();
 const offlineCacheAge = document.getElementById('offline-cache-age');
 const offlineDlBtn = document.getElementById('offline-download');
 const offlineDlPanel = document.getElementById('offline-dl-panel');
@@ -1919,22 +1953,32 @@ function _updateLastDlDisplay() {
 // Show last download time on load
 _updateLastDlDisplay();
 
-async function downloadForOffline() {
+async function downloadForOffline(silent = false) {
     if (_downloadingOffline) return;
     _downloadingOffline = true;
 
     const btn = offlineDlBtn;
     if (btn) btn.classList.add('downloading');
-    if (offlineDlPanel) offlineDlPanel.classList.remove('hidden');
-    if (offlineDlStatus) offlineDlStatus.textContent = 'Downloading data for offline use\u2026';
-    if (offlineDlBar) offlineDlBar.style.width = '0%';
+    if (!silent) {
+        if (offlineDlPanel) offlineDlPanel.classList.remove('hidden');
+        if (offlineDlStatus) offlineDlStatus.textContent = 'Downloading data for offline use\u2026';
+        if (offlineDlBar) offlineDlBar.style.width = '0%';
+    }
+
+    // Mark all badges as loading
+    for (const cat of DL_CATEGORIES) _updateDlBadge(cat, 'loading');
 
     try {
-        await downloadAllForOffline((completed, total) => {
-            const pct = Math.round((completed / total) * 100);
-            if (offlineDlBar) offlineDlBar.style.width = pct + '%';
-            if (offlineDlStatus) offlineDlStatus.textContent = `${completed} / ${total}`;
-        });
+        await downloadAllForOffline(
+            (completed, total) => {
+                if (!silent) {
+                    const pct = Math.round((completed / total) * 100);
+                    if (offlineDlBar) offlineDlBar.style.width = pct + '%';
+                    if (offlineDlStatus) offlineDlStatus.textContent = `${completed} / ${total}`;
+                }
+            },
+            (cat) => _setDlCategory(cat)
+        );
     } catch (e) {
         console.log('Offline download error:', e);
     }
@@ -1950,11 +1994,15 @@ async function downloadForOffline() {
         btn.classList.add('done');
         setTimeout(() => btn.classList.remove('done'), 3000);
     }
-    if (offlineDlStatus) offlineDlStatus.textContent = 'Done! Data cached for offline use.';
-    _updateLastDlDisplay();
-    setTimeout(() => {
-        if (offlineDlPanel) offlineDlPanel.classList.add('hidden');
-    }, 3000);
+    if (!silent) {
+        if (offlineDlStatus) offlineDlStatus.textContent = 'Done! Data cached for offline use.';
+        _updateLastDlDisplay();
+        setTimeout(() => {
+            if (offlineDlPanel) offlineDlPanel.classList.add('hidden');
+        }, 3000);
+    } else {
+        _updateLastDlDisplay();
+    }
 }
 
 if (offlineDlBtn) {

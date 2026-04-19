@@ -110,6 +110,32 @@ body {
     font-size: 10px;
 }
 
+.dl-indicators {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+
+.dl-badge {
+    font-size: 9px;
+    font-weight: 600;
+    padding: 1px 5px;
+    border-radius: 10px;
+    background: rgba(100, 150, 200, 0.12);
+    color: #3a4f63;
+    transition: background 0.3s, color 0.3s;
+}
+
+.dl-badge.done {
+    background: rgba(39, 174, 96, 0.22);
+    color: #27ae60;
+}
+
+.dl-badge.loading {
+    background: rgba(241, 196, 15, 0.2);
+    color: #b8960a;
+}
+
 .status-connected::before,
 .status-disconnected::before {
     content: '';
