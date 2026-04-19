@@ -1120,36 +1120,36 @@ body.panel-collapsed #panel-toggle {
         z-index: 1001;
     }
 
-    /* Connection status: show as dot only when connected */
+    /* Connection status: show dot + "AIS" label on mobile */
     #connection-status {
-        font-size: 0;
-        width: 8px;
-        height: 8px;
-        min-width: 8px;
-        border-radius: 50%;
-        padding: 0;
-        gap: 0;
-    }
-    #connection-status::before { display: none; }
-    .status-connected#connection-status {
-        background: #27ae60;
-        box-shadow: 0 0 6px #27ae60;
-    }
-    .status-disconnected#connection-status {
-        background: #e74c3c;
-        box-shadow: 0 0 6px #e74c3c;
-    }
-    /* When needs-key class is set, show full text so user can tap to enter API key */
-    #connection-status.needs-key {
-        font-size: 10px;
+        font-size: 0; /* hide "Connected"/"Disconnected" text */
         width: auto;
         height: auto;
         min-width: unset;
+        border-radius: 0;
+        padding: 0;
+        background: transparent !important;
+        box-shadow: none !important;
+        gap: 4px;
+        display: flex;
+        align-items: center;
+    }
+    #connection-status::before { display: inline-block !important; }
+    #connection-status::after {
+        content: 'AIS';
+        font-size: 10px;
+        color: #7a8fa6;
+    }
+    /* When needs-key class is set, show full tap-to-connect prompt */
+    #connection-status.needs-key {
+        font-size: 10px;
         border-radius: 3px;
         padding: 2px 6px;
-        background: #e74c3c;
+        background: #e74c3c !important;
         color: #fff;
+        box-shadow: none !important;
     }
+    #connection-status.needs-key::after { display: none; }
 
     #vessel-count { font-size: 11px; }
     #message-count { display: none; }
@@ -1180,14 +1180,15 @@ body.panel-collapsed #panel-toggle {
         font-size: 16px;
     }
 
-    /* === Layers tray: Row 1, above forecast row === */
+    /* === Layers tray: 2 rows on mobile === */
     #layers-tray {
         position: fixed;
-        bottom: 92px; /* 32px status + 60px forecast (44px btn + 16px padding) */
+        bottom: 92px; /* 32px status + 60px forecast */
         left: 0;
         right: 0;
         z-index: 1003;
         display: flex;
+        flex-wrap: wrap;
         justify-content: center;
         gap: 6px;
         padding: 8px 10px;
@@ -1209,6 +1210,11 @@ body.panel-collapsed #panel-toggle {
         height: 44px;
         flex: 1;
         text-align: center;
+    }
+
+    /* Download button: full-width top row */
+    #layers-tray .timeline-dl-btn {
+        flex: 0 0 100%;
     }
 
     /* Hide desktop NOW/calendar on mobile (mobile has its own forecast buttons) */
@@ -1331,7 +1337,7 @@ body.panel-collapsed #panel-toggle {
 
     /* === Mobile vessel list === */
     .mobile-vessel-list {
-        bottom: 156px;
+        bottom: 206px; /* 92px forecast+status + ~110px 2-row tray + 4px gap */
     }
 
     body:not(.mobile-controls-open) .mobile-vessel-list {
