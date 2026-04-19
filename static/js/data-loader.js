@@ -434,38 +434,44 @@ async function downloadAllForOffline(onProgress, onCategory) {
     }
 
     // SFBOFS (49 files — still static JSON)
+    let flowOk = 0;
     for (let h = 0; h <= 48; h++) {
-        try { await fetch(`${DATA_BASE}/sfbofs/hour_${String(h).padStart(2, '0')}.json`); } catch (e) {}
+        try { await fetch(`${DATA_BASE}/sfbofs/hour_${String(h).padStart(2, '0')}.json`); flowOk++; } catch (e) {}
         tick();
     }
-    if (onCategory) onCategory('flow');
+    if (onCategory) onCategory('flow', flowOk > 0);
 
     // NDBC stations (still static JSON)
     try { await fetch(`${DATA_BASE}/wind/stations.json`); } catch (e) {}
     tick();
 
     // Tides — NOAA API (SW caches each response)
+    let tidesOk = 0;
     for (const stationId of Object.keys(TIDE_STATIONS)) {
         try {
             await fetch(`${NOAA_API}?begin_date=${begin}&end_date=${end}&station=${stationId}&product=predictions&datum=MLLW&units=english&time_zone=gmt&format=json&interval=6`);
+            tidesOk++;
         } catch (e) {}
         tick();
     }
-    if (onCategory) onCategory('tides');
+    if (onCategory) onCategory('tides', tidesOk > 0);
 
     // Currents — NOAA API (SW caches each response)
+    let currOk = 0;
     for (const stationId of Object.keys(CURRENT_STATIONS)) {
         try {
             await fetch(`${NOAA_API}?begin_date=${begin}&end_date=${end}&station=${stationId}&product=currents_predictions&units=english&time_zone=gmt&format=json&interval=6`);
+            currOk++;
         } catch (e) {}
         tick();
     }
-    if (onCategory) onCategory('currents');
+    if (onCategory) onCategory('currents', currOk > 0);
 
     // Wind grid — single batched Open-Meteo request
-    try { await _fetchWindGridFromAPI(); } catch (e) {}
+    let windOk = 0;
+    try { await _fetchWindGridFromAPI(); windOk++; } catch (e) {}
     tick();
-    if (onCategory) onCategory('wind');
+    if (onCategory) onCategory('wind', windOk > 0);
 
-    return completed;
+    return { flowOk, tidesOk, currOk, windOk };
 }

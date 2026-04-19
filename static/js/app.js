@@ -988,8 +988,42 @@ if (!ownPosition) {
 connectAISStream();
 updatePanel();
 
-// Auto-download all data silently in background after page settles
-setTimeout(() => downloadForOffline(true), 8000);
+// Auto-download with retry on failure
+let _autoRetryTimer = null;
+let _autoRetryDelay = 30000; // 30s, doubles each failure up to 5min
+
+function _allCategoriesDone() {
+    const s = _getDlStatus();
+    const sixHours = 6 * 3600 * 1000;
+    return DL_CATEGORIES.every(cat => {
+        const ts = s[cat] ? new Date(s[cat]).getTime() : 0;
+        return ts && (Date.now() - ts < sixHours);
+    });
+}
+
+async function _autoDownload() {
+    if (_downloadingOffline) return;
+    await downloadForOffline(true);
+    if (!_allCategoriesDone()) {
+        // Some categories failed — schedule retry with backoff
+        _autoRetryTimer = setTimeout(() => {
+            _autoRetryDelay = Math.min(_autoRetryDelay * 2, 5 * 60000);
+            _autoDownload();
+        }, _autoRetryDelay);
+    } else {
+        _autoRetryDelay = 30000; // reset for next session
+    }
+}
+
+// Retry immediately (after 3s grace) when network comes back
+window.addEventListener('online', () => {
+    if (_autoRetryTimer) { clearTimeout(_autoRetryTimer); _autoRetryTimer = null; }
+    _autoRetryDelay = 30000;
+    if (!_allCategoriesDone()) setTimeout(_autoDownload, 3000);
+});
+
+// Kick off initial download 8s after page load
+setTimeout(_autoDownload, 8000);
 
 // Refresh panel periodically to update stale status
 setInterval(updatePanel, 30000);
@@ -1837,7 +1871,11 @@ function _getDlStatus() {
     try { return JSON.parse(localStorage.getItem('ais_dl_status') || '{}'); } catch { return {}; }
 }
 
-function _setDlCategory(cat) {
+function _setDlCategory(cat, success) {
+    if (!success) {
+        _updateDlBadge(cat, null); // revert to dim — needs retry
+        return;
+    }
     const s = _getDlStatus();
     s[cat] = new Date().toISOString();
     localStorage.setItem('ais_dl_status', JSON.stringify(s));
