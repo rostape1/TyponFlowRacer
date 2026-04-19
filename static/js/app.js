@@ -921,6 +921,7 @@ function updateMobileVesselList() {
                 const marker = markers.get(mmsi);
                 if (marker) marker.openPopup();
             }
+            closeMobileVesselList();
         });
     });
 }
@@ -934,6 +935,8 @@ function closeMobileVesselList() {
     if (_mobileVesselList) _mobileVesselList.classList.add('hidden');
 }
 
+let _vesselListTimer = null;
+
 if (_vesselsBtn) {
     _vesselsBtn.classList.add('vessels-off');
     _vesselsBtn.addEventListener('click', () => {
@@ -942,7 +945,24 @@ if (_vesselsBtn) {
         _vesselsBtn.classList.toggle('vessels-off', !_mobileVesselsOn);
         if (_mobileVesselList) {
             _mobileVesselList.classList.toggle('hidden', !_mobileVesselsOn);
-            if (_mobileVesselsOn) updateMobileVesselList();
+            if (_mobileVesselsOn) {
+                updateMobileVesselList();
+                // Auto-close after 5 seconds
+                clearTimeout(_vesselListTimer);
+                _vesselListTimer = setTimeout(() => closeMobileVesselList(), 5000);
+            } else {
+                clearTimeout(_vesselListTimer);
+            }
+        }
+    });
+}
+
+// Reset auto-close timer when interacting with the list
+if (_mobileVesselList) {
+    _mobileVesselList.addEventListener('touchstart', () => {
+        if (_mobileVesselsOn) {
+            clearTimeout(_vesselListTimer);
+            _vesselListTimer = setTimeout(() => closeMobileVesselList(), 5000);
         }
     });
 }
