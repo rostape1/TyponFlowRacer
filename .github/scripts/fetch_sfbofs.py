@@ -197,7 +197,7 @@ def _extract_and_regrid(nc_path: str, forecast_hour: int) -> dict | None:
 
 def _process_hour(args: tuple) -> tuple[int, dict | None]:
     """Download and process a single forecast hour. Designed for multiprocessing."""
-    forecast_hour, date_str, run_hour = args
+    forecast_hour, date_str, run_hour, model_run_label = args
     url = _s3_url(date_str, run_hour, forecast_hour=forecast_hour)
 
     with tempfile.NamedTemporaryFile(suffix=".nc", delete=False) as tmp:
@@ -209,6 +209,8 @@ def _process_hour(args: tuple) -> tuple[int, dict | None]:
             return (forecast_hour, None)
 
         result = _extract_and_regrid(tmp_path, forecast_hour)
+        if result:
+            result["model_run"] = model_run_label
         return (forecast_hour, result)
     finally:
         try:
@@ -238,9 +240,13 @@ def main():
 
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
+    # Build a human-readable model run label, e.g. "t15z 04/19"
+    d = datetime.strptime(date_str, "%Y%m%d")
+    model_run_label = f"t{run_hour}z {d.month:02d}/{d.day:02d}"
+
     # Process all 49 forecast hours in parallel
     hours = list(range(49))
-    args = [(h, date_str, run_hour) for h in hours]
+    args = [(h, date_str, run_hour, model_run_label) for h in hours]
 
     success = 0
     with ProcessPoolExecutor(max_workers=4) as pool:
@@ -257,14 +263,16 @@ def main():
 
     logger.info(f"SFBOFS complete: {success}/{len(hours)} hours processed")
 
-    # Update meta
+    # Only mark this run as fully fetched when we got most hours,
+    # so partial fetches get retried on the next cron run
     meta = {}
     if meta_path.exists():
         try:
             meta = json.loads(meta_path.read_text())
         except Exception:
             pass
-    meta["sfbofs_run"] = f"{date_str}_t{run_hour}z"
+    if success >= 40:
+        meta["sfbofs_run"] = f"{date_str}_t{run_hour}z"
     meta["sfbofs_updated"] = datetime.now(timezone.utc).isoformat()
     meta_path.write_text(json.dumps(meta, indent=2))
 

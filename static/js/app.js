@@ -1064,14 +1064,15 @@ async function loadCurrentField() {
         if (legend) legend.classList.add('visible');
         if (source) {
             const src = data.source || 'NOAA Stations';
+            const run = data.model_run ? ` ${data.model_run}` : '';
             if (forecastMinutes > 0) {
                 const target = new Date(Date.now() + forecastMinutes * 60000);
                 const timeStr = target.toLocaleString('en-US', { weekday: 'short', hour: 'numeric', minute: '2-digit', timeZone: 'America/Los_Angeles' });
-                source.textContent = `${src} · Forecast: ${timeStr}`;
+                source.textContent = `${src}${run} · Forecast: ${timeStr}`;
             } else {
                 const age = formatDataAge(data.fetched_at);
                 if (age) {
-                    source.innerHTML = `${src} · ${age.dot}${age.ageText}`;
+                    source.innerHTML = `${src}${run} · ${age.dot}${age.ageText}`;
                 } else {
                     const time = data.fetched_at ? new Date(data.fetched_at.replace(' UTC', 'Z')).toLocaleString('en-US', { hour: '2-digit', minute: '2-digit', timeZoneName: 'short', timeZone: 'America/Los_Angeles' }) : '';
                     source.textContent = `${src} · ${time}`;
