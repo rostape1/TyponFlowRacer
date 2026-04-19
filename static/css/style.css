@@ -1120,7 +1120,7 @@ body.panel-collapsed #panel-toggle {
         z-index: 1001;
     }
 
-    /* Connection status: show as dot only */
+    /* Connection status: show as dot only when connected */
     #connection-status {
         font-size: 0;
         width: 8px;
@@ -1138,6 +1138,17 @@ body.panel-collapsed #panel-toggle {
     .status-disconnected#connection-status {
         background: #e74c3c;
         box-shadow: 0 0 6px #e74c3c;
+    }
+    /* When needs-key class is set, show full text so user can tap to enter API key */
+    #connection-status.needs-key {
+        font-size: 10px;
+        width: auto;
+        height: auto;
+        min-width: unset;
+        border-radius: 3px;
+        padding: 2px 6px;
+        background: #e74c3c;
+        color: #fff;
     }
 
     #vessel-count { font-size: 11px; }

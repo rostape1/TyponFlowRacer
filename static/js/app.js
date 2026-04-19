@@ -727,10 +727,11 @@ for (const v of vesselStore.getAll()) {
     updateMarker(v);
 }
 
-// API key: stored in localStorage, no prompt on load
+// Default API key — embedded for convenience (free AISstream.io service)
+const DEFAULT_AISSTREAM_KEY = '75cbc4d8d7acd0067399b35830a59d4a74696d64';
+
 function getAISStreamApiKey() {
-    const key = localStorage.getItem('aisstream_api_key');
-    return key ? key.trim() : null;
+    return localStorage.getItem('aisstream_api_key') || DEFAULT_AISSTREAM_KEY;
 }
 
 let aisClient = null;
@@ -740,7 +741,7 @@ function connectAISStream() {
     if (!apiKey) {
         const statusEl = document.getElementById('connection-status');
         statusEl.textContent = 'AIS: tap to connect';
-        statusEl.className = 'status-disconnected';
+        statusEl.className = 'status-disconnected needs-key';
         statusEl.style.cursor = 'pointer';
         statusEl.onclick = () => {
             const key = prompt('Enter your AISstream.io API key:');
@@ -748,6 +749,7 @@ function connectAISStream() {
                 localStorage.setItem('aisstream_api_key', key.trim());
                 statusEl.onclick = null;
                 statusEl.style.cursor = '';
+                statusEl.classList.remove('needs-key');
                 connectAISStream();
             }
         };
