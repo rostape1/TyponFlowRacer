@@ -21,6 +21,7 @@ const hiddenVessels = new Set();  // mmsi values of vessels hidden from map
 let forecastMinutes = 0;  // 0 = real-time, >0 = minutes into the future
 let autoRefreshTimers = { currents: null, field: null, wind: null, tide: null };
 let tidalFlow = null;  // initialized later after TidalFlowOverlay loads
+let windOverlay = null;  // initialized later after WindOverlay loads
 
 // --- Color mapping ---
 const TYPE_COLORS = {
@@ -1166,7 +1167,6 @@ function formatDataAge(fetchedAtStr) {
 }
 
 // --- Wind Overlay ---
-let windOverlay = null;
 let windStationMarkers = null;
 
 if (typeof WindOverlay !== 'undefined') {
