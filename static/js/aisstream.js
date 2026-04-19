@@ -185,33 +185,29 @@ class AISStreamClient {
                 APIKey: this.apiKey,
                 BoundingBoxes: [this.bbox],
             });
-            console.log('[AIS] WebSocket open, sending subscription');
             this.ws.send(sub);
             this.onStatus('connected');
         };
 
-        this.ws.onmessage = (event) => {
+        this.ws.onmessage = async (event) => {
             try {
-                const raw = JSON.parse(event.data);
+                const text = event.data instanceof Blob ? await event.data.text() : event.data;
+                const raw = JSON.parse(text);
                 const parsed = parseAISStreamMessage(raw, this.ownMmsi);
                 if (parsed) {
                     this.onMessage(parsed);
-                } else {
-                    console.warn('[AIS] Message parsed to null:', raw.MessageType);
                 }
             } catch (e) {
-                console.error('[AIS] onmessage error:', e, event.data?.slice?.(0, 200));
+                // Ignore unparseable messages
             }
         };
 
-        this.ws.onclose = (e) => {
-            console.log('[AIS] WebSocket closed:', e.code, e.reason);
+        this.ws.onclose = () => {
             this.onStatus('disconnected');
             this._scheduleReconnect();
         };
 
-        this.ws.onerror = (e) => {
-            console.error('[AIS] WebSocket error:', e);
+        this.ws.onerror = () => {
             this.onStatus('error');
             this.ws.close();
         };
