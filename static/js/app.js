@@ -1,4 +1,5 @@
 // --- Config ---
+const APP_BUILD = '6ea2bd0';  // git commit hash — updated on each deploy
 const OWN_MMSI = 338361814;
 const OWN_NAME = 'TYPON';
 const TRACK_HOURS = 1;
@@ -1024,6 +1025,7 @@ window.addEventListener('online', () => {
 
 // Kick off initial download 8s after page load
 setTimeout(_autoDownload, 8000);
+console.log(`AIS Tracker build: ${APP_BUILD}`);
 
 // Refresh panel periodically to update stale status
 setInterval(updatePanel, 30000);

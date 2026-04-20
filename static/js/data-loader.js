@@ -66,8 +66,8 @@ function forecastHour(minutesOffset) {
 
 // --- SFBOFS Current Field ---
 
-// Cached model run time (UTC Date) — set when hour_00.json is fetched.
-// Used to align forecast offset to the correct file index.
+// Cached model run time (UTC Date) — used to align forecast offset to file index.
+// Seeded from localStorage on load so first fetch gets the correct file immediately.
 let _sfbofsRunTime = null;
 
 function _parseSfbofsRunTime(modelRun) {
@@ -81,6 +81,12 @@ function _parseSfbofsRunTime(modelRun) {
     if (t - now > 12 * 3600000) t.setUTCFullYear(t.getUTCFullYear() - 1);
     return t;
 }
+
+// Seed run time from localStorage so first fetch is already time-aligned
+try {
+    const stored = JSON.parse(localStorage.getItem('ais_dl_status') || '{}');
+    if (stored.flow_model_run) _sfbofsRunTime = _parseSfbofsRunTime(stored.flow_model_run);
+} catch (e) {}
 
 async function fetchCurrentField(minutesOffset = 0) {
     const offsetHours = Math.max(0, Math.floor(minutesOffset / 60));
