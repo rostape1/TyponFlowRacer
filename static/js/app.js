@@ -1991,8 +1991,12 @@ async function downloadForOffline(silent = false) {
         if (offlineDlBar) offlineDlBar.style.width = '0%';
     }
 
-    // Mark all badges as loading and show "downloading" in status bar
-    for (const cat of DL_CATEGORIES) _updateDlBadge(cat, 'loading');
+    // Only mark not-yet-done badges as loading (keep green ones green)
+    const s0 = _getDlStatus(); const sixHours = 6 * 3600 * 1000;
+    for (const cat of DL_CATEGORIES) {
+        const ts = s0[cat] ? new Date(s0[cat]).getTime() : 0;
+        if (!(ts && (Date.now() - ts < sixHours))) _updateDlBadge(cat, 'loading');
+    }
     if (offlineDlAge) offlineDlAge.textContent = 'DL: downloading\u2026';
 
     try {
@@ -2010,8 +2014,10 @@ async function downloadForOffline(silent = false) {
         console.log('Offline download error:', e);
     }
 
-    // Save timestamp and switch SW to cache-first
-    localStorage.setItem('ais_offline_dl_time', new Date().toISOString());
+    // Save timestamp only if at least one category succeeded; switch SW to cache-first
+    if (_allCategoriesDone() || DL_CATEGORIES.some(cat => { const s = _getDlStatus(); return !!s[cat]; })) {
+        localStorage.setItem('ais_offline_dl_time', new Date().toISOString());
+    }
     _notifySwCacheReady();
 
     // Done
