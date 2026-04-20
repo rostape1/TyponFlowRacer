@@ -1883,6 +1883,8 @@ function _setDlCategory(cat, success) {
         s['flow_count'] = success.count;
         s['flow_model_run'] = success.modelRun || null;
         hoursAhead = _flowHoursAhead(success.modelRun, success.count);
+        // If we can't compute hours (broken model_run), treat as failed download
+        if (hoursAhead === null) { _updateDlBadge(cat, null); return; }
     }
     localStorage.setItem('ais_dl_status', JSON.stringify(s));
     _updateDlBadge(cat, 'done', hoursAhead);
@@ -1893,7 +1895,7 @@ function _updateDlBadge(cat, state, hours) {
     if (!el) return;
     el.classList.remove('done', 'loading');
     if (state) el.classList.add(state);
-    if (cat === 'flow') el.textContent = (hours != null) ? `Flow +${hours}h` : (state === 'done' ? 'Flow \u2713' : 'Flow');
+    if (cat === 'flow') el.textContent = (hours != null) ? `Flow +${hours}h` : 'Flow';
 }
 
 function _initDlBadges() {
