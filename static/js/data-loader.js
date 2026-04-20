@@ -66,12 +66,41 @@ function forecastHour(minutesOffset) {
 
 // --- SFBOFS Current Field ---
 
+// Cached model run time (UTC Date) — set when hour_00.json is fetched.
+// Used to align forecast offset to the correct file index.
+let _sfbofsRunTime = null;
+
+function _parseSfbofsRunTime(modelRun) {
+    // modelRun format: "t15z 04/20"
+    if (!modelRun) return null;
+    const m = modelRun.match(/t(\d{2})z (\d{2})\/(\d{2})/);
+    if (!m) return null;
+    const now = new Date();
+    let t = new Date(Date.UTC(now.getUTCFullYear(), +m[2] - 1, +m[3], +m[1], 0, 0));
+    // If parsed time is more than 12h in the future, it must be last year
+    if (t - now > 12 * 3600000) t.setUTCFullYear(t.getUTCFullYear() - 1);
+    return t;
+}
+
 async function fetchCurrentField(minutesOffset = 0) {
-    const hour = Math.min(6, forecastHour(minutesOffset));
-    const url = `${DATA_BASE}/sfbofs/hour_${String(hour).padStart(2, '0')}.json`;
+    const offsetHours = Math.max(0, Math.floor(minutesOffset / 60));
+
+    // Compute how many hours into the run we currently are
+    let elapsedHours = 0;
+    if (_sfbofsRunTime) {
+        elapsedHours = Math.max(0, Math.floor((Date.now() - _sfbofsRunTime.getTime()) / 3600000));
+    }
+
+    const fileIndex = Math.min(6, elapsedHours + offsetHours);
+    const url = `${DATA_BASE}/sfbofs/hour_${String(fileIndex).padStart(2, '0')}.json`;
     const res = await fetch(url);
     if (!res.ok) return null;
-    return res.json();
+    const data = await res.json();
+    // Cache run time for future calls
+    if (data.model_run && !_sfbofsRunTime) {
+        _sfbofsRunTime = _parseSfbofsRunTime(data.model_run);
+    }
+    return data;
 }
 
 // --- Wind Field (batched Open-Meteo API) ---
@@ -442,7 +471,11 @@ async function downloadAllForOffline(onProgress, onCategory) {
             if (resp.ok) {
                 flowOk++;
                 if (h === 0) {
-                    try { const d = await resp.json(); flowModelRun = d.model_run; } catch (e) {}
+                    try {
+                        const d = await resp.json();
+                        flowModelRun = d.model_run;
+                        if (!_sfbofsRunTime) _sfbofsRunTime = _parseSfbofsRunTime(d.model_run);
+                    } catch (e) {}
                 }
             }
         } catch (e) {}
