@@ -878,9 +878,41 @@ if (_layersBtn && _layersTray) {
             }
             if (_mobileVesselList) _mobileVesselList.classList.add('hidden');
         }
+        // Also collapse desktop panel if open (handles resize-to-mobile scenario)
+        if (!isOpen) {
+            const panel = document.getElementById('panel');
+            if (panel && !panel.classList.contains('collapsed')) {
+                panel.classList.add('collapsed');
+                document.body.classList.add('panel-collapsed');
+            }
+        }
     });
     // Do NOT auto-close on outside click — user must tap ☰ to collapse
 }
+
+// --- Responsive resize handling ---
+// _isMobile is set once at load; this handler corrects state when window is resized
+// across the 600px breakpoint (e.g. DevTools responsive mode, browser drag)
+let _wasNarrow = window.innerWidth <= 600;
+window.addEventListener('resize', () => {
+    const isNarrow = window.innerWidth <= 600;
+    if (isNarrow === _wasNarrow) return;
+    _wasNarrow = isNarrow;
+
+    const panel = document.getElementById('panel');
+    if (isNarrow) {
+        // Went mobile: collapse desktop panel so it doesn't overlap mobile UI
+        panel.classList.add('collapsed');
+        document.body.classList.add('panel-collapsed');
+    } else {
+        // Went desktop: hide mobile vessel list to avoid duplicate
+        if (_mobileVesselsOn) {
+            _mobileVesselsOn = false;
+            if (_vesselsBtn) { _vesselsBtn.textContent = 'Vessels: OFF'; _vesselsBtn.classList.add('vessels-off'); }
+            if (_mobileVesselList) _mobileVesselList.classList.add('hidden');
+        }
+    }
+});
 
 // --- Mobile vessels toggle ---
 const _vesselsBtn = document.getElementById('vessels-toggle');
