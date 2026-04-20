@@ -12,7 +12,7 @@ Deployed as a static PWA on GitHub Pages — no backend required.
 - **Tide height stations** — 14 NOAA CO-OPS stations across SF Bay, toggleable markers
 - **Current stations** — 6 NOAA CO-OPS stations with live arrows
 - **48-hour forecast timeline** — scrollable timeline on desktop; NOW/+1h/+2h/+3h/+4h quick buttons on mobile; calendar picker for unlimited range (tides only beyond 48h)
-- **Auto-download on load** — silently pre-fetches all data 8s after page open, retries with exponential backoff if offline; per-category badges (Flow/Wind/Tide/Curr) turn green as each finishes
+- **Auto-download on load** — silently pre-fetches all data 8s after page open, retries with exponential backoff if offline; per-category badges (Flow/Wind/Tide/Curr) turn green as each finishes. Flow badge shows `Flow +Xh` — hours of forward forecast remaining from now.
 - **PWA** — installable on iPhone via "Add to Home Screen", service worker caches tiles + API responses for offline use
 - **CPA/TCPA collision warnings** — color-coded alerts, speed history charts
 - **Data freshness indicators** — green/yellow dot with relative age on current + wind legends
@@ -55,6 +55,35 @@ Three-row collapsible bottom bar:
 | NOAA CO-OPS | Tides (14 stations), Currents (6 stations) | Direct browser fetch, 6h cache |
 | Open-Meteo | Wind grid (72 points, 49h forecast) | Direct browser fetch, 30min cache |
 | NDBC | Buoy observations (9 stations) | Every 10 min via GitHub Actions |
+
+## SFBOFS Tidal Flow Refresh Pipeline
+
+NOAA publishes the SF Bay hydrodynamic model 4× per day (03z / 09z / 15z / 21z UTC). Files appear on S3 progressively as the model computes each forecast hour — not all at once.
+
+**GitHub Actions cron: every hour at :20**
+
+1. `_find_latest_run()` scans NOAA S3 newest-first. A run only qualifies if **both** `hour_00` and `hour_12` exist — ensures at least 12 forecast hours are computed before we commit to it.
+2. Runs that started less than 1 hour ago are skipped (model is still initialising).
+3. **New run:** clears old hour files, downloads all 49 hours in parallel (4 workers), saves `sfbofs_run` in `meta.json` as soon as any hours succeed.
+4. **Same run, hours missing:** downloads only the missing `hour_XX.json` files — incremental fill until all 48h are present.
+5. **Same run, complete (≥48h):** skips entirely, no download or deploy.
+6. Triggers GitHub Pages deploy after each fetch.
+
+**NDBC cron: every 10 minutes**
+
+Restores the latest combined cache (including SFBOFS files) before updating `wind/stations.json`, so NDBC deploys never wipe tidal flow data.
+
+**Typical data freshness**
+
+| Scenario | Age when you see it |
+|----------|-------------------|
+| Best case | ~1h after NOAA run time |
+| Typical (full 48h) | ~2h after NOAA run time |
+| Worst case | ~7h (6h between runs + 1h buffer) |
+
+**Flow badge in the app**
+
+The `Flow +Xh` badge shows hours of **forward forecast remaining from now**, computed from the model run time stored in `hour_00.json`. It recomputes on every page reload so it decreases as time passes. Grey = nothing downloaded. Yellow pulse = downloading. Green `Flow +Xh` = X hours of future tidal forecast available.
 
 ## Local Development
 
