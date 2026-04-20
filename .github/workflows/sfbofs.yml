@@ -2,7 +2,7 @@ name: Fetch SFBOFS Current Field
 
 on:
   schedule:
-    - cron: '15 3,9,15,21 * * *'  # After NOAA model runs
+    - cron: '20 * * * *'  # Every hour at :20 — hits 20min after each NOAA model run (03z/09z/15z/21z), retries until ≥40 hours fetched
   workflow_dispatch:  # Manual trigger for testing
 
 permissions:
