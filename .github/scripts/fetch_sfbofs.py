@@ -81,12 +81,14 @@ def _find_latest_run() -> tuple[str, str] | None:
         for run in MODEL_RUNS:
             run_hour = int(run)
             if days_back == 0 and now.hour < run_hour + 1:
+                logger.debug(f"Skipping {date_str} t{run}z (too recent)")
                 continue
-            # Require both hour_00 and hour_12 to exist — ensures the model
-            # has computed at least 12 forecast hours before we commit to it.
-            # A run with only hours 0-6 (still computing) will fail this check
-            # and we fall back to the previous complete run instead.
-            if _head_ok(_s3_url(date_str, run, 0)) and _head_ok(_s3_url(date_str, run, 12)):
+            url0 = _s3_url(date_str, run, 0)
+            url6 = _s3_url(date_str, run, 6)
+            ok0 = _head_ok(url0)
+            ok6 = _head_ok(url6)
+            logger.info(f"Check {date_str} t{run}z: hour_00={'OK' if ok0 else '404'}, hour_06={'OK' if ok6 else '404'}")
+            if ok0 and ok6:
                 logger.info(f"Found SFBOFS run: {date_str} t{run}z")
                 return (date_str, run)
     return None
@@ -247,7 +249,7 @@ def main():
     same_run = meta.get("sfbofs_run") == f"{date_str}_t{run_hour}z"
     cached_hours = meta.get("sfbofs_hours", 0)
 
-    if same_run and cached_hours >= 48:
+    if same_run and cached_hours >= 7:
         logger.info(f"SFBOFS already complete ({date_str} t{run_hour}z, {cached_hours}h), skipping")
         return
 
@@ -266,14 +268,14 @@ def main():
 
     # For same run, only fetch hours missing from disk; for new run, fetch all
     if same_run:
-        hours_to_fetch = [h for h in range(49)
+        hours_to_fetch = [h for h in range(7)
                           if not (OUTPUT_DIR / f"hour_{h:02d}.json").exists()]
-        existing_count = 49 - len(hours_to_fetch)
+        existing_count = 7 - len(hours_to_fetch)
         logger.info(f"Run {date_str} t{run_hour}z: {existing_count} hours on disk, fetching {len(hours_to_fetch)} missing")
     else:
-        hours_to_fetch = list(range(49))
+        hours_to_fetch = list(range(7))
         existing_count = 0
-        logger.info(f"New run {date_str} t{run_hour}z: fetching all 49 hours")
+        logger.info(f"New run {date_str} t{run_hour}z: fetching all 7 hours")
 
     new_success = 0
     if hours_to_fetch:
@@ -291,7 +293,7 @@ def main():
                     logger.warning(f"Failed hour {hour}")
 
     total_success = existing_count + new_success
-    logger.info(f"SFBOFS: {total_success}/49 hours available ({new_success} newly fetched)")
+    logger.info(f"SFBOFS: {total_success}/7 hours available ({new_success} newly fetched)")
 
     # Save run ID as soon as any hours succeed so incremental logic kicks in on next retry
     if new_success > 0:
