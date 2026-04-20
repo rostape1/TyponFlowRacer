@@ -1865,15 +1865,17 @@ function _setDlCategory(cat, success) {
     }
     const s = _getDlStatus();
     s[cat] = new Date().toISOString();
+    if (cat === 'flow' && typeof success === 'number') s['flow_hours'] = success;
     localStorage.setItem('ais_dl_status', JSON.stringify(s));
-    _updateDlBadge(cat, 'done');
+    _updateDlBadge(cat, 'done', cat === 'flow' ? success : null);
 }
 
-function _updateDlBadge(cat, state) {
+function _updateDlBadge(cat, state, hours) {
     const el = document.getElementById(DL_BADGE_IDS[cat]);
     if (!el) return;
     el.classList.remove('done', 'loading');
     if (state) el.classList.add(state);
+    if (cat === 'flow') el.textContent = (hours > 0) ? `Flow ${hours}h` : 'Flow';
 }
 
 function _initDlBadges() {
@@ -1881,7 +1883,9 @@ function _initDlBadges() {
     const sixHours = 6 * 3600 * 1000;
     for (const cat of DL_CATEGORIES) {
         const ts = s[cat] ? new Date(s[cat]).getTime() : 0;
-        _updateDlBadge(cat, ts && (Date.now() - ts < sixHours) ? 'done' : null);
+        const isDone = ts && (Date.now() - ts < sixHours);
+        const hours = (cat === 'flow' && isDone) ? (s['flow_hours'] || null) : null;
+        _updateDlBadge(cat, isDone ? 'done' : null, hours);
     }
 }
 

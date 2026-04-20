@@ -443,7 +443,7 @@ async function downloadAllForOffline(onProgress, onCategory) {
         } catch (e) {}
         tick();
     }
-    if (onCategory) onCategory('flow', flowOk > 0);
+    if (onCategory) onCategory('flow', flowOk);
 
     // NDBC stations (still static JSON)
     try { await fetch(`${DATA_BASE}/wind/stations.json`); } catch (e) {}
