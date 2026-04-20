@@ -227,16 +227,21 @@ def main():
 
     date_str, run_hour = run_info
 
-    # Check if we already have this run cached
+    # Load meta to check what we already have
     meta_path = OUTPUT_DIR.parent / "meta.json"
+    meta = {}
     if meta_path.exists():
         try:
             meta = json.loads(meta_path.read_text())
-            if meta.get("sfbofs_run") == f"{date_str}_t{run_hour}z":
-                logger.info(f"SFBOFS data already up to date ({date_str} t{run_hour}z), skipping")
-                return
         except Exception:
             pass
+
+    same_run = meta.get("sfbofs_run") == f"{date_str}_t{run_hour}z"
+    cached_hours = meta.get("sfbofs_hours", 0)
+
+    if same_run and cached_hours >= 48:
+        logger.info(f"SFBOFS already complete ({date_str} t{run_hour}z, {cached_hours}h), skipping")
+        return
 
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -244,39 +249,43 @@ def main():
     d = datetime.strptime(date_str, "%Y%m%d")
     model_run_label = f"t{run_hour}z {d.month:02d}/{d.day:02d}"
 
-    # Process all 49 forecast hours in parallel
-    hours = list(range(49))
-    args = [(h, date_str, run_hour, model_run_label) for h in hours]
+    # For same run, only fetch hours missing from disk; for new run, fetch all
+    if same_run:
+        hours_to_fetch = [h for h in range(49)
+                          if not (OUTPUT_DIR / f"hour_{h:02d}.json").exists()]
+        existing_count = 49 - len(hours_to_fetch)
+        logger.info(f"Run {date_str} t{run_hour}z: {existing_count} hours on disk, fetching {len(hours_to_fetch)} missing")
+    else:
+        hours_to_fetch = list(range(49))
+        existing_count = 0
+        logger.info(f"New run {date_str} t{run_hour}z: fetching all 49 hours")
 
-    success = 0
-    with ProcessPoolExecutor(max_workers=4) as pool:
-        futures = {pool.submit(_process_hour, a): a[0] for a in args}
-        for future in as_completed(futures):
-            hour, result = future.result()
-            if result:
-                out_path = OUTPUT_DIR / f"hour_{hour:02d}.json"
-                out_path.write_text(json.dumps(result))
-                success += 1
-                logger.info(f"Wrote hour {hour:02d} ({success}/{len(hours)})")
-            else:
-                logger.warning(f"Failed hour {hour}")
+    new_success = 0
+    if hours_to_fetch:
+        args = [(h, date_str, run_hour, model_run_label) for h in hours_to_fetch]
+        with ProcessPoolExecutor(max_workers=4) as pool:
+            futures = {pool.submit(_process_hour, a): a[0] for a in args}
+            for future in as_completed(futures):
+                hour, result = future.result()
+                if result:
+                    out_path = OUTPUT_DIR / f"hour_{hour:02d}.json"
+                    out_path.write_text(json.dumps(result))
+                    new_success += 1
+                    logger.info(f"Wrote hour {hour:02d} ({new_success}/{len(hours_to_fetch)} new)")
+                else:
+                    logger.warning(f"Failed hour {hour}")
 
-    logger.info(f"SFBOFS complete: {success}/{len(hours)} hours processed")
+    total_success = existing_count + new_success
+    logger.info(f"SFBOFS: {total_success}/49 hours available ({new_success} newly fetched)")
 
-    # Only mark this run as fully fetched when we got most hours,
-    # so partial fetches get retried on the next cron run
-    meta = {}
-    if meta_path.exists():
-        try:
-            meta = json.loads(meta_path.read_text())
-        except Exception:
-            pass
-    if success >= 40:
+    # Mark run ID once we have ≥40 hours; keep retrying until ≥48
+    if total_success >= 40:
         meta["sfbofs_run"] = f"{date_str}_t{run_hour}z"
+    meta["sfbofs_hours"] = total_success
     meta["sfbofs_updated"] = datetime.now(timezone.utc).isoformat()
     meta_path.write_text(json.dumps(meta, indent=2))
 
-    if success == 0:
+    if total_success == 0:
         sys.exit(1)
 
 
