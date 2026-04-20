@@ -296,11 +296,6 @@ def main():
     # Save run ID as soon as any hours succeed so incremental logic kicks in on next retry
     if new_success > 0:
         meta["sfbofs_run"] = f"{date_str}_t{run_hour}z"
-    elif same_run and hours_to_fetch:
-        # Had missing hours, tried to fetch them, got nothing — this run may be
-        # permanently partial. Reset so next cron searches for a better run.
-        logger.warning(f"0/{len(hours_to_fetch)} missing hours fetched — resetting run ID for fresh search")
-        meta.pop("sfbofs_run", None)
     meta["sfbofs_hours"] = total_success
     meta["sfbofs_updated"] = datetime.now(timezone.utc).isoformat()
     meta_path.write_text(json.dumps(meta, indent=2))
