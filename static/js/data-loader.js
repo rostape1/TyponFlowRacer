@@ -67,7 +67,7 @@ function forecastHour(minutesOffset) {
 // --- SFBOFS Current Field ---
 
 async function fetchCurrentField(minutesOffset = 0) {
-    const hour = forecastHour(minutesOffset);
+    const hour = Math.min(6, forecastHour(minutesOffset));
     const url = `${DATA_BASE}/sfbofs/hour_${String(hour).padStart(2, '0')}.json`;
     const res = await fetch(url);
     if (!res.ok) return null;
@@ -425,7 +425,7 @@ async function fetchMeta() {
 
 async function downloadAllForOffline(onProgress, onCategory) {
     const { begin, end } = _noaaDateRange(0);
-    const totalItems = 49 + 1 + Object.keys(TIDE_STATIONS).length + Object.keys(CURRENT_STATIONS).length + 1;
+    const totalItems = 7 + 1 + Object.keys(TIDE_STATIONS).length + Object.keys(CURRENT_STATIONS).length + 1;
     let completed = 0;
 
     function tick() {
@@ -433,10 +433,10 @@ async function downloadAllForOffline(onProgress, onCategory) {
         if (onProgress) onProgress(completed, totalItems);
     }
 
-    // SFBOFS (49 files — still static JSON; stop on first 404, later hours may not exist)
+    // SFBOFS (7 files per run: hours 0-6; NOAA only publishes hours 0-6 per model run)
     let flowOk = 0;
     let flowModelRun = null;
-    for (let h = 0; h <= 48; h++) {
+    for (let h = 0; h <= 6; h++) {
         try {
             const resp = await fetch(`${DATA_BASE}/sfbofs/hour_${String(h).padStart(2, '0')}.json`);
             if (resp.ok) {
@@ -444,7 +444,7 @@ async function downloadAllForOffline(onProgress, onCategory) {
                 if (h === 0) {
                     try { const d = await resp.json(); flowModelRun = d.model_run; } catch (e) {}
                 }
-            } else if (resp.status === 404) break;
+            }
         } catch (e) {}
         tick();
     }
