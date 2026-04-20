@@ -43,8 +43,8 @@ Environmental data sources:
 | `scripts/fetch_sfbofs.py` | Download NOAA SFBOFS NetCDF, regrid (netCDF4+scipy), output per-hour JSON |
 | `scripts/fetch_ndbc.py` | Fetch NDBC buoy real-time observations (9 stations) |
 | `scripts/requirements.txt` | Python deps for SFBOFS processing (netCDF4, scipy, numpy) |
-| `workflows/sfbofs.yml` | Cron: every 6h after model runs |
-| `workflows/ndbc.yml` | Cron: every 10 min (buoy observations) |
+| `workflows/sfbofs.yml` | Cron: every hour at :20 — checks from nominal NOAA run time (03z/09z/15z/21z), retries until all 48h fetched; clears old run files on new run; saves sfbofs_run as soon as any hours succeed |
+| `workflows/ndbc.yml` | Cron: every 10 min (buoy observations); restores full cache (restore-keys: env-data-) so deploy always includes SFBOFS data |
 | `workflows/deploy.yml` | Assembles data + static site, deploys to GitHub Pages |
 
 ### Legacy Backend (project root, kept for reference/local dev)
