@@ -25,6 +25,8 @@ jobs:
         with:
           path: static/data
           key: env-data
+          restore-keys: |
+            env-data-
 
       - name: Fetch NDBC stations
         run: python .github/scripts/fetch_ndbc.py

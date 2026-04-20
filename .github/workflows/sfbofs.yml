@@ -2,7 +2,7 @@ name: Fetch SFBOFS Current Field
 
 on:
   schedule:
-    - cron: '20 * * * *'  # Every hour at :20 — hits 20min after each NOAA model run (03z/09z/15z/21z), retries until ≥40 hours fetched
+    - cron: '20 * * * *'  # Every hour at :20 — checks for new NOAA model run (03z/09z/15z/21z), retries until all 48 hours fetched
   workflow_dispatch:  # Manual trigger for testing
 
 permissions:
@@ -28,6 +28,8 @@ jobs:
         with:
           path: static/data
           key: env-data
+          restore-keys: |
+            env-data-
 
       - name: Fetch SFBOFS data
         run: python .github/scripts/fetch_sfbofs.py

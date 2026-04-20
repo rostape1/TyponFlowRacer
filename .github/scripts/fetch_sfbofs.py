@@ -71,7 +71,7 @@ def _find_latest_run() -> tuple[str, str] | None:
         date_str = d.strftime("%Y%m%d")
         for run in MODEL_RUNS:
             run_hour = int(run)
-            if days_back == 0 and now.hour < run_hour + 3:
+            if days_back == 0 and now.hour < run_hour:
                 continue
             url = _s3_url(date_str, run, forecast_hour=0)
             try:
@@ -245,6 +245,13 @@ def main():
 
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
+    # For a new run, clear stale hour files from the previous run first
+    # so hours that don't exist in the new run don't serve old data
+    if not same_run:
+        for old in OUTPUT_DIR.glob("hour_*.json"):
+            old.unlink()
+        logger.info("Cleared old run hour files")
+
     # Build a human-readable model run label, e.g. "t15z 04/19"
     d = datetime.strptime(date_str, "%Y%m%d")
     model_run_label = f"t{run_hour}z {d.month:02d}/{d.day:02d}"
@@ -278,8 +285,8 @@ def main():
     total_success = existing_count + new_success
     logger.info(f"SFBOFS: {total_success}/49 hours available ({new_success} newly fetched)")
 
-    # Mark run ID once we have ≥40 hours; keep retrying until ≥48
-    if total_success >= 40:
+    # Save run ID as soon as any hours succeed so incremental logic kicks in on next retry
+    if new_success > 0:
         meta["sfbofs_run"] = f"{date_str}_t{run_hour}z"
     meta["sfbofs_hours"] = total_success
     meta["sfbofs_updated"] = datetime.now(timezone.utc).isoformat()
