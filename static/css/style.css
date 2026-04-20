@@ -131,9 +131,15 @@ body {
     color: #27ae60;
 }
 
+@keyframes dl-pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.4; }
+}
+
 .dl-badge.loading {
     background: rgba(241, 196, 15, 0.2);
     color: #b8960a;
+    animation: dl-pulse 1.2s ease-in-out infinite;
 }
 
 .status-connected::before,

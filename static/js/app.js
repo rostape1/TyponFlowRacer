@@ -1991,8 +1991,9 @@ async function downloadForOffline(silent = false) {
         if (offlineDlBar) offlineDlBar.style.width = '0%';
     }
 
-    // Mark all badges as loading
+    // Mark all badges as loading and show "downloading" in status bar
     for (const cat of DL_CATEGORIES) _updateDlBadge(cat, 'loading');
+    if (offlineDlAge) offlineDlAge.textContent = 'DL: downloading\u2026';
 
     try {
         await downloadAllForOffline(
@@ -2003,7 +2004,7 @@ async function downloadForOffline(silent = false) {
                     if (offlineDlStatus) offlineDlStatus.textContent = `${completed} / ${total}`;
                 }
             },
-            (cat) => _setDlCategory(cat)
+            (cat, success) => _setDlCategory(cat, success)
         );
     } catch (e) {
         console.log('Offline download error:', e);
