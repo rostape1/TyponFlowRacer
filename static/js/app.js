@@ -1893,7 +1893,7 @@ function _updateDlBadge(cat, state, hours) {
     if (!el) return;
     el.classList.remove('done', 'loading');
     if (state) el.classList.add(state);
-    if (cat === 'flow') el.textContent = (hours != null) ? `Flow +${hours}h` : 'Flow';
+    if (cat === 'flow') el.textContent = (hours != null) ? `Flow +${hours}h` : (state === 'done' ? 'Flow \u2713' : 'Flow');
 }
 
 function _initDlBadges() {
