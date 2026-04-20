@@ -1858,6 +1858,19 @@ function _getDlStatus() {
     try { return JSON.parse(localStorage.getItem('ais_dl_status') || '{}'); } catch { return {}; }
 }
 
+// Compute hours of forward forecast remaining from stored model_run + file count
+function _flowHoursAhead(modelRun, count) {
+    if (!modelRun || !count) return null;
+    const m = modelRun.match(/t(\d{2})z (\d{2})\/(\d{2})/);
+    if (!m) return null;
+    const now = new Date();
+    let runTime = new Date(Date.UTC(now.getUTCFullYear(), +m[2] - 1, +m[3], +m[1], 0, 0));
+    // Guard against Dec/Jan year boundary: if runTime is >12h in future, it's last year
+    if (runTime - now > 12 * 3600000) runTime.setUTCFullYear(runTime.getUTCFullYear() - 1);
+    const lastHour = new Date(runTime.getTime() + (count - 1) * 3600000);
+    return Math.max(0, Math.floor((lastHour - now) / 3600000));
+}
+
 function _setDlCategory(cat, success) {
     if (!success) {
         _updateDlBadge(cat, null); // revert to dim — needs retry
@@ -1865,9 +1878,14 @@ function _setDlCategory(cat, success) {
     }
     const s = _getDlStatus();
     s[cat] = new Date().toISOString();
-    if (cat === 'flow' && typeof success === 'number') s['flow_hours'] = success;
+    let hoursAhead = null;
+    if (cat === 'flow' && typeof success === 'object') {
+        s['flow_count'] = success.count;
+        s['flow_model_run'] = success.modelRun || null;
+        hoursAhead = _flowHoursAhead(success.modelRun, success.count);
+    }
     localStorage.setItem('ais_dl_status', JSON.stringify(s));
-    _updateDlBadge(cat, 'done', cat === 'flow' ? success : null);
+    _updateDlBadge(cat, 'done', hoursAhead);
 }
 
 function _updateDlBadge(cat, state, hours) {
@@ -1875,7 +1893,7 @@ function _updateDlBadge(cat, state, hours) {
     if (!el) return;
     el.classList.remove('done', 'loading');
     if (state) el.classList.add(state);
-    if (cat === 'flow') el.textContent = (hours > 0) ? `Flow ${hours}h` : 'Flow';
+    if (cat === 'flow') el.textContent = (hours != null) ? `Flow +${hours}h` : 'Flow';
 }
 
 function _initDlBadges() {
@@ -1884,8 +1902,11 @@ function _initDlBadges() {
     for (const cat of DL_CATEGORIES) {
         const ts = s[cat] ? new Date(s[cat]).getTime() : 0;
         const isDone = ts && (Date.now() - ts < sixHours);
-        const hours = (cat === 'flow' && isDone) ? (s['flow_hours'] || null) : null;
-        _updateDlBadge(cat, isDone ? 'done' : null, hours);
+        // Recompute hoursAhead fresh from stored model_run + count so it stays accurate on reload
+        const hoursAhead = (cat === 'flow' && isDone)
+            ? _flowHoursAhead(s['flow_model_run'], s['flow_count'])
+            : null;
+        _updateDlBadge(cat, isDone ? 'done' : null, hoursAhead);
     }
 }
 

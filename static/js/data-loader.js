@@ -435,15 +435,20 @@ async function downloadAllForOffline(onProgress, onCategory) {
 
     // SFBOFS (49 files — still static JSON; stop on first 404, later hours may not exist)
     let flowOk = 0;
+    let flowModelRun = null;
     for (let h = 0; h <= 48; h++) {
         try {
             const resp = await fetch(`${DATA_BASE}/sfbofs/hour_${String(h).padStart(2, '0')}.json`);
-            if (resp.ok) flowOk++;
-            else if (resp.status === 404) break;
+            if (resp.ok) {
+                flowOk++;
+                if (h === 0) {
+                    try { const d = await resp.json(); flowModelRun = d.model_run; } catch (e) {}
+                }
+            } else if (resp.status === 404) break;
         } catch (e) {}
         tick();
     }
-    if (onCategory) onCategory('flow', flowOk);
+    if (onCategory) onCategory('flow', flowOk > 0 ? { count: flowOk, modelRun: flowModelRun } : false);
 
     // NDBC stations (still static JSON)
     try { await fetch(`${DATA_BASE}/wind/stations.json`); } catch (e) {}
