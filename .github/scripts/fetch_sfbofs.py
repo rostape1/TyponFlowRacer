@@ -71,7 +71,7 @@ def _find_latest_run() -> tuple[str, str] | None:
         date_str = d.strftime("%Y%m%d")
         for run in MODEL_RUNS:
             run_hour = int(run)
-            if days_back == 0 and now.hour < run_hour:
+            if days_back == 0 and now.hour < run_hour + 1:
                 continue
             url = _s3_url(date_str, run, forecast_hour=0)
             try:
