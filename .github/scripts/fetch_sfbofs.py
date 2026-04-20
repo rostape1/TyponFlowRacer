@@ -64,6 +64,15 @@ def _download_file(url: str, dest: str) -> bool:
         return False
 
 
+def _head_ok(url: str) -> bool:
+    try:
+        req = Request(url, method="HEAD", headers={"User-Agent": "AIS-Tracker/1.0"})
+        with urlopen(req, timeout=10):
+            return True
+    except (URLError, TimeoutError, OSError):
+        return False
+
+
 def _find_latest_run() -> tuple[str, str] | None:
     now = datetime.now(timezone.utc)
     for days_back in range(2):
@@ -73,14 +82,13 @@ def _find_latest_run() -> tuple[str, str] | None:
             run_hour = int(run)
             if days_back == 0 and now.hour < run_hour + 1:
                 continue
-            url = _s3_url(date_str, run, forecast_hour=0)
-            try:
-                req = Request(url, method="HEAD", headers={"User-Agent": "AIS-Tracker/1.0"})
-                with urlopen(req, timeout=10):
-                    logger.info(f"Found SFBOFS run: {date_str} t{run}z")
-                    return (date_str, run)
-            except (URLError, TimeoutError, OSError):
-                continue
+            # Require both hour_00 and hour_12 to exist — ensures the model
+            # has computed at least 12 forecast hours before we commit to it.
+            # A run with only hours 0-6 (still computing) will fail this check
+            # and we fall back to the previous complete run instead.
+            if _head_ok(_s3_url(date_str, run, 0)) and _head_ok(_s3_url(date_str, run, 12)):
+                logger.info(f"Found SFBOFS run: {date_str} t{run}z")
+                return (date_str, run)
     return None
 
 
@@ -288,6 +296,11 @@ def main():
     # Save run ID as soon as any hours succeed so incremental logic kicks in on next retry
     if new_success > 0:
         meta["sfbofs_run"] = f"{date_str}_t{run_hour}z"
+    elif same_run and hours_to_fetch:
+        # Had missing hours, tried to fetch them, got nothing — this run may be
+        # permanently partial. Reset so next cron searches for a better run.
+        logger.warning(f"0/{len(hours_to_fetch)} missing hours fetched — resetting run ID for fresh search")
+        meta.pop("sfbofs_run", None)
     meta["sfbofs_hours"] = total_success
     meta["sfbofs_updated"] = datetime.now(timezone.utc).isoformat()
     meta_path.write_text(json.dumps(meta, indent=2))
