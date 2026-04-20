@@ -110,6 +110,13 @@ body {
     font-size: 10px;
 }
 
+.app-build {
+    color: #2a4a6a;
+    font-size: 9px;
+    opacity: 0.6;
+    font-family: monospace;
+}
+
 .dl-indicators {
     display: flex;
     align-items: center;

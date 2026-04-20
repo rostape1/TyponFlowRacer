@@ -1969,6 +1969,8 @@ updateOfflineBanner();
 
 const offlineDlLast = document.getElementById('offline-dl-last');
 const offlineDlAge = document.getElementById('offline-dl-age');
+const appBuildEl = document.getElementById('app-build');
+if (appBuildEl) appBuildEl.textContent = APP_BUILD;
 
 function _notifySwCacheReady() {
     if (navigator.serviceWorker && navigator.serviceWorker.controller) {
