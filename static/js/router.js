@@ -138,14 +138,27 @@ class RouterDataStore {
     _buildWaterMask() {
         const nx = this.sfbofsNx;
         const ny = this.sfbofsNy;
-        const mask = new Uint8Array(ny * nx);
+        const raw = new Uint8Array(ny * nx);
         // Union across all hours: if ANY hour has non-zero velocity, it's water
         for (const grid of this.sfbofsGrids.values()) {
             for (let iy = 0; iy < ny; iy++) {
                 for (let ix = 0; ix < nx; ix++) {
                     if (grid.u[iy][ix] !== 0 || grid.v[iy][ix] !== 0) {
-                        mask[iy * nx + ix] = 1;
+                        raw[iy * nx + ix] = 1;
                     }
+                }
+            }
+        }
+        // Erode: a cell is only water if ALL 8 neighbors are also water.
+        // This pulls the boundary ~200m from shore, matching real chart coastline.
+        const mask = new Uint8Array(ny * nx);
+        for (let iy = 1; iy < ny - 1; iy++) {
+            for (let ix = 1; ix < nx - 1; ix++) {
+                if (raw[iy * nx + ix] &&
+                    raw[(iy - 1) * nx + ix - 1] && raw[(iy - 1) * nx + ix] && raw[(iy - 1) * nx + ix + 1] &&
+                    raw[iy * nx + ix - 1] && raw[iy * nx + ix + 1] &&
+                    raw[(iy + 1) * nx + ix - 1] && raw[(iy + 1) * nx + ix] && raw[(iy + 1) * nx + ix + 1]) {
+                    mask[iy * nx + ix] = 1;
                 }
             }
         }
