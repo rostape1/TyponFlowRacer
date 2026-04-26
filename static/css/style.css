@@ -1043,7 +1043,103 @@ body.panel-collapsed #panel-toggle {
     text-align: center;
 }
 
-/* Offline banner */
+/* Route planner panel */
+.route-panel {
+    position: fixed;
+    bottom: 90px;
+    right: 12px;
+    width: 210px;
+    background: rgba(10, 22, 40, 0.92);
+    backdrop-filter: blur(12px);
+    border: 1px solid rgba(100, 150, 200, 0.15);
+    border-radius: 10px;
+    padding: 10px 12px;
+    z-index: 1001;
+    font-size: 11px;
+    color: #c8d6e5;
+}
+
+.route-panel.hidden { display: none; }
+
+.route-panel-title {
+    font-size: 12px;
+    font-weight: 600;
+    color: #27ae60;
+    margin-bottom: 6px;
+}
+
+.route-status {
+    color: #a0b0c0;
+    margin-bottom: 6px;
+}
+
+.route-settings { margin-bottom: 6px; }
+
+.route-perf-label {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 10px;
+    color: #a0b0c0;
+}
+
+.route-perf-label input[type="range"] {
+    width: 80px;
+    accent-color: #27ae60;
+}
+
+.route-result {
+    border-top: 1px solid rgba(100, 150, 200, 0.15);
+    padding-top: 6px;
+    margin-top: 4px;
+}
+
+.route-result.hidden { display: none; }
+
+.route-result div {
+    display: flex;
+    justify-content: space-between;
+    padding: 2px 0;
+}
+
+.route-clear-btn {
+    margin-top: 8px;
+    width: 100%;
+    padding: 4px;
+    background: rgba(231, 76, 60, 0.2);
+    border: 1px solid rgba(231, 76, 60, 0.4);
+    border-radius: 4px;
+    color: #e74c3c;
+    font-size: 10px;
+    cursor: pointer;
+}
+
+.route-clear-btn.hidden { display: none; }
+
+#route-toggle {
+    background: rgba(39, 174, 96, 0.15);
+    border-color: rgba(39, 174, 96, 0.4);
+    color: #27ae60;
+}
+
+#route-toggle.route-off {
+    background: rgba(100, 100, 100, 0.15);
+    border-color: rgba(100, 100, 100, 0.3);
+    color: #666;
+}
+
+.route-time-label { background: none !important; border: none !important; }
+
+.route-tooltip {
+    background: rgba(10, 22, 40, 0.85) !important;
+    border: 1px solid rgba(100, 150, 200, 0.3) !important;
+    color: #c8d6e5 !important;
+    font-size: 10px !important;
+    padding: 2px 6px !important;
+    border-radius: 4px !important;
+}
+
+.leaflet-container.route-mode { cursor: crosshair !important; }
 .offline-banner {
     position: fixed;
     top: 0;

@@ -1003,12 +1003,138 @@ if (_mobileVesselList) {
 }
 
 // Close vessel list when tapping the map
-map.on('click', () => {
+map.on('click', (e) => {
     if (_mobileVesselsOn) closeMobileVesselList();
+    if (_routeMode) { _handleRouteClick(e); return; }
 });
 map.on('dragstart', () => {
     if (_mobileVesselsOn) closeMobileVesselList();
 });
+
+// --- Route Planner ---
+let _routeMode = false;  // 'start' | 'end' | false
+let _routeRenderer = null;
+let _routeStart = null;
+let _routeEnd = null;
+
+const _routeToggle = document.getElementById('route-toggle');
+const _routePanel = document.getElementById('route-panel');
+const _routeStatus = document.getElementById('route-status');
+const _routeResult = document.getElementById('route-result');
+const _routeEta = document.getElementById('route-eta');
+const _routeDistance = document.getElementById('route-distance');
+const _routeClear = document.getElementById('route-clear');
+const _routePerf = document.getElementById('route-perf');
+const _routePerfVal = document.getElementById('route-perf-val');
+
+if (_routePerf) {
+    _routePerf.addEventListener('input', () => {
+        if (_routePerfVal) _routePerfVal.textContent = _routePerf.value + '%';
+    });
+}
+
+if (_routeToggle) {
+    _routeToggle.addEventListener('click', () => {
+        if (_routeMode) {
+            _exitRouteMode();
+        } else {
+            _enterRouteMode();
+        }
+    });
+}
+
+if (_routeClear) {
+    _routeClear.addEventListener('click', () => {
+        _clearRoute();
+        _routeStatus.textContent = 'Click start point on map';
+        _routeMode = 'start';
+        map.getContainer().classList.add('route-mode');
+    });
+}
+
+function _enterRouteMode() {
+    _routeMode = 'start';
+    _routeStart = null;
+    _routeEnd = null;
+    if (!_routeRenderer) _routeRenderer = new RouteRenderer(map);
+    _routeRenderer.clear();
+    _routeToggle.textContent = 'Route: ON';
+    _routeToggle.classList.remove('route-off');
+    if (_routePanel) _routePanel.classList.remove('hidden');
+    if (_routeResult) _routeResult.classList.add('hidden');
+    if (_routeClear) _routeClear.classList.add('hidden');
+    _routeStatus.textContent = 'Click start point on map';
+    map.getContainer().classList.add('route-mode');
+}
+
+function _exitRouteMode() {
+    _routeMode = false;
+    _clearRoute();
+    _routeToggle.textContent = 'Route';
+    _routeToggle.classList.add('route-off');
+    if (_routePanel) _routePanel.classList.add('hidden');
+    map.getContainer().classList.remove('route-mode');
+}
+
+function _clearRoute() {
+    if (_routeRenderer) _routeRenderer.clear();
+    _routeStart = null;
+    _routeEnd = null;
+    if (_routeResult) _routeResult.classList.add('hidden');
+    if (_routeClear) _routeClear.classList.add('hidden');
+}
+
+async function _handleRouteClick(e) {
+    const { lat, lng: lon } = e.latlng;
+
+    if (_routeMode === 'start') {
+        _routeStart = { lat, lon };
+        _routeRenderer.setStart(lat, lon);
+        _routeStatus.textContent = 'Click end point on map';
+        _routeMode = 'end';
+    } else if (_routeMode === 'end') {
+        _routeEnd = { lat, lon };
+        _routeRenderer.setEnd(lat, lon);
+        map.getContainer().classList.remove('route-mode');
+        _routeMode = false;
+        await _runRoute();
+    }
+}
+
+async function _runRoute() {
+    const perf = (_routePerf ? parseInt(_routePerf.value) : 85) / 100;
+    _routeStatus.innerHTML = '<span style="color:#f39c12">Computing route...</span>';
+
+    const startTime = Date.now() + forecastMinutes * 60000;
+
+    try {
+        const result = await computeRoute(
+            _routeStart.lat, _routeStart.lon,
+            _routeEnd.lat, _routeEnd.lon,
+            startTime, perf,
+            (step, total) => {
+                _routeStatus.innerHTML = `<span style="color:#f39c12">Computing... ${Math.round(step / total * 100)}%</span>`;
+            }
+        );
+
+        if (result.error) {
+            _routeStatus.innerHTML = `<span style="color:#e74c3c">${result.error}</span>`;
+            if (_routeClear) _routeClear.classList.remove('hidden');
+            return;
+        }
+
+        _routeRenderer.drawRoute(result);
+        _routeStatus.innerHTML = '<span style="color:#2ecc71">Route computed</span>';
+
+        if (_routeEta) _routeEta.innerHTML = `<span style="color:#a0b0c0">ETA</span><span style="color:#f39c12;font-weight:600">${result.elapsedMin} min</span>`;
+        if (_routeDistance) _routeDistance.innerHTML = `<span style="color:#a0b0c0">Distance</span><span>${result.distanceNm} nm</span>`;
+        if (_routeResult) _routeResult.classList.remove('hidden');
+        if (_routeClear) _routeClear.classList.remove('hidden');
+    } catch (e) {
+        _routeStatus.innerHTML = `<span style="color:#e74c3c">Error: ${e.message}</span>`;
+        if (_routeClear) _routeClear.classList.remove('hidden');
+    }
+}
 
 // --- Vessel search ---
 document.getElementById('vessel-search').addEventListener('input', () => updatePanel());

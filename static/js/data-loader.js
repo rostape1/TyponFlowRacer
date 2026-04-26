@@ -572,3 +572,14 @@ async function downloadAllForOffline(onProgress, onCategory) {
 
     return { flowOk, tidesOk, currOk, windOk };
 }
+
+function getWindGridForHour(hour) {
+    if (_windGridCache && _windGridCache.grids.has(hour)) {
+        return _windGridCache.grids.get(hour);
+    }
+    return null;
+}
+
+function getSfbofsRunTime() {
+    return _sfbofsRunTime;
+}

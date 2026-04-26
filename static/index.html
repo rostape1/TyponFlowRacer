@@ -65,6 +65,7 @@
         <button id="wind-toggle" title="Toggle wind overlay">Wind: OFF</button>
         <button id="tide-toggle" title="Toggle tide height stations">Tide: OFF</button>
         <button id="vessels-toggle" title="Toggle vessel list">Vessels: OFF</button>
+        <button id="route-toggle" class="route-off" title="Plan optimal route">Route</button>
     </div>
 
     <!-- Forecast quick buttons (mobile only, replaces timeline scroll) -->
@@ -102,6 +103,21 @@
             <button id="forecast-cancel" class="time-picker-btn cancel">Cancel</button>
         </div>
         <div class="time-picker-note">Tides: unlimited &middot; Wind: up to 48h</div>
+    </div>
+
+    <!-- Route planner panel -->
+    <div id="route-panel" class="route-panel hidden">
+        <div class="route-panel-title">Route Planner</div>
+        <div id="route-status" class="route-status">Click start point on map</div>
+        <div class="route-settings">
+            <label class="route-perf-label">Performance: <input type="range" id="route-perf" min="50" max="100" value="85" step="5">
+            <span id="route-perf-val">85%</span></label>
+        </div>
+        <div id="route-result" class="route-result hidden">
+            <div id="route-eta"></div>
+            <div id="route-distance"></div>
+        </div>
+        <button id="route-clear" class="route-clear-btn hidden">Clear Route</button>
     </div>
 
     <!-- Current flow legend -->
@@ -164,6 +180,7 @@
             .then(() => loadScript('js/aisstream.js'))
             .then(() => loadScript('js/vessel-store.js'))
             .then(() => loadScript('js/data-loader.js'))
+            .then(() => loadScript('js/router.js'))
             .then(() => loadScript('js/app.js'));
 
         // Register service worker for PWA
