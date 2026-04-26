@@ -49,12 +49,11 @@ function getBoatSpeed(twaDeg, tws, perfFactor = 0.85) {
     return bsp * perfFactor;
 }
 
-// --- Water detection from NOAA chart tiles ---
-// Fetches nautical chart tiles and samples pixel colors to determine water vs land.
-// NOAA charts: water = white/light blue (RGB all > 200), land = tan/colored.
+// --- Water detection from CartoDB dark basemap tiles ---
+// CartoDB supports CORS (NOAA charts don't). The dark basemap is already
+// the default map layer. Water = dark navy blue (B > R), land = dark grey.
 
-const CHART_ZOOM = 12;
-const CHART_LOD = CHART_ZOOM - 2;
+const CHART_ZOOM = 13;
 const TILE_SIZE = 256;
 
 function _latLonToTile(lat, lon, zoom) {
@@ -100,11 +99,12 @@ class ChartWaterMask {
             }
         }
         await Promise.all(fetches);
+        console.log(`Route water mask: ${this.tileCache.size} tiles cached, ${fetches.length} new fetched`);
     }
 
     async _fetchTile(tx, ty, key) {
         try {
-            const url = `https://gis.charttools.noaa.gov/arcgis/rest/services/MarineChart_Services/NOAACharts/MapServer/tile/${CHART_LOD}/${ty}/${tx}`;
+            const url = `https://a.basemaps.cartocdn.com/dark_nolabels/${CHART_ZOOM}/${tx}/${ty}@2x.png`;
             const img = new Image();
             img.crossOrigin = 'anonymous';
             await new Promise((resolve, reject) => {
@@ -113,10 +113,11 @@ class ChartWaterMask {
                 img.src = url;
             });
             this.ctx.clearRect(0, 0, TILE_SIZE, TILE_SIZE);
-            this.ctx.drawImage(img, 0, 0);
+            this.ctx.drawImage(img, 0, 0, TILE_SIZE, TILE_SIZE);
             const imageData = this.ctx.getImageData(0, 0, TILE_SIZE, TILE_SIZE);
             this.tileCache.set(key, imageData);
         } catch (e) {
+            console.log(`Route tile failed: ${tx},${ty}`, e.message);
             this.tileCache.set(key, null);
         }
     }
@@ -130,19 +131,25 @@ class ChartWaterMask {
         const { px, py } = _latLonToPixelInTile(lat, lon, CHART_ZOOM, tile.x, tile.y);
         if (px < 0 || px >= TILE_SIZE || py < 0 || py >= TILE_SIZE) return true;
 
-        const idx = (py * TILE_SIZE + px) * 4;
-        const r = imageData.data[idx];
-        const g = imageData.data[idx + 1];
-        const b = imageData.data[idx + 2];
-        const a = imageData.data[idx + 3];
-
-        if (a < 128) return true;
-
-        // Water = blue/grey tint (B >= R): light blue, white, grey
-        // Land = yellow/tan (R much > B): sandy, beige, yellow
-        // Dark pixels (text, symbols, lines) = allow as water
-        if (r + g + b < 300) return true;
-        return b >= r - 15;
+        // Sample 3x3 area to avoid single-pixel features (roads, boundaries)
+        let waterCount = 0;
+        let totalCount = 0;
+        for (let dy = -1; dy <= 1; dy++) {
+            for (let dx = -1; dx <= 1; dx++) {
+                const sx = px + dx;
+                const sy = py + dy;
+                if (sx < 0 || sx >= TILE_SIZE || sy < 0 || sy >= TILE_SIZE) continue;
+                totalCount++;
+                const idx = (sy * TILE_SIZE + sx) * 4;
+                const r = imageData.data[idx];
+                const g = imageData.data[idx + 1];
+                const b = imageData.data[idx + 2];
+                // CartoDB dark_nolabels: water is navy blue (b > r, all dark)
+                // Land is dark grey (r ≈ g ≈ b, slightly brighter)
+                if (b > r + 2) waterCount++;
+            }
+        }
+        return waterCount >= Math.ceil(totalCount / 2);
     }
 }
 
