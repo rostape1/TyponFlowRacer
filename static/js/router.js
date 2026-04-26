@@ -49,6 +49,102 @@ function getBoatSpeed(twaDeg, tws, perfFactor = 0.85) {
     return bsp * perfFactor;
 }
 
+// --- Water detection from NOAA chart tiles ---
+// Fetches nautical chart tiles and samples pixel colors to determine water vs land.
+// NOAA charts: water = white/light blue (RGB all > 200), land = tan/colored.
+
+const CHART_ZOOM = 12;
+const CHART_LOD = CHART_ZOOM - 2;
+const TILE_SIZE = 256;
+
+function _latLonToTile(lat, lon, zoom) {
+    const n = 2 ** zoom;
+    const x = Math.floor((lon + 180) / 360 * n);
+    const latRad = lat * DEG2RAD;
+    const y = Math.floor((1 - Math.log(Math.tan(latRad) + 1 / Math.cos(latRad)) / Math.PI) / 2 * n);
+    return { x, y };
+}
+
+function _latLonToPixelInTile(lat, lon, zoom, tileX, tileY) {
+    const n = 2 ** zoom;
+    const px = ((lon + 180) / 360 * n - tileX) * TILE_SIZE;
+    const latRad = lat * DEG2RAD;
+    const py = ((1 - Math.log(Math.tan(latRad) + 1 / Math.cos(latRad)) / Math.PI) / 2 * n - tileY) * TILE_SIZE;
+    return { px: Math.floor(px), py: Math.floor(py) };
+}
+
+class ChartWaterMask {
+    constructor() {
+        this.tileCache = new Map();
+        this.canvas = null;
+        this.ctx = null;
+    }
+
+    async preloadArea(south, north, west, east) {
+        if (!this.canvas) {
+            this.canvas = document.createElement('canvas');
+            this.canvas.width = TILE_SIZE;
+            this.canvas.height = TILE_SIZE;
+            this.ctx = this.canvas.getContext('2d', { willReadFrequently: true });
+        }
+
+        const tl = _latLonToTile(north, west, CHART_ZOOM);
+        const br = _latLonToTile(south, east, CHART_ZOOM);
+
+        const fetches = [];
+        for (let ty = tl.y; ty <= br.y; ty++) {
+            for (let tx = tl.x; tx <= br.x; tx++) {
+                const key = `${tx}_${ty}`;
+                if (this.tileCache.has(key)) continue;
+                fetches.push(this._fetchTile(tx, ty, key));
+            }
+        }
+        await Promise.all(fetches);
+    }
+
+    async _fetchTile(tx, ty, key) {
+        try {
+            const url = `https://gis.charttools.noaa.gov/arcgis/rest/services/MarineChart_Services/NOAACharts/MapServer/tile/${CHART_LOD}/${ty}/${tx}`;
+            const img = new Image();
+            img.crossOrigin = 'anonymous';
+            await new Promise((resolve, reject) => {
+                img.onload = resolve;
+                img.onerror = reject;
+                img.src = url;
+            });
+            this.ctx.clearRect(0, 0, TILE_SIZE, TILE_SIZE);
+            this.ctx.drawImage(img, 0, 0);
+            const imageData = this.ctx.getImageData(0, 0, TILE_SIZE, TILE_SIZE);
+            this.tileCache.set(key, imageData);
+        } catch (e) {
+            this.tileCache.set(key, null);
+        }
+    }
+
+    isWater(lat, lon) {
+        const tile = _latLonToTile(lat, lon, CHART_ZOOM);
+        const key = `${tile.x}_${tile.y}`;
+        const imageData = this.tileCache.get(key);
+        if (!imageData) return true;
+
+        const { px, py } = _latLonToPixelInTile(lat, lon, CHART_ZOOM, tile.x, tile.y);
+        if (px < 0 || px >= TILE_SIZE || py < 0 || py >= TILE_SIZE) return true;
+
+        const idx = (py * TILE_SIZE + px) * 4;
+        const r = imageData.data[idx];
+        const g = imageData.data[idx + 1];
+        const b = imageData.data[idx + 2];
+        const a = imageData.data[idx + 3];
+
+        // Transparent pixels = no chart coverage = assume ocean
+        if (a < 128) return true;
+
+        // NOAA charts: water is white or very light blue (all channels > 200)
+        // Land is tan/beige/green (at least one channel significantly lower)
+        return r > 200 && g > 200 && b > 200;
+    }
+}
+
 // --- Haversine ---
 const DEG2RAD = Math.PI / 180;
 const RAD2DEG = 180 / Math.PI;
@@ -75,14 +171,14 @@ class RouterDataStore {
     constructor() {
         this.sfbofsGrids = new Map();
         this.windGrids = new Map();
-        this.waterMask = null;
+        this.chartMask = new ChartWaterMask();
         this.sfbofsBounds = null;
         this.sfbofsNx = 0;
         this.sfbofsNy = 0;
         this.startTimeMs = 0;
     }
 
-    async preload(startTimeMs, hoursNeeded) {
+    async preload(startTimeMs, hoursNeeded, startLat, startLon, endLat, endLon) {
         this.startTimeMs = startTimeMs;
         this.sfbofsGrids.clear();
         this.windGrids.clear();
@@ -119,68 +215,29 @@ class RouterDataStore {
             } catch (e) {}
         }
 
-        // Build water mask from ALL loaded SFBOFS grids (union: any hour non-zero = water)
+        // Store SFBOFS bounds for current interpolation
         const firstGrid = this.sfbofsGrids.values().next().value;
         if (firstGrid) {
             this.sfbofsBounds = firstGrid.bounds;
             this.sfbofsNx = firstGrid.nx;
             this.sfbofsNy = firstGrid.ny;
-            this._buildWaterMask();
         }
+
+        // Pre-load NOAA chart tiles for the routing area
+        const south = Math.min(startLat, endLat) - 0.05;
+        const north = Math.max(startLat, endLat) + 0.05;
+        const west = Math.min(startLon, endLon) - 0.05;
+        const east = Math.max(startLon, endLon) + 0.05;
+        await this.chartMask.preloadArea(south, north, west, east);
 
         return {
             sfbofsHours: this.sfbofsGrids.size,
             windHours: this.windGrids.size,
-            hasWaterMask: !!this.waterMask,
         };
     }
 
-    _buildWaterMask() {
-        const nx = this.sfbofsNx;
-        const ny = this.sfbofsNy;
-        const raw = new Uint8Array(ny * nx);
-        // Union across all hours: if ANY hour has non-zero velocity, it's water
-        for (const grid of this.sfbofsGrids.values()) {
-            for (let iy = 0; iy < ny; iy++) {
-                for (let ix = 0; ix < nx; ix++) {
-                    if (grid.u[iy][ix] !== 0 || grid.v[iy][ix] !== 0) {
-                        raw[iy * nx + ix] = 1;
-                    }
-                }
-            }
-        }
-        // Erode: a cell is only water if ALL 8 neighbors are also water.
-        // This pulls the boundary ~200m from shore, matching real chart coastline.
-        const mask = new Uint8Array(ny * nx);
-        for (let iy = 1; iy < ny - 1; iy++) {
-            for (let ix = 1; ix < nx - 1; ix++) {
-                if (raw[iy * nx + ix] &&
-                    raw[(iy - 1) * nx + ix - 1] && raw[(iy - 1) * nx + ix] && raw[(iy - 1) * nx + ix + 1] &&
-                    raw[iy * nx + ix - 1] && raw[iy * nx + ix + 1] &&
-                    raw[(iy + 1) * nx + ix - 1] && raw[(iy + 1) * nx + ix] && raw[(iy + 1) * nx + ix + 1]) {
-                    mask[iy * nx + ix] = 1;
-                }
-            }
-        }
-        this.waterMask = mask;
-    }
-
     isWater(lat, lon) {
-        if (!this.waterMask || !this.sfbofsBounds) return true;
-        const b = this.sfbofsBounds;
-        // Outside SFBOFS grid = open ocean, allow navigation (no current data there)
-        if (lat < b.south || lat > b.north || lon < b.west || lon > b.east) return true;
-        const fy = (lat - b.south) / (b.north - b.south) * (this.sfbofsNy - 1);
-        const fx = (lon - b.west) / (b.east - b.west) * (this.sfbofsNx - 1);
-        const iy = Math.floor(fy);
-        const ix = Math.floor(fx);
-        if (iy < 0 || iy >= this.sfbofsNy - 1 || ix < 0 || ix >= this.sfbofsNx - 1) return true;
-        // All 4 bilinear neighbors must be water (prevents skirting land boundaries)
-        const nx = this.sfbofsNx;
-        return this.waterMask[iy * nx + ix] === 1 &&
-               this.waterMask[iy * nx + ix + 1] === 1 &&
-               this.waterMask[(iy + 1) * nx + ix] === 1 &&
-               this.waterMask[(iy + 1) * nx + ix + 1] === 1;
+        return this.chartMask.isWater(lat, lon);
     }
 
     _bilinearGrid(grid, lat, lon) {
@@ -284,7 +341,7 @@ function computeRoute(startLat, startLon, endLat, endLon, startTimeMs, perfFacto
 
     const hoursNeeded = Math.ceil(MAX_TIME_S / 3600) + 1;
 
-    return store.preload(startTimeMs, hoursNeeded).then(info => {
+    return store.preload(startTimeMs, hoursNeeded, startLat, startLon, endLat, endLon).then(info => {
         if (info.windHours === 0) {
             return { error: 'No wind data available' };
         }
