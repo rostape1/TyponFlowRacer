@@ -153,14 +153,15 @@ class RouterDataStore {
     }
 
     isWater(lat, lon) {
-        if (!this.waterMask || !this.sfbofsBounds) return false;
+        if (!this.waterMask || !this.sfbofsBounds) return true;
         const b = this.sfbofsBounds;
-        if (lat < b.south || lat > b.north || lon < b.west || lon > b.east) return false;
+        // Outside SFBOFS grid = open ocean, allow navigation (no current data there)
+        if (lat < b.south || lat > b.north || lon < b.west || lon > b.east) return true;
         const fy = (lat - b.south) / (b.north - b.south) * (this.sfbofsNy - 1);
         const fx = (lon - b.west) / (b.east - b.west) * (this.sfbofsNx - 1);
         const iy = Math.floor(fy);
         const ix = Math.floor(fx);
-        if (iy < 0 || iy >= this.sfbofsNy - 1 || ix < 0 || ix >= this.sfbofsNx - 1) return false;
+        if (iy < 0 || iy >= this.sfbofsNy - 1 || ix < 0 || ix >= this.sfbofsNx - 1) return true;
         // All 4 bilinear neighbors must be water (prevents skirting land boundaries)
         const nx = this.sfbofsNx;
         return this.waterMask[iy * nx + ix] === 1 &&
