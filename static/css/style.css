@@ -542,6 +542,12 @@ body.panel-collapsed #panel-toggle {
     padding-top: 4px;
 }
 
+.flow-legend-confidence {
+    font-size: 9px;
+    margin-top: 3px;
+    line-height: 1.3;
+}
+
 /* Wind speed legend */
 #wind-legend {
     position: fixed;

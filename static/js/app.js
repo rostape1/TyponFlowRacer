@@ -1395,6 +1395,7 @@ async function loadTideHeight() {
                 }
             }
             updateTideMarkers();
+            updateFlowConfidence();
         }
     } catch (e) {
         console.log('Tide height fetch failed:', e);
@@ -1481,6 +1482,44 @@ function updateTideMarkers() {
     if (tideMarkersVisible) {
         tideStationMarkers.addTo(map);
     }
+}
+
+function updateFlowConfidence() {
+    const el = document.getElementById('flow-legend-confidence');
+    if (!el) return;
+
+    if (forecastMinutes !== 0) {
+        el.innerHTML = '';
+        return;
+    }
+
+    const gauged = tideStations.filter(s => s.observed_ft != null && s.height_ft != null);
+    if (!gauged.length) {
+        el.innerHTML = '';
+        return;
+    }
+
+    const deltas = gauged.map(s => Math.abs(s.observed_ft - s.height_ft));
+    const maxDelta = Math.max(...deltas);
+    const avgDelta = deltas.reduce((a, b) => a + b, 0) / deltas.length;
+
+    let dot, label, detail;
+    if (avgDelta <= 0.3) {
+        dot = '🟢';
+        label = 'High confidence';
+        detail = 'Gauges match predictions — current speed & timing reliable';
+    } else if (avgDelta <= 0.5) {
+        dot = '🟡';
+        label = 'Moderate confidence';
+        detail = 'Gauges diverging — currents may be 10-20% stronger, slack times ±15 min';
+    } else {
+        dot = '🔴';
+        label = 'Low confidence';
+        detail = 'Large gauge mismatch — expect stronger currents & shifted slack times';
+    }
+
+    const avgSign = gauged.reduce((a, s) => a + (s.observed_ft - s.height_ft), 0) > 0 ? 'higher' : 'lower';
+    el.innerHTML = `<span>${dot} ${label}</span> <span style="color:#4a6a8a">(avg Δ${avgDelta.toFixed(1)}ft ${avgSign})</span><br><span style="color:#4a6a8a">${detail}</span>`;
 }
 
 loadTideHeight();
