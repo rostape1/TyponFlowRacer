@@ -34,9 +34,20 @@ const CURRENT_STATIONS = {
     'SFB1211': { name: 'Bay Bridge', lat: 37.8033, lon: -122.3633 },
 };
 
+// Stations that have real-time water level gauges
+const WATER_LEVEL_STATIONS = new Set([
+    '9414290', // San Francisco (Golden Gate)
+    '9414750', // Alameda
+    '9414523', // Redwood City
+    '9414863', // Richmond (Chevron Pier)
+    '9415102', // Martinez
+    '9415144', // Port Chicago
+]);
+
 // Cache for fetched station data
 const _tideCache = new Map();   // stationId → { predictions, fetchedAt }
 const _currentCache = new Map();
+const _waterLevelCache = new Map(); // stationId → { value, time, fetchedAt }
 
 const DATA_BASE = 'data';  // Relative to site root (for SFBOFS + NDBC static JSON)
 const NOAA_API = 'https://api.tidesandcurrents.noaa.gov/api/prod/datagetter';
@@ -327,6 +338,46 @@ async function fetchTideHeights(minutesOffset = 0) {
 
     const all = await Promise.all(fetches);
     return all.filter(r => r !== null);
+}
+
+// --- Real-time Water Level Observations ---
+
+async function fetchWaterLevels() {
+    const fetches = [...WATER_LEVEL_STATIONS].map(async (stationId) => {
+        try {
+            let cached = _waterLevelCache.get(stationId);
+            if (cached && Date.now() - cached.fetchedAt < 10 * 60000) {
+                return { station_id: stationId, ...cached };
+            }
+
+            const url = `${NOAA_API}?date=latest&station=${stationId}&product=water_level&datum=MLLW&units=english&time_zone=gmt&format=json`;
+            const res = await fetch(url);
+            if (!res.ok) return null;
+            const json = await res.json();
+            if (json.error || !json.data || !json.data.length) return null;
+
+            const d = json.data[0];
+            const entry = {
+                station_id: stationId,
+                value: parseFloat(d.v),
+                time: d.t,
+                sigma: parseFloat(d.s),
+                quality: d.q,
+                fetchedAt: Date.now(),
+            };
+            _waterLevelCache.set(stationId, entry);
+            return entry;
+        } catch (e) {
+            return null;
+        }
+    });
+
+    const all = await Promise.all(fetches);
+    const result = new Map();
+    for (const r of all) {
+        if (r && !isNaN(r.value)) result.set(r.station_id, r);
+    }
+    return result;
 }
 
 // --- Tidal Current Interpolation ---

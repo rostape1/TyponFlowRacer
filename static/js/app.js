@@ -1370,7 +1370,7 @@ async function loadWindField() {
 loadWindField();
 
 // --- Tide Height Stations ---
-let tideStations = [];  // array of {station_id, name, lat, lon, height_ft, next_extreme}
+let tideStations = [];  // array of {station_id, name, lat, lon, height_ft, next_extreme, observed_ft?, obs_time?}
 let tideStationMarkers = null;  // L.layerGroup
 let tideMarkersVisible = false;
 
@@ -1379,6 +1379,21 @@ async function loadTideHeight() {
         const data = await fetchTideHeights(forecastMinutes);
         if (Array.isArray(data)) {
             tideStations = data;
+            // Fetch real-time observations only in real-time mode
+            if (forecastMinutes === 0) {
+                try {
+                    const obs = await fetchWaterLevels();
+                    for (const s of tideStations) {
+                        const wl = obs.get(s.station_id);
+                        if (wl) {
+                            s.observed_ft = wl.value;
+                            s.obs_time = wl.time;
+                        }
+                    }
+                } catch (e) {
+                    console.log('Water level fetch failed:', e);
+                }
+            }
             updateTideMarkers();
         }
     } catch (e) {
@@ -1404,8 +1419,11 @@ function updateTideMarkers() {
         const textY = size / 2 + (hasData ? 1 : 5);
         const fontSize = hasData ? 11 : 12;
         const ftLine = hasData ? `<text x="${size/2}" y="${size/2 + 13}" text-anchor="middle" fill="${color}" font-size="8">ft</text>` : '';
+        const hasGauge = s.observed_ft != null;
+        const gaugeRing = hasGauge ? `<circle cx="${size/2}" cy="${size/2}" r="${size/2 - 0.5}" fill="none" stroke="#2ecc71" stroke-width="1.5" stroke-dasharray="3,2"/>` : '';
         const svg = `<svg width="${size}" height="${size}" viewBox="0 0 ${size} ${size}" xmlns="http://www.w3.org/2000/svg">
             <circle cx="${size/2}" cy="${size/2}" r="${size/2 - 2}" fill="rgba(10,22,40,0.9)" stroke="${color}" stroke-width="2.5"/>
+            ${gaugeRing}
             <text x="${size/2}" y="${textY}" text-anchor="middle" dominant-baseline="middle" fill="${color}" font-size="${fontSize}" font-weight="bold">${label}</text>
             ${ftLine}
         </svg>`;
@@ -1422,7 +1440,16 @@ function updateTideMarkers() {
         if (!hasData) {
             popupRows = `<div class="popup-row"><span class="popup-label">Tide Height</span><span class="popup-value" style="color:#888">Data unavailable</span></div>`;
         } else {
-            popupRows = `<div class="popup-row"><span class="popup-label">Tide Height</span><span class="popup-value" style="color:${color}">${sign}${h.toFixed(2)} ft</span></div>`;
+            popupRows = `<div class="popup-row"><span class="popup-label">Predicted</span><span class="popup-value" style="color:${color}">${sign}${h.toFixed(2)} ft</span></div>`;
+            if (s.observed_ft != null) {
+                const obsSign = s.observed_ft >= 0 ? '+' : '';
+                const obsColor = s.observed_ft >= 0 ? '#5dade2' : '#e74c3c';
+                const delta = s.observed_ft - h;
+                const deltaSign = delta >= 0 ? '+' : '';
+                const deltaColor = Math.abs(delta) <= 0.3 ? '#2ecc71' : '#f39c12';
+                popupRows += `<div class="popup-row"><span class="popup-label">Observed</span><span class="popup-value" style="color:${obsColor}">${obsSign}${s.observed_ft.toFixed(2)} ft</span></div>`;
+                popupRows += `<div class="popup-row"><span class="popup-label">Difference</span><span class="popup-value" style="color:${deltaColor}">${deltaSign}${delta.toFixed(2)} ft</span></div>`;
+            }
             if (s.next_extreme) {
                 const ex = s.next_extreme;
                 const exTime = new Date(ex.time + 'Z').toLocaleTimeString('en-US', {
