@@ -104,7 +104,9 @@ class ChartWaterMask {
 
     async _fetchTile(tx, ty, key) {
         try {
-            const url = `https://a.basemaps.cartocdn.com/dark_nolabels/${CHART_ZOOM}/${tx}/${ty}@2x.png`;
+            const subs = ['a', 'b', 'c', 'd'];
+            const sub = subs[(tx + ty) % subs.length];
+            const url = `https://${sub}.basemaps.cartocdn.com/dark_nolabels/${CHART_ZOOM}/${tx}/${ty}.png`;
             const img = new Image();
             img.crossOrigin = 'anonymous';
             await new Promise((resolve, reject) => {
@@ -116,6 +118,12 @@ class ChartWaterMask {
             this.ctx.drawImage(img, 0, 0, TILE_SIZE, TILE_SIZE);
             const imageData = this.ctx.getImageData(0, 0, TILE_SIZE, TILE_SIZE);
             this.tileCache.set(key, imageData);
+            if (this.tileCache.size === 1) {
+                const cx = 128, cy = 128;
+                const idx = (cy * TILE_SIZE + cx) * 4;
+                const d = imageData.data;
+                console.log(`Water mask calibration: tile ${tx},${ty} center pixel RGB(${d[idx]}, ${d[idx+1]}, ${d[idx+2]})`);
+            }
         } catch (e) {
             console.log(`Route tile failed: ${tx},${ty}`, e.message);
             this.tileCache.set(key, null);
