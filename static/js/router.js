@@ -119,13 +119,13 @@ class RouterDataStore {
             } catch (e) {}
         }
 
-        // Build water mask from first available SFBOFS grid
+        // Build water mask from ALL loaded SFBOFS grids (union: any hour non-zero = water)
         const firstGrid = this.sfbofsGrids.values().next().value;
         if (firstGrid) {
             this.sfbofsBounds = firstGrid.bounds;
             this.sfbofsNx = firstGrid.nx;
             this.sfbofsNy = firstGrid.ny;
-            this._buildWaterMask(firstGrid);
+            this._buildWaterMask();
         }
 
         return {
@@ -135,12 +135,17 @@ class RouterDataStore {
         };
     }
 
-    _buildWaterMask(grid) {
-        const mask = new Uint8Array(grid.ny * grid.nx);
-        for (let iy = 0; iy < grid.ny; iy++) {
-            for (let ix = 0; ix < grid.nx; ix++) {
-                if (grid.u[iy][ix] !== 0 || grid.v[iy][ix] !== 0) {
-                    mask[iy * grid.nx + ix] = 1;
+    _buildWaterMask() {
+        const nx = this.sfbofsNx;
+        const ny = this.sfbofsNy;
+        const mask = new Uint8Array(ny * nx);
+        // Union across all hours: if ANY hour has non-zero velocity, it's water
+        for (const grid of this.sfbofsGrids.values()) {
+            for (let iy = 0; iy < ny; iy++) {
+                for (let ix = 0; ix < nx; ix++) {
+                    if (grid.u[iy][ix] !== 0 || grid.v[iy][ix] !== 0) {
+                        mask[iy * nx + ix] = 1;
+                    }
                 }
             }
         }
@@ -148,15 +153,20 @@ class RouterDataStore {
     }
 
     isWater(lat, lon) {
-        if (!this.waterMask || !this.sfbofsBounds) return true;
+        if (!this.waterMask || !this.sfbofsBounds) return false;
         const b = this.sfbofsBounds;
-        if (lat < b.south || lat > b.north || lon < b.west || lon > b.east) return true;
+        if (lat < b.south || lat > b.north || lon < b.west || lon > b.east) return false;
         const fy = (lat - b.south) / (b.north - b.south) * (this.sfbofsNy - 1);
         const fx = (lon - b.west) / (b.east - b.west) * (this.sfbofsNx - 1);
-        const iy = Math.round(fy);
-        const ix = Math.round(fx);
-        if (iy < 0 || iy >= this.sfbofsNy || ix < 0 || ix >= this.sfbofsNx) return true;
-        return this.waterMask[iy * this.sfbofsNx + ix] === 1;
+        const iy = Math.floor(fy);
+        const ix = Math.floor(fx);
+        if (iy < 0 || iy >= this.sfbofsNy - 1 || ix < 0 || ix >= this.sfbofsNx - 1) return false;
+        // All 4 bilinear neighbors must be water (prevents skirting land boundaries)
+        const nx = this.sfbofsNx;
+        return this.waterMask[iy * nx + ix] === 1 &&
+               this.waterMask[iy * nx + ix + 1] === 1 &&
+               this.waterMask[(iy + 1) * nx + ix] === 1 &&
+               this.waterMask[(iy + 1) * nx + ix + 1] === 1;
     }
 
     _bilinearGrid(grid, lat, lon) {
