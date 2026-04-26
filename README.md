@@ -62,9 +62,9 @@ NOAA publishes the SF Bay hydrodynamic model 4× per day (03z / 09z / 15z / 21z 
 
 **GitHub Actions cron: every hour at :20**
 
-1. `_find_latest_run()` scans NOAA S3 newest-first. A run only qualifies if **both** `hour_00` and `hour_12` exist — ensures at least 12 forecast hours are computed before we commit to it.
+1. `_find_latest_run()` scans NOAA S3 newest-first for the latest available forecast run.
 2. Runs that started less than 1 hour ago are skipped (model is still initialising).
-3. **New run:** clears old hour files, downloads all 49 hours in parallel (4 workers), saves `sfbofs_run` in `meta.json` as soon as any hours succeed.
+3. **New run:** clears old hour files, downloads all 49 forecast hours (`f000`–`f048`) in parallel (4 workers), saves `sfbofs_run` in `meta.json` as soon as any hours succeed. Note: SFBOFS also publishes nowcast files (`n000`–`n006`, hindcast/analysis) — we only fetch the `f` (forecast) files where `f000` = cycle time.
 4. **Same run, hours missing:** downloads only the missing `hour_XX.json` files — incremental fill until all 48h are present.
 5. **Same run, complete (≥48h):** skips entirely, no download or deploy.
 6. Triggers GitHub Pages deploy after each fetch.
