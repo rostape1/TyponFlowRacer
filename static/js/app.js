@@ -1503,6 +1503,8 @@ function updateFlowConfidence() {
     const maxDelta = Math.max(...deltas);
     const avgDelta = deltas.reduce((a, b) => a + b, 0) / deltas.length;
 
+    const avgSign = gauged.reduce((a, s) => a + (s.observed_ft - s.height_ft), 0) > 0 ? 'higher' : 'lower';
+
     let dot, label, detail;
     if (avgDelta <= 0.3) {
         dot = '🟢';
@@ -1511,14 +1513,17 @@ function updateFlowConfidence() {
     } else if (avgDelta <= 0.5) {
         dot = '🟡';
         label = 'Moderate confidence';
-        detail = 'Gauges diverging — currents may be 10-20% stronger, slack times ±15 min';
+        detail = avgSign === 'higher'
+            ? 'Water higher than predicted — currents ~10-20% stronger, slack may come earlier'
+            : 'Water lower than predicted — currents ~10-20% weaker, slack may come later';
     } else {
         dot = '🔴';
         label = 'Low confidence';
-        detail = 'Large gauge mismatch — expect stronger currents & shifted slack times';
+        detail = avgSign === 'higher'
+            ? 'Water much higher — expect stronger currents & earlier slack times'
+            : 'Water much lower — expect weaker currents & later slack times';
     }
 
-    const avgSign = gauged.reduce((a, s) => a + (s.observed_ft - s.height_ft), 0) > 0 ? 'higher' : 'lower';
     el.innerHTML = `<span>${dot} ${label}</span> <span style="color:#4a6a8a">(avg Δ${avgDelta.toFixed(1)}ft ${avgSign})</span><br><span style="color:#4a6a8a">${detail}</span>`;
 }
 
