@@ -355,7 +355,7 @@ function computeRoute(startLat, startLon, endLat, endLon, startTimeMs, perfFacto
                 return { error: 'No reachable path found' };
             }
 
-            wavefront = _pruneIsochrone(newPoints, startLat, startLon);
+            wavefront = _pruneIsochrone(newPoints, startLat, startLon, endLat, endLon);
 
             if (step % 5 === 0) {
                 isochrones.push(wavefront.map(p => [p.lat, p.lon]));
@@ -385,16 +385,19 @@ function _pathDistance(path) {
     return Math.round(d * 10) / 10;
 }
 
-function _pruneIsochrone(points, originLat, originLon) {
+function _pruneIsochrone(points, originLat, originLon, destLat, destLon) {
     const sectors = new Array(PRUNE_SECTORS).fill(null);
+    const destBrg = _bearingDeg(originLat, originLon, destLat, destLon);
 
     for (const pt of points) {
+        // Sector based on bearing from origin (preserves full directional spread)
         const brg = _bearingDeg(originLat, originLon, pt.lat, pt.lon);
         const sector = Math.floor(brg / (360 / PRUNE_SECTORS)) % PRUNE_SECTORS;
-        const dist = _haversineNm(originLat, originLon, pt.lat, pt.lon);
+        // Score by closeness to destination (lower = better)
+        const distToDest = _haversineNm(pt.lat, pt.lon, destLat, destLon);
 
-        if (!sectors[sector] || dist > sectors[sector].dist) {
-            sectors[sector] = { pt, dist };
+        if (!sectors[sector] || distToDest < sectors[sector].distToDest) {
+            sectors[sector] = { pt, distToDest };
         }
     }
 
