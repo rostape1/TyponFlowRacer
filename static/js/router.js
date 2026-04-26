@@ -136,12 +136,13 @@ class ChartWaterMask {
         const b = imageData.data[idx + 2];
         const a = imageData.data[idx + 3];
 
-        // Transparent pixels = no chart coverage = assume ocean
         if (a < 128) return true;
 
-        // NOAA charts: water is white or very light blue (all channels > 200)
-        // Land is tan/beige/green (at least one channel significantly lower)
-        return r > 200 && g > 200 && b > 200;
+        // Water = blue/grey tint (B >= R): light blue, white, grey
+        // Land = yellow/tan (R much > B): sandy, beige, yellow
+        // Dark pixels (text, symbols, lines) = allow as water
+        if (r + g + b < 300) return true;
+        return b >= r - 15;
     }
 }
 
@@ -398,8 +399,6 @@ function computeRoute(startLat, startLon, endLat, endLon, startTimeMs, perfFacto
                     const newLat = pt.lat + dLat;
                     const newLon = pt.lon + dLon;
 
-                    if (!store.isWater(newLat, newLon)) continue;
-
                     const newPt = {
                         lat: newLat, lon: newLon,
                         timeMs: pt.timeMs + TIME_STEP_S * 1000,
@@ -409,14 +408,18 @@ function computeRoute(startLat, startLon, endLat, endLon, startTimeMs, perfFacto
                         cvy: current ? current.vy : 0,
                     };
 
+                    // Check arrival BEFORE water check (chart symbols near dest shouldn't block)
                     if (_haversineNm(newLat, newLon, endLat, endLon) < DEST_RADIUS_NM) {
+                        const path = _backtrack(newPt);
                         return {
-                            path: _backtrack(newPt),
+                            path,
                             isochrones,
                             elapsedMin: Math.round((newPt.timeMs - startTimeMs) / 60000),
-                            distanceNm: _pathDistance(_backtrack(newPt)),
+                            distanceNm: _pathDistance(path),
                         };
                     }
+
+                    if (!store.isWater(newLat, newLon)) continue;
 
                     newPoints.push(newPt);
                 }
