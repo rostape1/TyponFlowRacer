@@ -251,6 +251,10 @@ def main():
             pass
 
     same_run = meta.get("sfbofs_run") == f"{date_str}_t{run_hour}z"
+    schema_changed = meta.get("sfbofs_hindcast_hours") != HINDCAST_HOURS
+    if schema_changed:
+        same_run = False
+        logger.info("Hindcast offset changed — treating as new run")
     cached_hours = meta.get("sfbofs_hours", 0)
     cached_max = meta.get("sfbofs_max_hour", -1)
 
@@ -321,6 +325,7 @@ def main():
         meta["sfbofs_run"] = f"{date_str}_t{run_hour}z"
     meta["sfbofs_hours"] = total_success
     meta["sfbofs_max_hour"] = max_hour
+    meta["sfbofs_hindcast_hours"] = HINDCAST_HOURS
     meta["sfbofs_updated"] = datetime.now(timezone.utc).isoformat()
     meta_path.write_text(json.dumps(meta, indent=2))
 
