@@ -97,7 +97,7 @@ async function fetchCurrentField(minutesOffset = 0) {
         elapsedHours = Math.max(0, Math.floor((Date.now() - _sfbofsRunTime.getTime()) / 3600000));
     }
 
-    const fileIndex = Math.min(48, elapsedHours + offsetHours);
+    const fileIndex = Math.min(42, elapsedHours + offsetHours);
     const url = `${DATA_BASE}/sfbofs/hour_${String(fileIndex).padStart(2, '0')}.json`;
     const res = await fetch(url);
     if (!res.ok) return { unavailable: true, requestedHour: fileIndex };
@@ -467,10 +467,10 @@ async function downloadAllForOffline(onProgress, onCategory) {
         if (onProgress) onProgress(completed, totalItems);
     }
 
-    // SFBOFS (up to 49 files per run: hours 0-48, break on first 404)
+    // SFBOFS (up to 43 files per run: hours 0-42, break on first 404)
     let flowOk = 0;
     let flowModelRun = null;
-    for (let h = 0; h <= 48; h++) {
+    for (let h = 0; h <= 42; h++) {
         try {
             const resp = await fetch(`${DATA_BASE}/sfbofs/hour_${String(h).padStart(2, '0')}.json`);
             if (!resp.ok) break;

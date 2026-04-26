@@ -40,10 +40,10 @@ Environmental data sources:
 
 | File | Purpose |
 |------|---------|
-| `scripts/fetch_sfbofs.py` | Download NOAA SFBOFS NetCDF, regrid (netCDF4+scipy), output per-hour JSON |
+| `scripts/fetch_sfbofs.py` | Download NOAA SFBOFS NetCDF, regrid (netCDF4+scipy), output per-hour JSON. Skips 6h hindcast (n000-n005); n006→hour_00 (cycle time) |
 | `scripts/fetch_ndbc.py` | Fetch NDBC buoy real-time observations (9 stations) |
 | `scripts/requirements.txt` | Python deps for SFBOFS processing (netCDF4, scipy, numpy) |
-| `workflows/sfbofs.yml` | Cron: every hour at :20 — checks from nominal NOAA run time (03z/09z/15z/21z), retries until all 48h fetched; clears old run files on new run; saves sfbofs_run as soon as any hours succeed |
+| `workflows/sfbofs.yml` | Cron: every hour at :20 — checks from nominal NOAA run time (03z/09z/15z/21z), retries until all 42h fetched; clears old run files on new run; saves sfbofs_run as soon as any hours succeed |
 | `workflows/ndbc.yml` | Cron: every 10 min (buoy observations); restores full cache (restore-keys: env-data-) so deploy always includes SFBOFS data |
 | `workflows/deploy.yml` | Assembles data + static site, deploys to GitHub Pages |
 
@@ -90,7 +90,7 @@ WAL mode + async lock serializes writes. Periodic commits every 2 seconds.
 
 | Path | Description |
 |------|-------------|
-| `data/sfbofs/hour_XX.json` | SFBOFS current field grid (276x325), one per forecast hour (0-48) |
+| `data/sfbofs/hour_XX.json` | SFBOFS current field grid (276x325), one per forecast hour (0-42; hour_00 = cycle time) |
 | `data/wind/stations.json` | NDBC buoy observations (9 stations) |
 | `data/meta.json` | Timestamps of latest SFBOFS/NDBC data updates |
 
@@ -161,12 +161,13 @@ python main.py --aisstream         # Cloud AIS (needs API key in .env)
 
 - **50 vessel cap** — cloud AIS mode limits to 50 closest vessels to keep the map clean
 - **AIS API key embedded** — `DEFAULT_AISSTREAM_KEY` in `app.js` so the app auto-connects on any device. Users can override via `localStorage.setItem('aisstream_api_key', ...)`.
-- **Tide forecasts are unlimited range** — harmonic math, no model dependency. Wind limited to 49h (Open-Meteo forecast_hours), current field limited to 48h (SFBOFS)
+- **Tide forecasts are unlimited range** — harmonic math, no model dependency. Wind limited to 49h (Open-Meteo forecast_hours), current field limited to 42h (SFBOFS, 48h model minus 6h hindcast)
 - **Browser-side data fetching** — Tides (14 NOAA CO-OPS stations), currents (6 stations), and wind (72-point Open-Meteo grid) are fetched directly in the browser. In-memory caches: tides/currents 6h TTL, wind 30min TTL. Service Worker caches API responses for offline use.
 - **Wind grid batched in 1 request** — All 72 grid points × 49 forecast hours fetched via single Open-Meteo API call with comma-separated coordinates. Direction→u/v conversion done in browser JS.
 - **Auto-download on load** — `_autoDownload()` fires 8s after page load, silently pre-fetches all data (SFBOFS, NDBC, tides, currents, wind). Retries with exponential backoff (30s→60s→…→5min) if any category fails. Retries immediately (3s grace) when network comes back online. Manual download button still works with progress panel.
 - **Per-category download badges** — Status bar shows Flow/Wind/Tide/Curr chips. Turn green when that category downloads successfully (checks actual HTTP response, not just loop completion). Persists in localStorage, resets after 6h. `_getDlStatus()` / `_setDlCategory()` in `app.js`.
-- **SFBOFS 404 handling** — download loop breaks on first 404 (model runs don't always produce all 49 hours; later hours missing is normal).
+- **SFBOFS 404 handling** — download loop breaks on first 404 (model runs don't always produce all 43 hours; later hours missing is normal).
+- **SFBOFS 6h hindcast offset** — NOAA SFBOFS NetCDF files n000-n005 are hindcast (valid before the cycle time). `fetch_sfbofs.py` skips these and maps n006→hour_00 (cycle time), n007→hour_01, through n048→hour_42.
 - **Offline mode** — Service Worker automatically caches all external map tiles (CartoDB, OSM, NOAA charts, OpenSeaMap) on first view via `ais-tiles-v1` cache.
 - **PWA offline pre-fetch** — After download, SW switches to **stale-while-revalidate** — serves cached data instantly, refreshes in background if online. Tracks last download time in localStorage, shown in status bar ("DL: 2h ago").
 - **Data freshness indicators** — Wind and current field legends show green/yellow dot with relative age (e.g. "3m ago" / "2h 30m ago"). Green = data < 45 min old, yellow = stale. Wind source shows "Open-Meteo". Both legends are same width (210px).

@@ -37,6 +37,12 @@ BOUNDS = {
 
 GRID_SPACING = 0.002  # ~200m
 
+# SFBOFS includes 6h of hindcast before the cycle time;
+# n006 is the first hour that matches the nominal run time.
+HINDCAST_HOURS = 6
+MAX_NOAA_HOUR = 48
+MAX_OUTPUT_HOUR = MAX_NOAA_HOUR - HINDCAST_HOURS  # 42
+
 OUTPUT_DIR = Path(__file__).resolve().parent.parent.parent / "static" / "data" / "sfbofs"
 
 
@@ -248,7 +254,9 @@ def main():
     cached_hours = meta.get("sfbofs_hours", 0)
     cached_max = meta.get("sfbofs_max_hour", -1)
 
-    if same_run and cached_hours >= 49:
+    total_output_hours = MAX_OUTPUT_HOUR + 1  # 43 (hour_00 through hour_42)
+
+    if same_run and cached_hours >= total_output_hours:
         logger.info(f"SFBOFS already complete ({date_str} t{run_hour}z, {cached_hours}h), skipping")
         return
 
@@ -265,17 +273,17 @@ def main():
     d = datetime.strptime(date_str, "%Y%m%d")
     model_run_label = f"t{run_hour}z {d.month:02d}/{d.day:02d}"
 
-    # For same run, resume from first missing hour; for new run, start from 0
-    # NOAA publishes hours sequentially, so break on first 404
+    # SFBOFS hours 0-5 are hindcast (before cycle time); skip them.
+    # Fetch NOAA hours 6-48, output as hour_00 through hour_42.
     if same_run:
-        hours_to_fetch = [h for h in range(49)
-                          if not (OUTPUT_DIR / f"hour_{h:02d}.json").exists()]
-        existing_count = 49 - len(hours_to_fetch)
+        hours_to_fetch = [h for h in range(HINDCAST_HOURS, MAX_NOAA_HOUR + 1)
+                          if not (OUTPUT_DIR / f"hour_{(h - HINDCAST_HOURS):02d}.json").exists()]
+        existing_count = total_output_hours - len(hours_to_fetch)
         logger.info(f"Run {date_str} t{run_hour}z: {existing_count} hours on disk, fetching up to {len(hours_to_fetch)} missing")
     else:
-        hours_to_fetch = list(range(49))
+        hours_to_fetch = list(range(HINDCAST_HOURS, MAX_NOAA_HOUR + 1))
         existing_count = 0
-        logger.info(f"New run {date_str} t{run_hour}z: fetching up to 49 hours")
+        logger.info(f"New run {date_str} t{run_hour}z: fetching up to {total_output_hours} hours")
 
     new_success = 0
     max_hour = cached_max if same_run else -1
@@ -292,12 +300,13 @@ def main():
                 for future in as_completed(futures):
                     hour, result = future.result()
                     if result:
-                        out_path = OUTPUT_DIR / f"hour_{hour:02d}.json"
+                        output_hour = hour - HINDCAST_HOURS
+                        out_path = OUTPUT_DIR / f"hour_{output_hour:02d}.json"
                         out_path.write_text(json.dumps(result))
                         new_success += 1
                         batch_success += 1
-                        max_hour = max(max_hour, hour)
-                        logger.info(f"Wrote hour {hour:02d} ({existing_count + new_success}/49)")
+                        max_hour = max(max_hour, output_hour)
+                        logger.info(f"Wrote hour {output_hour:02d} (n{hour:03d}) ({existing_count + new_success}/{total_output_hours})")
                     else:
                         logger.warning(f"Failed hour {hour}")
             if batch_success == 0:
@@ -305,7 +314,7 @@ def main():
                 break
 
     total_success = existing_count + new_success
-    logger.info(f"SFBOFS: {total_success}/49 hours available (max hour {max_hour}, {new_success} newly fetched)")
+    logger.info(f"SFBOFS: {total_success}/{total_output_hours} hours available (max output hour {max_hour}, {new_success} newly fetched)")
 
     # Save run ID as soon as any hours succeed so incremental logic kicks in on next retry
     if new_success > 0:
