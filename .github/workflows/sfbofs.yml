@@ -2,7 +2,7 @@ name: Fetch SFBOFS Current Field
 
 on:
   schedule:
-    - cron: '20 * * * *'  # Every hour at :20 — checks for new NOAA model run (03z/09z/15z/21z), fetches 7 hours (0-6) per run
+    - cron: '20 * * * *'  # Every hour at :20 — checks for new NOAA model run (03z/09z/15z/21z), fetches up to 49 hours (0-48) incrementally
   workflow_dispatch:  # Manual trigger for testing
 
 permissions:

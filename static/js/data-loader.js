@@ -97,13 +97,12 @@ async function fetchCurrentField(minutesOffset = 0) {
         elapsedHours = Math.max(0, Math.floor((Date.now() - _sfbofsRunTime.getTime()) / 3600000));
     }
 
-    const fileIndex = Math.min(6, elapsedHours + offsetHours);
+    const fileIndex = Math.min(48, elapsedHours + offsetHours);
     const url = `${DATA_BASE}/sfbofs/hour_${String(fileIndex).padStart(2, '0')}.json`;
     const res = await fetch(url);
-    if (!res.ok) return null;
+    if (!res.ok) return { unavailable: true, requestedHour: fileIndex };
     const data = await res.json();
-    // Cache run time for future calls
-    if (data.model_run && !_sfbofsRunTime) {
+    if (data.model_run) {
         _sfbofsRunTime = _parseSfbofsRunTime(data.model_run);
     }
     return data;
@@ -460,7 +459,7 @@ async function fetchMeta() {
 
 async function downloadAllForOffline(onProgress, onCategory) {
     const { begin, end } = _noaaDateRange(0);
-    const totalItems = 7 + 1 + Object.keys(TIDE_STATIONS).length + Object.keys(CURRENT_STATIONS).length + 1;
+    const totalItems = 1 + 1 + Object.keys(TIDE_STATIONS).length + Object.keys(CURRENT_STATIONS).length + 1;
     let completed = 0;
 
     function tick() {
@@ -468,25 +467,24 @@ async function downloadAllForOffline(onProgress, onCategory) {
         if (onProgress) onProgress(completed, totalItems);
     }
 
-    // SFBOFS (7 files per run: hours 0-6; NOAA only publishes hours 0-6 per model run)
+    // SFBOFS (up to 49 files per run: hours 0-48, break on first 404)
     let flowOk = 0;
     let flowModelRun = null;
-    for (let h = 0; h <= 6; h++) {
+    for (let h = 0; h <= 48; h++) {
         try {
             const resp = await fetch(`${DATA_BASE}/sfbofs/hour_${String(h).padStart(2, '0')}.json`);
-            if (resp.ok) {
-                flowOk++;
-                if (h === 0) {
-                    try {
-                        const d = await resp.json();
-                        flowModelRun = d.model_run;
-                        if (!_sfbofsRunTime) _sfbofsRunTime = _parseSfbofsRunTime(d.model_run);
-                    } catch (e) {}
-                }
+            if (!resp.ok) break;
+            flowOk++;
+            if (h === 0) {
+                try {
+                    const d = await resp.json();
+                    flowModelRun = d.model_run;
+                    if (d.model_run) _sfbofsRunTime = _parseSfbofsRunTime(d.model_run);
+                } catch (e) {}
             }
-        } catch (e) {}
-        tick();
+        } catch (e) { break; }
     }
+    tick();
     if (onCategory) onCategory('flow', flowOk > 0 ? { count: flowOk, modelRun: flowModelRun } : false);
 
     // NDBC stations (still static JSON)

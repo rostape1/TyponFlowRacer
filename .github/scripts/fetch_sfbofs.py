@@ -84,11 +84,9 @@ def _find_latest_run() -> tuple[str, str] | None:
                 logger.debug(f"Skipping {date_str} t{run}z (too recent)")
                 continue
             url0 = _s3_url(date_str, run, 0)
-            url6 = _s3_url(date_str, run, 6)
             ok0 = _head_ok(url0)
-            ok6 = _head_ok(url6)
-            logger.info(f"Check {date_str} t{run}z: hour_00={'OK' if ok0 else '404'}, hour_06={'OK' if ok6 else '404'}")
-            if ok0 and ok6:
+            logger.info(f"Check {date_str} t{run}z: hour_00={'OK' if ok0 else '404'}")
+            if ok0:
                 logger.info(f"Found SFBOFS run: {date_str} t{run}z")
                 return (date_str, run)
     return None
@@ -248,8 +246,9 @@ def main():
 
     same_run = meta.get("sfbofs_run") == f"{date_str}_t{run_hour}z"
     cached_hours = meta.get("sfbofs_hours", 0)
+    cached_max = meta.get("sfbofs_max_hour", -1)
 
-    if same_run and cached_hours >= 7:
+    if same_run and cached_hours >= 49:
         logger.info(f"SFBOFS already complete ({date_str} t{run_hour}z, {cached_hours}h), skipping")
         return
 
@@ -266,39 +265,53 @@ def main():
     d = datetime.strptime(date_str, "%Y%m%d")
     model_run_label = f"t{run_hour}z {d.month:02d}/{d.day:02d}"
 
-    # For same run, only fetch hours missing from disk; for new run, fetch all
+    # For same run, resume from first missing hour; for new run, start from 0
+    # NOAA publishes hours sequentially, so break on first 404
     if same_run:
-        hours_to_fetch = [h for h in range(7)
+        hours_to_fetch = [h for h in range(49)
                           if not (OUTPUT_DIR / f"hour_{h:02d}.json").exists()]
-        existing_count = 7 - len(hours_to_fetch)
-        logger.info(f"Run {date_str} t{run_hour}z: {existing_count} hours on disk, fetching {len(hours_to_fetch)} missing")
+        existing_count = 49 - len(hours_to_fetch)
+        logger.info(f"Run {date_str} t{run_hour}z: {existing_count} hours on disk, fetching up to {len(hours_to_fetch)} missing")
     else:
-        hours_to_fetch = list(range(7))
+        hours_to_fetch = list(range(49))
         existing_count = 0
-        logger.info(f"New run {date_str} t{run_hour}z: fetching all 7 hours")
+        logger.info(f"New run {date_str} t{run_hour}z: fetching up to 49 hours")
 
     new_success = 0
+    max_hour = cached_max if same_run else -1
     if hours_to_fetch:
-        args = [(h, date_str, run_hour, model_run_label) for h in hours_to_fetch]
-        with ProcessPoolExecutor(max_workers=4) as pool:
-            futures = {pool.submit(_process_hour, a): a[0] for a in args}
-            for future in as_completed(futures):
-                hour, result = future.result()
-                if result:
-                    out_path = OUTPUT_DIR / f"hour_{hour:02d}.json"
-                    out_path.write_text(json.dumps(result))
-                    new_success += 1
-                    logger.info(f"Wrote hour {hour:02d} ({new_success}/{len(hours_to_fetch)} new)")
-                else:
-                    logger.warning(f"Failed hour {hour}")
+        # Process in batches of 4 (parallel within batch, sequential between batches)
+        # Break when an entire batch fails (NOAA hasn't published those hours yet)
+        batch_size = 4
+        for i in range(0, len(hours_to_fetch), batch_size):
+            batch = hours_to_fetch[i:i + batch_size]
+            args = [(h, date_str, run_hour, model_run_label) for h in batch]
+            batch_success = 0
+            with ProcessPoolExecutor(max_workers=4) as pool:
+                futures = {pool.submit(_process_hour, a): a[0] for a in args}
+                for future in as_completed(futures):
+                    hour, result = future.result()
+                    if result:
+                        out_path = OUTPUT_DIR / f"hour_{hour:02d}.json"
+                        out_path.write_text(json.dumps(result))
+                        new_success += 1
+                        batch_success += 1
+                        max_hour = max(max_hour, hour)
+                        logger.info(f"Wrote hour {hour:02d} ({existing_count + new_success}/49)")
+                    else:
+                        logger.warning(f"Failed hour {hour}")
+            if batch_success == 0:
+                logger.info(f"Batch starting at hour {batch[0]} had no successes — NOAA likely hasn't published beyond hour {max_hour}")
+                break
 
     total_success = existing_count + new_success
-    logger.info(f"SFBOFS: {total_success}/7 hours available ({new_success} newly fetched)")
+    logger.info(f"SFBOFS: {total_success}/49 hours available (max hour {max_hour}, {new_success} newly fetched)")
 
     # Save run ID as soon as any hours succeed so incremental logic kicks in on next retry
     if new_success > 0:
         meta["sfbofs_run"] = f"{date_str}_t{run_hour}z"
     meta["sfbofs_hours"] = total_success
+    meta["sfbofs_max_hour"] = max_hour
     meta["sfbofs_updated"] = datetime.now(timezone.utc).isoformat()
     meta_path.write_text(json.dumps(meta, indent=2))
 

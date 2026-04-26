@@ -1173,12 +1173,25 @@ async function loadCurrentField() {
             console.log('SFBOFS not available:', data.error);
             return;
         }
+
+        const legend = document.getElementById('flow-legend');
+        const source = document.getElementById('flow-legend-source');
+
+        if (data.unavailable) {
+            if (tidalFlow) tidalFlow.setGrid(null);
+            if (legend) legend.classList.add('visible');
+            if (source) {
+                const target = new Date(Date.now() + forecastMinutes * 60000);
+                const timeStr = target.toLocaleString('en-US', { weekday: 'short', hour: 'numeric', minute: '2-digit', timeZone: 'America/Los_Angeles' });
+                source.innerHTML = `<span style="color:#f39c12">No forecast data for ${timeStr}</span>`;
+            }
+            return;
+        }
+
         if (tidalFlow) {
             tidalFlow.setGrid(data);
         }
         // Update legend
-        const legend = document.getElementById('flow-legend');
-        const source = document.getElementById('flow-legend-source');
         if (legend) legend.classList.add('visible');
         if (source) {
             const src = data.source || 'NOAA Stations';
