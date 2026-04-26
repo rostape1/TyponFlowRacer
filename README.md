@@ -9,7 +9,8 @@ Deployed as a static PWA on GitHub Pages — no backend required.
 - **Real-time AIS vessel tracking** — direct browser WebSocket to AISstream.io (API key embedded, no setup needed)
 - **Tidal flow animation** — NOAA SFBOFS hydrodynamic model (276×325 grid), animated particles + speed heatmap toggled together via "Tide Flow" button
 - **Wind overlay** — 72-point Open-Meteo grid, animated arrow-tipped particles with flashing speed numbers
-- **Tide height stations** — 14 NOAA CO-OPS stations across SF Bay, toggleable markers
+- **Tide height stations** — 14 NOAA CO-OPS stations across SF Bay, toggleable markers. 6 stations have real-time gauges showing observed vs predicted height with difference
+- **SFBOFS confidence indicator** — flow legend shows green/yellow/red confidence based on observed-vs-predicted tide gauge deltas, with explanation of expected current strength and slack time shifts
 - **Current stations** — 6 NOAA CO-OPS stations with live arrows
 - **48-hour forecast timeline** — scrollable timeline on desktop; NOW/+1h/+2h/+3h/+4h quick buttons on mobile; calendar picker for unlimited range (tides only beyond 48h)
 - **Auto-download on load** — silently pre-fetches all data 8s after page open, retries with exponential backoff if offline; per-category badges (Flow/Wind/Tide/Curr) turn green as each finishes. Flow badge shows `Flow +Xh` — hours of forward forecast remaining from now.
@@ -52,7 +53,7 @@ Three-row collapsible bottom bar:
 |--------|------|-----------------|
 | AISstream.io | Vessel AIS | Continuous WebSocket |
 | NOAA SFBOFS | Current field (276×325 grid) | 4×/day (03z/09z/15z/21z) |
-| NOAA CO-OPS | Tides (14 stations), Currents (6 stations) | Direct browser fetch, 6h cache |
+| NOAA CO-OPS | Tides (14 stations), Currents (6 stations), Water levels (6 gauge stations) | Direct browser fetch, tides/currents 6h cache, water levels 10min cache |
 | Open-Meteo | Wind grid (72 points, 49h forecast) | Direct browser fetch, 30min cache |
 | NDBC | Buoy observations (9 stations) | Every 10 min via GitHub Actions |
 

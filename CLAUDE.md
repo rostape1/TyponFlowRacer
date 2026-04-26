@@ -30,6 +30,7 @@ Browser (PWA) — direct API fetches
 
 Environmental data sources:
 - `NOAA CO-OPS API` → direct browser fetch → client-side interpolation → tide/current display
+- `NOAA CO-OPS API` → `product=water_level` → real-time gauge observations (6 stations) → observed vs predicted in tide popups + SFBOFS confidence indicator
 - `Open-Meteo API` → direct browser fetch (1 batched request, 72 points × 49 hours) → wind particles
 - `data/sfbofs/hour_XX.json` → GitHub Actions pre-computed → `tidal-flow.js` particles
 - `data/wind/stations.json` → GitHub Actions NDBC fetch → `wind-overlay.js` station markers
@@ -99,6 +100,7 @@ WAL mode + async lock serializes writes. Periodic commits every 2 seconds.
 | Source | API | Data |
 |--------|-----|------|
 | Tides (14 stations) | NOAA CO-OPS (`api.tidesandcurrents.noaa.gov`) | 3-day predictions, 6-min interval |
+| Water levels (6 stations) | NOAA CO-OPS (same API, `product=water_level`) | Latest gauge reading, 10-min cache |
 | Currents (6 stations) | NOAA CO-OPS (same API) | 3-day predictions, 6-min interval |
 | Wind grid (9×8 = 72 points) | Open-Meteo (`api.open-meteo.com`) | 49 forecast hours, batched in 1 request |
 
@@ -108,7 +110,7 @@ WAL mode + async lock serializes writes. Periodic commits every 2 seconds.
 |---------|------|------|-------|
 | AISstream.io | Cloud AIS via WebSocket | API key in `.env` | Continuous stream |
 | NOAA SFBOFS | SF Bay hydrodynamic NetCDF (~57MB) | Public S3 | 6 hours |
-| NOAA CO-OPS | Tidal currents + tide heights (direct browser fetch) | No key | 6h in-memory cache |
+| NOAA CO-OPS | Tidal currents + tide heights + water levels (direct browser fetch) | No key | Tides/currents 6h, water levels 10min |
 | Open-Meteo | Wind forecast grid (direct browser fetch, batched) | No key (free tier, non-commercial) | 30min in-memory cache |
 | NDBC NOAA | Real-time buoy observations | Public | 10 min |
 
@@ -171,6 +173,8 @@ python main.py --aisstream         # Cloud AIS (needs API key in .env)
 - **Offline mode** — Service Worker automatically caches all external map tiles (CartoDB, OSM, NOAA charts, OpenSeaMap) on first view via `ais-tiles-v1` cache.
 - **PWA offline pre-fetch** — After download, SW switches to **stale-while-revalidate** — serves cached data instantly, refreshes in background if online. Tracks last download time in localStorage, shown in status bar ("DL: 2h ago").
 - **Data freshness indicators** — Wind and current field legends show green/yellow dot with relative age (e.g. "3m ago" / "2h 30m ago"). Green = data < 45 min old, yellow = stale. Wind source shows "Open-Meteo". Both legends are same width (210px).
+- **Real-time water levels** — 6 of 14 tide stations have NOAA gauges (SF, Alameda, Redwood City, Richmond, Martinez, Port Chicago). `fetchWaterLevels()` in data-loader.js fetches `product=water_level&date=latest`, 10-min cache. Popups show Predicted/Observed/Difference. Dashed green ring on gauge station markers. Only in real-time mode (forecastMinutes === 0).
+- **SFBOFS confidence indicator** — `updateFlowConfidence()` in app.js computes avg observed-vs-predicted delta across gauge stations. Shows in flow legend: green (≤0.3ft, reliable), yellow (≤0.5ft, moderate), red (>0.5ft, low). Detail text indicates direction: higher water → stronger currents & earlier slack; lower water → weaker currents & later slack.
 - **Position data kept permanently** — for post-voyage analysis
 
 ## Key Patterns
