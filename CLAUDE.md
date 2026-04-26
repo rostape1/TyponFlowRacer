@@ -67,7 +67,8 @@ Environmental data sources:
 | `js/app.js` (~1900 lines) | Main app: Leaflet map, vessel markers, popups, CPA/TCPA, speed charts, search, forecast UI, mobile quick buttons, offline pre-fetch |
 | `js/aisstream.js` | Direct browser WebSocket to AISstream.io, parses AIS messages to internal format |
 | `js/vessel-store.js` | In-memory vessel database (replaces SQLite), track history, localStorage persistence |
-| `js/data-loader.js` | Direct API fetcher (NOAA CO-OPS tides/currents, Open-Meteo wind) + client-side interpolation. SFBOFS/NDBC still via static JSON. |
+| `js/data-loader.js` | Direct API fetcher (NOAA CO-OPS tides/currents/water levels, Open-Meteo wind) + client-side interpolation. SFBOFS/NDBC still via static JSON. Exposes `getWindGridForHour()` and `getSfbofsRunTime()` for router. |
+| `js/router.js` | Isochrone route optimizer: Swan 47 polars, RouterDataStore (pre-loads multi-hour SFBOFS+wind grids with temporal interpolation), isochrone expansion/pruning, RouteRenderer (colored Leaflet polyline) |
 | `js/tidal-flow.js` | Canvas particle animation + speed heatmap for tidal currents (2000-3000 particles, bilinear interpolation, offscreen-rendered color overlay) |
 | `js/wind-overlay.js` | Canvas particle animation for wind (800 arrow-tipped particles with speed number flashing, NDBC station markers, dual color schemes) |
 | `css/style.css` | Dark nautical theme, glassmorphism panels, responsive 3-row mobile layout, Leaflet control styling |
@@ -175,6 +176,7 @@ python main.py --aisstream         # Cloud AIS (needs API key in .env)
 - **Data freshness indicators** — Wind and current field legends show green/yellow dot with relative age (e.g. "3m ago" / "2h 30m ago"). Green = data < 45 min old, yellow = stale. Wind source shows "Open-Meteo". Both legends are same width (210px).
 - **Real-time water levels** — 6 of 14 tide stations have NOAA gauges (SF, Alameda, Redwood City, Richmond, Martinez, Port Chicago). `fetchWaterLevels()` in data-loader.js fetches `product=water_level&date=latest`, 10-min cache. Popups show Predicted/Observed/Difference. Dashed green ring on gauge station markers. Only in real-time mode (forecastMinutes === 0).
 - **SFBOFS confidence indicator** — `updateFlowConfidence()` in app.js computes avg observed-vs-predicted delta across gauge stations. Shows in flow legend: green (≤0.3ft, reliable), yellow (≤0.5ft, moderate), red (>0.5ft, low). Detail text indicates direction: higher water → stronger currents & earlier slack; lower water → weaker currents & later slack.
+- **Route optimizer** — `computeRoute()` in `router.js` implements isochrone expansion: 72 headings × 2-min steps × 3h max. Pre-loads multiple SFBOFS + wind grid hours into `RouterDataStore` with temporal interpolation between hourly grids. Water mask derived from SFBOFS grid (zero u/v = land). Swan 47 polars with configurable performance factor (default 85%). Route colored by current benefit: green (favorable >0.3kn), red (adverse >0.3kn), white (neutral). Time labels every 10 minutes. Pruning via angular sectors (180 sectors, keep farthest point per sector). Works with forecast mode — uses `forecastMinutes` as start time offset.
 - **Position data kept permanently** — for post-voyage analysis
 
 ## Key Patterns
@@ -200,5 +202,5 @@ python main.py --aisstream         # Cloud AIS (needs API key in .env)
 - **Mobile bottom bar**: 3-row stack (download full-width + layer toggles → forecast quick buttons → status line), collapsible via hamburger button (default: expanded). Timeline scroll strip hidden on mobile. Vessel list auto-closes when tray is collapsed.
 - **Mobile forecast quick buttons**: NOW, +1h, +2h, +3h, +4h, Set FCST TIME (opens date/time picker)
 - **Mobile status bar**: `● AIS` dot+label · vessel count · [Flow][Wind][Tide][Curr] download badges · DL age · ☰ hamburger
-- **Button colors**: Tide Flow=blue, Wind=purple, Tide=cyan, Vessels=orange, NOW=blue, Calendar=magenta, Download=green. Active forecast hours=magenta (#e85ab4). OFF state=dim gray for all.
+- **Button colors**: Tide Flow=blue, Wind=purple, Tide=cyan, Vessels=orange, Route=green (#27ae60), NOW=blue, Calendar=magenta, Download=green. Active forecast hours=magenta (#e85ab4). OFF state=dim gray for all.
 - **Tide Flow button** — combined toggle for SFBOFS particle animation + speed heatmap (was separate Flow + Heatmap buttons)
