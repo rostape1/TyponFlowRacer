@@ -440,14 +440,25 @@ function _pathDistance(path) {
 }
 
 function _pruneIsochrone(points, originLat, originLon, destLat, destLon) {
-    const sectors = new Array(PRUNE_SECTORS).fill(null);
-    const destBrg = _bearingDeg(originLat, originLon, destLat, destLon);
-
+    // First pass: find closest-to-destination point
+    let bestDist = Infinity;
     for (const pt of points) {
-        // Sector based on bearing from origin (preserves full directional spread)
+        const d = _haversineNm(pt.lat, pt.lon, destLat, destLon);
+        if (d < bestDist) bestDist = d;
+    }
+
+    // Filter out points too far from destination (>50% worse than best)
+    const maxDist = bestDist * 1.5;
+    const filtered = points.filter(pt =>
+        _haversineNm(pt.lat, pt.lon, destLat, destLon) <= maxDist
+    );
+
+    // Sector-based pruning on remaining points
+    const sectors = new Array(PRUNE_SECTORS).fill(null);
+
+    for (const pt of filtered) {
         const brg = _bearingDeg(originLat, originLon, pt.lat, pt.lon);
         const sector = Math.floor(brg / (360 / PRUNE_SECTORS)) % PRUNE_SECTORS;
-        // Score by closeness to destination (lower = better)
         const distToDest = _haversineNm(pt.lat, pt.lon, destLat, destLon);
 
         if (!sectors[sector] || distToDest < sectors[sector].distToDest) {
