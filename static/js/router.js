@@ -338,10 +338,10 @@ function computeRoute(startLat, startLon, endLat, endLon, startTimeMs, perfFacto
         }];
 
         const isochrones = [];
+        const destBrg = _bearingDeg(startLat, startLon, endLat, endLon);
 
         for (let step = 0; step < maxSteps; step++) {
             const newPoints = [];
-            const destBrg = _bearingDeg(startLat, startLon, endLat, endLon);
 
             for (const pt of wavefront) {
                 const current = store.interpolateCurrent(pt.lat, pt.lon, pt.timeMs);
@@ -464,15 +464,16 @@ function _pruneIsochrone(points, originLat, originLon, destLat, destLon) {
 
     // Step 3: Remove concavities — points closer to origin than their neighbors.
     // This enforces a smooth, outward-expanding envelope.
+    // Don't wrap around: the filtered set doesn't span 360°.
     if (pruned.length > 3) {
         let changed = true;
         while (changed) {
             changed = false;
-            const next = [];
-            for (let i = 0; i < pruned.length; i++) {
-                const prev = pruned[(i - 1 + pruned.length) % pruned.length];
+            const next = [pruned[0]];
+            for (let i = 1; i < pruned.length - 1; i++) {
+                const prev = pruned[i - 1];
                 const curr = pruned[i];
-                const nxt = pruned[(i + 1) % pruned.length];
+                const nxt = pruned[i + 1];
                 const neighborAvg = (prev.dist + nxt.dist) / 2;
                 if (curr.dist < neighborAvg * 0.85) {
                     changed = true;
@@ -480,6 +481,7 @@ function _pruneIsochrone(points, originLat, originLon, destLat, destLon) {
                 }
                 next.push(curr);
             }
+            next.push(pruned[pruned.length - 1]);
             pruned = next;
             if (pruned.length <= 3) break;
         }
