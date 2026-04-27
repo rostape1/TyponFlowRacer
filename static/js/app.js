@@ -1023,7 +1023,6 @@ const _routeStatus = document.getElementById('route-status');
 const _routeResult = document.getElementById('route-result');
 const _routeEta = document.getElementById('route-eta');
 const _routeDistance = document.getElementById('route-distance');
-const _routeDirect = document.getElementById('route-direct');
 const _routeClear = document.getElementById('route-clear');
 const _routePerf = document.getElementById('route-perf');
 const _routePerfVal = document.getElementById('route-perf-val');
@@ -1129,17 +1128,6 @@ async function _runRoute() {
 
         if (_routeEta) _routeEta.innerHTML = `<span style="color:#a0b0c0">ETA</span><span style="color:#f39c12;font-weight:600">${result.elapsedMin} min</span>`;
         if (_routeDistance) _routeDistance.innerHTML = `<span style="color:#a0b0c0">Distance</span><span>${result.distanceNm} nm</span>`;
-        if (_routeDirect && result.direct) {
-            const dTime = result.direct.elapsedMin != null
-                ? `${result.direct.elapsedMin} min` : 'N/R';
-            const saved = result.direct.elapsedMin != null
-                ? result.direct.elapsedMin - result.elapsedMin : null;
-            const savedStr = saved != null && saved !== 0
-                ? ` <span style="color:${saved > 0 ? '#2ecc71' : '#e74c3c'}">(${saved > 0 ? 'saves' : 'costs'} ${Math.abs(saved)} min)</span>`
-                : '';
-            _routeDirect.innerHTML = `<span style="color:#a0b0c0">Direct</span><span>${result.direct.distanceNm} nm / ${dTime}${savedStr}</span>`;
-            _routeDirect.classList.remove('hidden');
-        }
         if (_routeResult) _routeResult.classList.remove('hidden');
         if (_routeClear) _routeClear.classList.remove('hidden');
     } catch (e) {
