@@ -302,6 +302,9 @@ class RouterDataStore {
 }
 
 // --- Isochrone Engine ---
+// Based on the James (1957) isochrone method for time-optimal sailing routing.
+// Wavefront expands outward each time step; pruning keeps only the outer
+// envelope (farthest-reachable frontier), preventing backtracking by construction.
 
 const NUM_HEADINGS = 72;
 const HEADING_STEP = 360 / NUM_HEADINGS;
@@ -309,6 +312,7 @@ const TIME_STEP_S = 120;
 const MAX_TIME_S = 10800;
 const DEST_RADIUS_NM = 0.15;
 const PRUNE_SECTORS = 180;
+const MAX_DIVERSION_DEG = 120;
 
 function computeRoute(startLat, startLon, endLat, endLon, startTimeMs, perfFactor, onProgress) {
     const store = new RouterDataStore();
@@ -337,6 +341,7 @@ function computeRoute(startLat, startLon, endLat, endLon, startTimeMs, perfFacto
 
         for (let step = 0; step < maxSteps; step++) {
             const newPoints = [];
+            const destBrg = _bearingDeg(startLat, startLon, endLat, endLon);
 
             for (const pt of wavefront) {
                 const current = store.interpolateCurrent(pt.lat, pt.lon, pt.timeMs);
@@ -344,32 +349,21 @@ function computeRoute(startLat, startLon, endLat, endLon, startTimeMs, perfFacto
 
                 if (!wind || wind.speed < 0.5) continue;
 
-                // Wind direction the wind blows FROM (meteorological, degrees)
                 const windFromDeg = (Math.atan2(-wind.u, -wind.v) * RAD2DEG + 360) % 360;
 
                 for (let hi = 0; hi < NUM_HEADINGS; hi++) {
                     const headingDeg = hi * HEADING_STEP;
                     const headingRad = headingDeg * DEG2RAD;
 
-                    // TWA: angle between wind-from and boat heading
                     let twa = Math.abs(headingDeg - windFromDeg);
                     if (twa > 180) twa = 360 - twa;
 
                     const bsp = getBoatSpeed(twa, wind.speed, perfFactor);
                     if (bsp < 0.5) continue;
 
-                    // Penalize headings toward nearby land to avoid coast-hugging
-                    let coastPenalty = 1.0;
-                    const probeD = 0.01; // ~1km ahead
-                    const probeLat = pt.lat + Math.cos(headingRad) * probeD;
-                    const probeLon = pt.lon + Math.sin(headingRad) * probeD;
-                    if (_isLand(probeLat, probeLon)) coastPenalty = 0.3;
+                    const bvx = bsp * Math.sin(headingRad);
+                    const bvy = bsp * Math.cos(headingRad);
 
-                    // Boat velocity through water
-                    const bvx = bsp * coastPenalty * Math.sin(headingRad);
-                    const bvy = bsp * coastPenalty * Math.cos(headingRad);
-
-                    // Ground velocity
                     const gvx = bvx + (current ? current.vx : 0);
                     const gvy = bvy + (current ? current.vy : 0);
 
@@ -388,7 +382,6 @@ function computeRoute(startLat, startLon, endLat, endLon, startTimeMs, perfFacto
                         cvy: current ? current.vy : 0,
                     };
 
-                    // Check arrival BEFORE water check (chart symbols near dest shouldn't block)
                     if (_haversineNm(newLat, newLon, endLat, endLon) < DEST_RADIUS_NM) {
                         const path = _backtrack(newPt);
                         return {
@@ -400,6 +393,12 @@ function computeRoute(startLat, startLon, endLat, endLon, startTimeMs, perfFacto
                     }
 
                     if (!store.isWater(newLat, newLon)) continue;
+
+                    // Bearing filter: reject points expanding >120° off course
+                    const ptBrg = _bearingDeg(startLat, startLon, newLat, newLon);
+                    let brgDiff = Math.abs(ptBrg - destBrg);
+                    if (brgDiff > 180) brgDiff = 360 - brgDiff;
+                    if (brgDiff > MAX_DIVERSION_DEG) continue;
 
                     newPoints.push(newPt);
                 }
@@ -440,33 +439,53 @@ function _pathDistance(path) {
 }
 
 function _pruneIsochrone(points, originLat, originLon, destLat, destLon) {
-    // First pass: find closest-to-destination point
-    let bestDist = Infinity;
-    for (const pt of points) {
-        const d = _haversineNm(pt.lat, pt.lon, destLat, destLon);
-        if (d < bestDist) bestDist = d;
-    }
-
-    // Filter out points too far from destination (>50% worse than best)
-    const maxDist = bestDist * 1.5;
-    const filtered = points.filter(pt =>
-        _haversineNm(pt.lat, pt.lon, destLat, destLon) <= maxDist
-    );
-
-    // Sector-based pruning on remaining points
+    // Step 1: Sector pruning — keep farthest-from-origin per angular sector.
+    // This is the standard isochrone definition: the frontier of reachable positions.
     const sectors = new Array(PRUNE_SECTORS).fill(null);
 
-    for (const pt of filtered) {
+    for (const pt of points) {
         const brg = _bearingDeg(originLat, originLon, pt.lat, pt.lon);
         const sector = Math.floor(brg / (360 / PRUNE_SECTORS)) % PRUNE_SECTORS;
-        const distToDest = _haversineNm(pt.lat, pt.lon, destLat, destLon);
+        const dist = _haversineNm(originLat, originLon, pt.lat, pt.lon);
 
-        if (!sectors[sector] || distToDest < sectors[sector].distToDest) {
-            sectors[sector] = { pt, distToDest };
+        if (!sectors[sector] || dist > sectors[sector].dist) {
+            sectors[sector] = { pt, dist };
         }
     }
 
-    return sectors.filter(s => s !== null).map(s => s.pt);
+    let pruned = sectors.filter(s => s !== null);
+
+    // Step 2: Sort by bearing for concavity removal
+    pruned.sort((a, b) => {
+        const brgA = _bearingDeg(originLat, originLon, a.pt.lat, a.pt.lon);
+        const brgB = _bearingDeg(originLat, originLon, b.pt.lat, b.pt.lon);
+        return brgA - brgB;
+    });
+
+    // Step 3: Remove concavities — points closer to origin than their neighbors.
+    // This enforces a smooth, outward-expanding envelope.
+    if (pruned.length > 3) {
+        let changed = true;
+        while (changed) {
+            changed = false;
+            const next = [];
+            for (let i = 0; i < pruned.length; i++) {
+                const prev = pruned[(i - 1 + pruned.length) % pruned.length];
+                const curr = pruned[i];
+                const nxt = pruned[(i + 1) % pruned.length];
+                const neighborAvg = (prev.dist + nxt.dist) / 2;
+                if (curr.dist < neighborAvg * 0.85) {
+                    changed = true;
+                    continue;
+                }
+                next.push(curr);
+            }
+            pruned = next;
+            if (pruned.length <= 3) break;
+        }
+    }
+
+    return pruned.map(s => s.pt);
 }
 
 // --- Route Renderer ---
