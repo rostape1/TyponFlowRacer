@@ -1,4 +1,4 @@
-const CACHE_NAME = 'ais-tracker-v9';
+const CACHE_NAME = 'ais-tracker-v10';
 const DATA_CACHE = 'ais-data-v2';
 const TILE_CACHE = 'ais-tiles-v1';
 
