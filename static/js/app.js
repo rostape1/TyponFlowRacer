@@ -1026,6 +1026,11 @@ const _routeDistance = document.getElementById('route-distance');
 const _routeClear = document.getElementById('route-clear');
 const _routePerf = document.getElementById('route-perf');
 const _routePerfVal = document.getElementById('route-perf-val');
+const _routeDetailsBtn = document.getElementById('route-details-btn');
+const _routeDetailsModal = document.getElementById('route-details-modal');
+const _routeDetailsBody = document.getElementById('route-details-body');
+const _routeDetailsClose = document.getElementById('route-details-close');
+let _lastRouteResult = null;
 
 if (_routePerf) {
     _routePerf.addEventListener('input', () => {
@@ -1049,6 +1054,28 @@ if (_routeClear) {
         _routeStatus.textContent = 'Click start point on map';
         _routeMode = 'start';
         map.getContainer().classList.add('route-mode');
+    });
+}
+
+if (_routeDetailsBtn) {
+    _routeDetailsBtn.addEventListener('click', () => {
+        if (!_lastRouteResult || !_lastRouteResult.path) return;
+        const path = _lastRouteResult.path;
+        const startMs = path[0].timeMs;
+        let html = '<table><thead><tr><th>Time</th><th>BSP</th><th>TWS</th><th>TWA</th><th>AWS</th><th>AWA</th></tr></thead><tbody>';
+        for (const pt of path) {
+            const min = Math.round((pt.timeMs - startMs) / 60000);
+            html += `<tr><td>${min}m</td><td>${pt.bsp.toFixed(1)}</td><td>${pt.tws.toFixed(1)}</td><td>${Math.round(pt.twa)}\u00b0</td><td>${pt.aws.toFixed(1)}</td><td>${Math.round(Math.abs(pt.awa))}\u00b0</td></tr>`;
+        }
+        html += '</tbody></table>';
+        _routeDetailsBody.innerHTML = html;
+        _routeDetailsModal.classList.remove('hidden');
+    });
+}
+
+if (_routeDetailsClose) {
+    _routeDetailsClose.addEventListener('click', () => {
+        _routeDetailsModal.classList.add('hidden');
     });
 }
 
@@ -1080,8 +1107,10 @@ function _clearRoute() {
     if (_routeRenderer) _routeRenderer.clear();
     _routeStart = null;
     _routeEnd = null;
+    _lastRouteResult = null;
     if (_routeResult) _routeResult.classList.add('hidden');
     if (_routeClear) _routeClear.classList.add('hidden');
+    if (_routeDetailsModal) _routeDetailsModal.classList.add('hidden');
 }
 
 async function _handleRouteClick(e) {
@@ -1125,6 +1154,7 @@ async function _runRoute() {
 
         _routeRenderer.drawRoute(result);
         _routeStatus.innerHTML = '<span style="color:#2ecc71">Route computed</span>';
+        _lastRouteResult = result;
 
         if (_routeEta) _routeEta.innerHTML = `<span style="color:#a0b0c0">ETA</span><span style="color:#f39c12;font-weight:600">${result.elapsedMin} min</span>`;
         if (_routeDistance) _routeDistance.innerHTML = `<span style="color:#a0b0c0">Distance</span><span>${result.distanceNm} nm</span>`;

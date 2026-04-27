@@ -116,8 +116,18 @@
         <div id="route-result" class="route-result hidden">
             <div id="route-eta"></div>
             <div id="route-distance"></div>
+            <button id="route-details-btn" class="route-details-btn">Details</button>
         </div>
         <button id="route-clear" class="route-clear-btn hidden">Clear Route</button>
+    </div>
+
+    <!-- Route details modal -->
+    <div id="route-details-modal" class="route-details-modal hidden">
+        <div class="route-details-header">
+            <span>Route Details</span>
+            <button id="route-details-close">&times;</button>
+        </div>
+        <div id="route-details-body" class="route-details-body"></div>
     </div>
 
     <!-- Current flow legend -->

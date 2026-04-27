@@ -1116,6 +1116,93 @@ body.panel-collapsed #panel-toggle {
 
 .route-clear-btn.hidden { display: none; }
 
+.route-details-btn {
+    margin-top: 6px;
+    width: 100%;
+    padding: 4px;
+    background: rgba(100, 150, 200, 0.15);
+    border: 1px solid rgba(100, 150, 200, 0.3);
+    border-radius: 4px;
+    color: #a0b0c0;
+    font-size: 10px;
+    cursor: pointer;
+}
+
+.route-details-modal {
+    position: fixed;
+    bottom: 90px;
+    right: 230px;
+    width: 340px;
+    max-height: 400px;
+    background: rgba(10, 22, 40, 0.95);
+    backdrop-filter: blur(12px);
+    border: 1px solid rgba(100, 150, 200, 0.2);
+    border-radius: 10px;
+    z-index: 1002;
+    font-size: 11px;
+    color: #c8d6e5;
+    display: flex;
+    flex-direction: column;
+}
+.route-details-modal.hidden { display: none; }
+
+.route-details-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 8px 12px;
+    border-bottom: 1px solid rgba(100, 150, 200, 0.15);
+    font-weight: 600;
+    font-size: 12px;
+}
+.route-details-header button {
+    background: none;
+    border: none;
+    color: #a0b0c0;
+    font-size: 16px;
+    cursor: pointer;
+    padding: 0 4px;
+}
+
+.route-details-body {
+    overflow-y: auto;
+    padding: 4px 0;
+}
+
+.route-details-body table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 10px;
+    font-variant-numeric: tabular-nums;
+}
+.route-details-body th {
+    position: sticky;
+    top: 0;
+    background: rgba(10, 22, 40, 0.98);
+    padding: 4px 6px;
+    text-align: right;
+    color: #a0b0c0;
+    font-weight: 500;
+    border-bottom: 1px solid rgba(100, 150, 200, 0.2);
+}
+.route-details-body th:first-child { text-align: left; }
+.route-details-body td {
+    padding: 3px 6px;
+    text-align: right;
+    border-bottom: 1px solid rgba(100, 150, 200, 0.06);
+}
+.route-details-body td:first-child { text-align: left; color: #f39c12; }
+
+@media (max-width: 768px) {
+    .route-details-modal {
+        right: 8px;
+        left: 8px;
+        bottom: 140px;
+        width: auto;
+        max-height: 50vh;
+    }
+}
+
 #route-toggle {
     background: rgba(39, 174, 96, 0.15);
     border-color: rgba(39, 174, 96, 0.4);

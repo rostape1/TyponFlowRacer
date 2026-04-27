@@ -416,12 +416,21 @@ function computeRoute(startLat, startLon, endLat, endLon, startTimeMs, perfFacto
                         ? current.vx * Math.sin(headingRad) + current.vy * Math.cos(headingRad)
                         : 0;
 
+                    // Apparent wind: true wind vector relative to boat
+                    const twaDeg = twa;
+                    const twaRad = twaDeg * DEG2RAD;
+                    const awx = wind.speed * Math.sin(twaRad);
+                    const awy = wind.speed * Math.cos(twaRad) - bsp;
+                    const aws = Math.sqrt(awx * awx + awy * awy);
+                    const awa = Math.atan2(awx, awy) * RAD2DEG;
+
                     const newPt = {
                         lat: newLat, lon: newLon,
                         timeMs: pt.timeMs + TIME_STEP_S * 1000,
                         parent: pt,
                         heading: headingDeg,
                         cBenefit,
+                        tws: wind.speed, twa: twaDeg, bsp, aws, awa,
                     };
 
                     if (_haversineNm(newLat, newLon, endLat, endLon) < DEST_RADIUS_NM) {
@@ -471,7 +480,12 @@ function _backtrack(point) {
     const path = [];
     let p = point;
     while (p) {
-        path.unshift({ lat: p.lat, lon: p.lon, timeMs: p.timeMs, heading: p.heading, cBenefit: p.cBenefit || 0 });
+        path.unshift({
+            lat: p.lat, lon: p.lon, timeMs: p.timeMs, heading: p.heading,
+            cBenefit: p.cBenefit || 0,
+            tws: p.tws || 0, twa: p.twa || 0, bsp: p.bsp || 0,
+            aws: p.aws || 0, awa: p.awa || 0,
+        });
         p = p.parent;
     }
     return path;
@@ -550,11 +564,18 @@ function _smoothPath(path) {
                 break;
             }
         }
-        // Average cBenefit over all skipped points for accurate segment coloring
-        let sumBenefit = 0;
-        for (let k = i + 1; k <= best; k++) sumBenefit += path[k].cBenefit;
-        const avgBenefit = sumBenefit / (best - i);
-        const pt = { ...path[best], cBenefit: avgBenefit };
+        // Average values over all skipped points
+        let sumBenefit = 0, sumTws = 0, sumTwa = 0, sumBsp = 0, sumAws = 0, sumAwa = 0;
+        for (let k = i + 1; k <= best; k++) {
+            sumBenefit += path[k].cBenefit;
+            sumTws += path[k].tws; sumTwa += path[k].twa; sumBsp += path[k].bsp;
+            sumAws += path[k].aws; sumAwa += path[k].awa;
+        }
+        const n = best - i;
+        const pt = { ...path[best],
+            cBenefit: sumBenefit / n, tws: sumTws / n, twa: sumTwa / n,
+            bsp: sumBsp / n, aws: sumAws / n, awa: sumAwa / n,
+        };
         smoothed.push(pt);
         i = best;
     }
