@@ -23,7 +23,15 @@ function _lerp(a, b, t) {
 
 function getBoatSpeed(twaDeg, tws, perfFactor = 0.85) {
     if (twaDeg > 180) twaDeg = 360 - twaDeg;
-    if (tws < POLAR_TWS[0] || twaDeg < POLAR_TWA[0]) return 0;
+    if (twaDeg < POLAR_TWA[0]) return 0;
+    if (tws < 1) return 0;
+
+    // Extrapolate below minimum polar TWS (6 kn) — linear scale from zero
+    let lightAirScale = 1.0;
+    if (tws < POLAR_TWS[0]) {
+        lightAirScale = tws / POLAR_TWS[0];
+        tws = POLAR_TWS[0];
+    }
 
     const twaClamped = Math.min(twaDeg, POLAR_TWA[POLAR_TWA.length - 1]);
     const twsClamped = Math.min(tws, POLAR_TWS[POLAR_TWS.length - 1]);
@@ -46,7 +54,7 @@ function getBoatSpeed(twaDeg, tws, perfFactor = 0.85) {
     const v11 = POLAR_BSP[ti + 1][si + 1];
 
     const bsp = _lerp(_lerp(v00, v01, sFrac), _lerp(v10, v11, sFrac), tFrac);
-    return bsp * perfFactor;
+    return bsp * lightAirScale * perfFactor;
 }
 
 // --- Water detection from NOAA ENC land polygons ---
@@ -110,8 +118,8 @@ function _isLand(lat, lon) {
     return false;
 }
 
-// ~500m safety buffer around land
-const LAND_BUFFER_DEG = 0.005;
+// ~200m safety buffer around land
+const LAND_BUFFER_DEG = 0.002;
 
 function _isTooCloseToLand(lat, lon) {
     if (_isLand(lat, lon)) return true;
@@ -119,11 +127,7 @@ function _isTooCloseToLand(lat, lon) {
     return _isLand(lat + b, lon) ||
            _isLand(lat - b, lon) ||
            _isLand(lat, lon + b) ||
-           _isLand(lat, lon - b) ||
-           _isLand(lat + b, lon + b) ||
-           _isLand(lat + b, lon - b) ||
-           _isLand(lat - b, lon + b) ||
-           _isLand(lat - b, lon - b);
+           _isLand(lat, lon - b);
 }
 
 // --- Haversine ---
@@ -339,6 +343,7 @@ function computeRoute(startLat, startLon, endLat, endLon, startTimeMs, perfFacto
 
         const isochrones = [];
         const destBrg = _bearingDeg(startLat, startLon, endLat, endLon);
+        let maxWindSeen = 0;
 
         for (let step = 0; step < maxSteps; step++) {
             const newPoints = [];
@@ -348,6 +353,7 @@ function computeRoute(startLat, startLon, endLat, endLon, startTimeMs, perfFacto
                 const wind = store.interpolateWind(pt.lat, pt.lon, pt.timeMs);
 
                 if (!wind || wind.speed < 0.5) continue;
+                if (wind.speed > maxWindSeen) maxWindSeen = wind.speed;
 
                 const windFromDeg = (Math.atan2(-wind.u, -wind.v) * RAD2DEG + 360) % 360;
 
@@ -405,7 +411,10 @@ function computeRoute(startLat, startLon, endLat, endLon, startTimeMs, perfFacto
             }
 
             if (newPoints.length === 0) {
-                return { error: 'No reachable path found' };
+                if (maxWindSeen < 3) {
+                    return { error: 'Wind too light for routing (' + maxWindSeen.toFixed(1) + ' kn max)' };
+                }
+                return { error: 'No reachable path — route may be blocked by land' };
             }
 
             wavefront = _pruneIsochrone(newPoints, startLat, startLon, endLat, endLon);
@@ -416,7 +425,8 @@ function computeRoute(startLat, startLon, endLat, endLon, startTimeMs, perfFacto
             }
         }
 
-        return { error: 'Destination not reached within ' + Math.round(MAX_TIME_S / 60) + ' minutes' };
+        const bestDist = Math.min(...wavefront.map(p => _haversineNm(p.lat, p.lon, endLat, endLon)));
+        return { error: 'Destination not reached within ' + Math.round(MAX_TIME_S / 60) + ' min (closest: ' + bestDist.toFixed(1) + ' nm away, wind: ' + maxWindSeen.toFixed(1) + ' kn)' };
     });
 }
 
