@@ -49,116 +49,65 @@ function getBoatSpeed(twaDeg, tws, perfFactor = 0.85) {
     return bsp * perfFactor;
 }
 
-// --- Water detection from CartoDB dark basemap tiles ---
-// CartoDB supports CORS (NOAA charts don't). The dark basemap is already
-// the default map layer. Water = dark navy blue (B > R), land = dark grey.
+// --- Water detection from NOAA ENC land polygons ---
+// Pre-extracted from S-57 charts (US5CA12M, US5CA13M, US5CA16M, US4CA11M).
+// Point-in-polygon test: if point is inside any land polygon, it's land.
 
-const CHART_ZOOM = 13;
-const TILE_SIZE = 256;
+let _landPolygons = null;
+let _landMaskLoading = null;
 
-function _latLonToTile(lat, lon, zoom) {
-    const n = 2 ** zoom;
-    const x = Math.floor((lon + 180) / 360 * n);
-    const latRad = lat * DEG2RAD;
-    const y = Math.floor((1 - Math.log(Math.tan(latRad) + 1 / Math.cos(latRad)) / Math.PI) / 2 * n);
-    return { x, y };
-}
-
-function _latLonToPixelInTile(lat, lon, zoom, tileX, tileY) {
-    const n = 2 ** zoom;
-    const px = ((lon + 180) / 360 * n - tileX) * TILE_SIZE;
-    const latRad = lat * DEG2RAD;
-    const py = ((1 - Math.log(Math.tan(latRad) + 1 / Math.cos(latRad)) / Math.PI) / 2 * n - tileY) * TILE_SIZE;
-    return { px: Math.floor(px), py: Math.floor(py) };
-}
-
-class ChartWaterMask {
-    constructor() {
-        this.tileCache = new Map();
-        this.canvas = null;
-        this.ctx = null;
-    }
-
-    async preloadArea(south, north, west, east) {
-        if (!this.canvas) {
-            this.canvas = document.createElement('canvas');
-            this.canvas.width = TILE_SIZE;
-            this.canvas.height = TILE_SIZE;
-            this.ctx = this.canvas.getContext('2d', { willReadFrequently: true });
-        }
-
-        const tl = _latLonToTile(north, west, CHART_ZOOM);
-        const br = _latLonToTile(south, east, CHART_ZOOM);
-
-        const fetches = [];
-        for (let ty = tl.y; ty <= br.y; ty++) {
-            for (let tx = tl.x; tx <= br.x; tx++) {
-                const key = `${tx}_${ty}`;
-                if (this.tileCache.has(key)) continue;
-                fetches.push(this._fetchTile(tx, ty, key));
-            }
-        }
-        await Promise.all(fetches);
-        console.log(`Route water mask: ${this.tileCache.size} tiles cached, ${fetches.length} new fetched`);
-    }
-
-    async _fetchTile(tx, ty, key) {
-        try {
-            const subs = ['a', 'b', 'c', 'd'];
-            const sub = subs[(tx + ty) % subs.length];
-            const url = `https://${sub}.basemaps.cartocdn.com/dark_nolabels/${CHART_ZOOM}/${tx}/${ty}.png`;
-            const img = new Image();
-            img.crossOrigin = 'anonymous';
-            await new Promise((resolve, reject) => {
-                img.onload = resolve;
-                img.onerror = reject;
-                img.src = url;
+async function _loadLandMask() {
+    if (_landPolygons) return _landPolygons;
+    if (_landMaskLoading) return _landMaskLoading;
+    _landMaskLoading = fetch('data/land_mask.json')
+        .then(r => r.json())
+        .then(data => {
+            _landPolygons = data.polygons.map(poly => {
+                const outer = poly.outer;
+                let minLat = Infinity, maxLat = -Infinity, minLon = Infinity, maxLon = -Infinity;
+                for (const [lat, lon] of outer) {
+                    if (lat < minLat) minLat = lat;
+                    if (lat > maxLat) maxLat = lat;
+                    if (lon < minLon) minLon = lon;
+                    if (lon > maxLon) maxLon = lon;
+                }
+                return { outer, holes: poly.holes || [], minLat, maxLat, minLon, maxLon };
             });
-            this.ctx.clearRect(0, 0, TILE_SIZE, TILE_SIZE);
-            this.ctx.drawImage(img, 0, 0, TILE_SIZE, TILE_SIZE);
-            const imageData = this.ctx.getImageData(0, 0, TILE_SIZE, TILE_SIZE);
-            this.tileCache.set(key, imageData);
-            if (this.tileCache.size === 1) {
-                const cx = 128, cy = 128;
-                const idx = (cy * TILE_SIZE + cx) * 4;
-                const d = imageData.data;
-                console.log(`Water mask calibration: tile ${tx},${ty} center pixel RGB(${d[idx]}, ${d[idx+1]}, ${d[idx+2]})`);
-            }
-        } catch (e) {
-            console.log(`Route tile failed: ${tx},${ty}`, e.message);
-            this.tileCache.set(key, null);
+            console.log(`Land mask loaded: ${_landPolygons.length} polygons`);
+            return _landPolygons;
+        })
+        .catch(e => {
+            console.warn('Land mask failed to load:', e);
+            _landPolygons = [];
+            return _landPolygons;
+        });
+    return _landMaskLoading;
+}
+
+function _pointInPoly(lat, lon, ring) {
+    let inside = false;
+    for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+        const yi = ring[i][0], xi = ring[i][1];
+        const yj = ring[j][0], xj = ring[j][1];
+        if (((yi > lat) !== (yj > lat)) && (lon < (xj - xi) * (lat - yi) / (yj - yi) + xi)) {
+            inside = !inside;
         }
     }
+    return inside;
+}
 
-    isWater(lat, lon) {
-        const tile = _latLonToTile(lat, lon, CHART_ZOOM);
-        const key = `${tile.x}_${tile.y}`;
-        const imageData = this.tileCache.get(key);
-        if (!imageData) return true;
-
-        const { px, py } = _latLonToPixelInTile(lat, lon, CHART_ZOOM, tile.x, tile.y);
-        if (px < 0 || px >= TILE_SIZE || py < 0 || py >= TILE_SIZE) return true;
-
-        // Sample 3x3 area to avoid single-pixel features (roads, boundaries)
-        let waterCount = 0;
-        let totalCount = 0;
-        for (let dy = -1; dy <= 1; dy++) {
-            for (let dx = -1; dx <= 1; dx++) {
-                const sx = px + dx;
-                const sy = py + dy;
-                if (sx < 0 || sx >= TILE_SIZE || sy < 0 || sy >= TILE_SIZE) continue;
-                totalCount++;
-                const idx = (sy * TILE_SIZE + sx) * 4;
-                const r = imageData.data[idx];
-                const g = imageData.data[idx + 1];
-                const b = imageData.data[idx + 2];
-                // CartoDB dark_nolabels: water is navy blue (b > r, all dark)
-                // Land is dark grey (r ≈ g ≈ b, slightly brighter)
-                if (b > r + 2) waterCount++;
+function _isLand(lat, lon) {
+    if (!_landPolygons || _landPolygons.length === 0) return false;
+    for (const poly of _landPolygons) {
+        if (lat < poly.minLat || lat > poly.maxLat || lon < poly.minLon || lon > poly.maxLon) continue;
+        if (_pointInPoly(lat, lon, poly.outer)) {
+            for (const hole of poly.holes) {
+                if (_pointInPoly(lat, lon, hole)) return false;
             }
+            return true;
         }
-        return waterCount >= Math.ceil(totalCount / 2);
     }
+    return false;
 }
 
 // --- Haversine ---
@@ -187,7 +136,6 @@ class RouterDataStore {
     constructor() {
         this.sfbofsGrids = new Map();
         this.windGrids = new Map();
-        this.chartMask = new ChartWaterMask();
         this.sfbofsBounds = null;
         this.sfbofsNx = 0;
         this.sfbofsNy = 0;
@@ -213,14 +161,16 @@ class RouterDataStore {
                 }).catch(() => {})
             );
         }
-        await Promise.all(sfbofsFetches);
+        await Promise.all([
+            Promise.all(sfbofsFetches),
+            _loadLandMask(),
+        ]);
 
         for (let h = 0; h <= hoursNeeded; h++) {
             const grid = getWindGridForHour(h);
             if (grid) this.windGrids.set(h, grid);
         }
 
-        // If wind not cached yet, trigger a fetch
         if (this.windGrids.size === 0) {
             try {
                 await fetchWindField(0);
@@ -231,20 +181,12 @@ class RouterDataStore {
             } catch (e) {}
         }
 
-        // Store SFBOFS bounds for current interpolation
         const firstGrid = this.sfbofsGrids.values().next().value;
         if (firstGrid) {
             this.sfbofsBounds = firstGrid.bounds;
             this.sfbofsNx = firstGrid.nx;
             this.sfbofsNy = firstGrid.ny;
         }
-
-        // Pre-load NOAA chart tiles for the routing area
-        const south = Math.min(startLat, endLat) - 0.05;
-        const north = Math.max(startLat, endLat) + 0.05;
-        const west = Math.min(startLon, endLon) - 0.05;
-        const east = Math.max(startLon, endLon) + 0.05;
-        await this.chartMask.preloadArea(south, north, west, east);
 
         return {
             sfbofsHours: this.sfbofsGrids.size,
@@ -253,7 +195,7 @@ class RouterDataStore {
     }
 
     isWater(lat, lon) {
-        return this.chartMask.isWater(lat, lon);
+        return !_isLand(lat, lon);
     }
 
     _bilinearGrid(grid, lat, lon) {
