@@ -173,22 +173,22 @@ class RouterDataStore {
         this.sfbofsGridsHR.clear();
         this.windGrids.clear();
 
-        const runTime = getSfbofsRunTime();
-        const elapsedHours = runTime ? Math.max(0, Math.floor((startTimeMs - runTime.getTime()) / 3600000)) : 0;
+        // Offset from now to the route start time (forecast mode)
+        const forecastOffsetMin = Math.max(0, Math.floor((startTimeMs - Date.now()) / 60000));
 
         const sfbofsFetches = [];
         const sfbofsHRFetches = [];
         for (let h = 0; h <= hoursNeeded; h++) {
-            const fileIndex = Math.min(48, elapsedHours + h);
+            const offsetMin = forecastOffsetMin + h * 60;
             sfbofsFetches.push(
-                fetchCurrentField(h * 60).then(data => {
+                fetchCurrentField(offsetMin).then(data => {
                     if (data && !data.unavailable && !data.error) {
                         this.sfbofsGrids.set(h, data);
                     }
                 }).catch(() => {})
             );
             sfbofsHRFetches.push(
-                fetchCurrentFieldHighRes(h * 60).then(data => {
+                fetchCurrentFieldHighRes(offsetMin).then(data => {
                     if (data) this.sfbofsGridsHR.set(h, data);
                 }).catch(() => {})
             );
@@ -199,16 +199,18 @@ class RouterDataStore {
             _loadLandMask(),
         ]);
 
+        // Wind grids: offset by forecast hours from now
+        const forecastOffsetHours = Math.floor(forecastOffsetMin / 60);
         for (let h = 0; h <= hoursNeeded; h++) {
-            const grid = getWindGridForHour(h);
+            const grid = getWindGridForHour(forecastOffsetHours + h);
             if (grid) this.windGrids.set(h, grid);
         }
 
         if (this.windGrids.size === 0) {
             try {
-                await fetchWindField(0);
+                await fetchWindField(forecastOffsetMin);
                 for (let h = 0; h <= hoursNeeded; h++) {
-                    const grid = getWindGridForHour(h);
+                    const grid = getWindGridForHour(forecastOffsetHours + h);
                     if (grid) this.windGrids.set(h, grid);
                 }
             } catch (e) {}
