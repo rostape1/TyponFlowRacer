@@ -283,9 +283,10 @@ def main():
     # SFBOFS forecast files: f000 = cycle time, f001 = +1h, ..., f048 = +48h
     if same_run:
         hours_to_fetch = [h for h in range(49)
-                          if not (OUTPUT_DIR / f"hour_{h:02d}.json").exists()]
+                          if not (OUTPUT_DIR / f"hour_{h:02d}.json").exists()
+                          or not (OUTPUT_DIR_GG / f"hour_{h:02d}.json").exists()]
         existing_count = 49 - len(hours_to_fetch)
-        logger.info(f"Run {date_str} t{run_hour}z: {existing_count} hours on disk, fetching up to {len(hours_to_fetch)} missing")
+        logger.info(f"Run {date_str} t{run_hour}z: {existing_count} hours complete, fetching up to {len(hours_to_fetch)} missing")
     else:
         hours_to_fetch = list(range(49))
         existing_count = 0
