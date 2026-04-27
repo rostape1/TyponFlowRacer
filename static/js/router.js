@@ -426,11 +426,13 @@ function computeRoute(startLat, startLon, endLat, endLon, startTimeMs, perfFacto
 
                     if (_haversineNm(newLat, newLon, endLat, endLon) < DEST_RADIUS_NM) {
                         const path = _smoothPath(_backtrack(newPt));
+                        const direct = _simulateDirectRoute(store, startLat, startLon, endLat, endLon, startTimeMs, perfFactor);
                         return {
                             path,
                             isochrones,
                             elapsedMin: Math.round((newPt.timeMs - startTimeMs) / 60000),
                             distanceNm: _pathDistance(path),
+                            direct,
                         };
                     }
 
@@ -465,6 +467,46 @@ function computeRoute(startLat, startLon, endLat, endLon, startTimeMs, perfFacto
         const bestDist = Math.min(...wavefront.map(p => _haversineNm(p.lat, p.lon, endLat, endLon)));
         return { error: 'Destination not reached within ' + Math.round(MAX_TIME_S / 60) + ' min (closest: ' + bestDist.toFixed(1) + ' nm away, wind: ' + maxWindSeen.toFixed(1) + ' kn)' };
     });
+}
+
+function _simulateDirectRoute(store, startLat, startLon, endLat, endLon, startTimeMs, perfFactor) {
+    const directNm = _haversineNm(startLat, startLon, endLat, endLon);
+    const bearing = _bearingDeg(startLat, startLon, endLat, endLon);
+    const bearingRad = bearing * DEG2RAD;
+    const dtHours = TIME_STEP_S / 3600;
+    const maxSteps = Math.floor(MAX_TIME_S / TIME_STEP_S);
+
+    let lat = startLat, lon = startLon, timeMs = startTimeMs;
+
+    for (let step = 0; step < maxSteps; step++) {
+        const wind = store.interpolateWind(lat, lon, timeMs);
+        const current = store.interpolateCurrent(lat, lon, timeMs);
+
+        if (!wind || wind.speed < 0.5) {
+            timeMs += TIME_STEP_S * 1000;
+            continue;
+        }
+
+        const windFromDeg = (Math.atan2(-wind.u, -wind.v) * RAD2DEG + 360) % 360;
+        let twa = Math.abs(bearing - windFromDeg);
+        if (twa > 180) twa = 360 - twa;
+
+        const bsp = getBoatSpeed(twa, wind.speed, perfFactor);
+        const bvx = bsp * Math.sin(bearingRad);
+        const bvy = bsp * Math.cos(bearingRad);
+        const gvx = bvx + (current ? current.vx : 0);
+        const gvy = bvy + (current ? current.vy : 0);
+
+        lat += (gvy / NM_PER_DEG_LAT) * dtHours;
+        lon += (gvx / (NM_PER_DEG_LAT * Math.cos(lat * DEG2RAD))) * dtHours;
+        timeMs += TIME_STEP_S * 1000;
+
+        if (_haversineNm(lat, lon, endLat, endLon) < DEST_RADIUS_NM) {
+            return { distanceNm: directNm, elapsedMin: Math.round((timeMs - startTimeMs) / 60000) };
+        }
+    }
+
+    return { distanceNm: directNm, elapsedMin: null };
 }
 
 function _backtrack(point) {
