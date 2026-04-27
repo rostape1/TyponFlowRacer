@@ -118,12 +118,16 @@ function _isLand(lat, lon) {
     return false;
 }
 
-// ~200m safety buffer around land
+// ~200m safety buffer around land (100m in high-res Golden Gate area)
 const LAND_BUFFER_DEG = 0.002;
+const LAND_BUFFER_DEG_HR = 0.001;
+const GG_BOUNDS = { south: 37.78, north: 37.86, west: -122.53, east: -122.42 };
 
 function _isTooCloseToLand(lat, lon) {
     if (_isLand(lat, lon)) return true;
-    const b = LAND_BUFFER_DEG;
+    const inGG = lat >= GG_BOUNDS.south && lat <= GG_BOUNDS.north &&
+                 lon >= GG_BOUNDS.west && lon <= GG_BOUNDS.east;
+    const b = inGG ? LAND_BUFFER_DEG_HR : LAND_BUFFER_DEG;
     return _isLand(lat + b, lon) ||
            _isLand(lat - b, lon) ||
            _isLand(lat, lon + b) ||
