@@ -273,10 +273,10 @@ body {
 /* Side panel */
 #panel {
     position: fixed;
-    top: 0;
+    top: 40px;
     right: 0;
     width: 340px;
-    height: calc(100vh - 74px);
+    height: calc(100vh - 114px);
     z-index: 1000;
     background: rgba(10, 22, 40, 0.94);
     backdrop-filter: blur(12px);
@@ -293,7 +293,7 @@ body {
 #panel-toggle {
     position: fixed;
     right: 340px;
-    top: 12px;
+    top: 52px;
     z-index: 1001;
     background: rgba(10, 22, 40, 0.92);
     border: 1px solid rgba(100, 150, 200, 0.2);
@@ -1837,7 +1837,7 @@ body.panel-collapsed #panel-toggle {
     border-radius: 4px !important;
     font-size: 11px !important;
     box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4) !important;
-    pointer-events: none !important;
+    cursor: pointer !important;
 }
 
 .competitor-tooltip::before {

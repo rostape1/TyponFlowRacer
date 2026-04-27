@@ -47,7 +47,10 @@ const CompetitorLabels = (() => {
         } else {
             marker.bindTooltip(html, {
                 permanent: true, direction: 'right', offset: [15, 0],
-                className: 'competitor-tooltip', interactive: false,
+                className: 'competitor-tooltip', interactive: true,
+            });
+            marker.getTooltip().on('click', () => {
+                marker.openPopup();
             });
             marker._competitorTooltip = true;
         }
