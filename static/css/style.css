@@ -944,6 +944,10 @@ body.panel-collapsed #panel-toggle {
     gap: 5px;
     align-items: center;
     padding: 4px 10px;
+    background: rgba(10, 22, 40, 0.85);
+    backdrop-filter: blur(8px);
+    border-radius: 6px;
+    border: 1px solid rgba(100, 150, 200, 0.12);
 }
 
 /* Layers button: hidden on desktop */
