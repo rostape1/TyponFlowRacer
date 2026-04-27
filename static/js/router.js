@@ -110,6 +110,17 @@ function _isLand(lat, lon) {
     return false;
 }
 
+// ~200m safety buffer around land
+const LAND_BUFFER_DEG = 0.002;
+
+function _isTooCloseToLand(lat, lon) {
+    if (_isLand(lat, lon)) return true;
+    return _isLand(lat + LAND_BUFFER_DEG, lon) ||
+           _isLand(lat - LAND_BUFFER_DEG, lon) ||
+           _isLand(lat, lon + LAND_BUFFER_DEG) ||
+           _isLand(lat, lon - LAND_BUFFER_DEG);
+}
+
 // --- Haversine ---
 const DEG2RAD = Math.PI / 180;
 const RAD2DEG = 180 / Math.PI;
@@ -195,7 +206,7 @@ class RouterDataStore {
     }
 
     isWater(lat, lon) {
-        return !_isLand(lat, lon);
+        return !_isTooCloseToLand(lat, lon);
     }
 
     _bilinearGrid(grid, lat, lon) {
