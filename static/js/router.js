@@ -110,15 +110,20 @@ function _isLand(lat, lon) {
     return false;
 }
 
-// ~200m safety buffer around land
-const LAND_BUFFER_DEG = 0.002;
+// ~500m safety buffer around land
+const LAND_BUFFER_DEG = 0.005;
 
 function _isTooCloseToLand(lat, lon) {
     if (_isLand(lat, lon)) return true;
-    return _isLand(lat + LAND_BUFFER_DEG, lon) ||
-           _isLand(lat - LAND_BUFFER_DEG, lon) ||
-           _isLand(lat, lon + LAND_BUFFER_DEG) ||
-           _isLand(lat, lon - LAND_BUFFER_DEG);
+    const b = LAND_BUFFER_DEG;
+    return _isLand(lat + b, lon) ||
+           _isLand(lat - b, lon) ||
+           _isLand(lat, lon + b) ||
+           _isLand(lat, lon - b) ||
+           _isLand(lat + b, lon + b) ||
+           _isLand(lat + b, lon - b) ||
+           _isLand(lat - b, lon + b) ||
+           _isLand(lat - b, lon - b);
 }
 
 // --- Haversine ---
@@ -353,9 +358,16 @@ function computeRoute(startLat, startLon, endLat, endLon, startTimeMs, perfFacto
                     const bsp = getBoatSpeed(twa, wind.speed, perfFactor);
                     if (bsp < 0.5) continue;
 
+                    // Penalize headings toward nearby land to avoid coast-hugging
+                    let coastPenalty = 1.0;
+                    const probeD = 0.01; // ~1km ahead
+                    const probeLat = pt.lat + Math.cos(headingRad) * probeD;
+                    const probeLon = pt.lon + Math.sin(headingRad) * probeD;
+                    if (_isLand(probeLat, probeLon)) coastPenalty = 0.3;
+
                     // Boat velocity through water
-                    const bvx = bsp * Math.sin(headingRad);
-                    const bvy = bsp * Math.cos(headingRad);
+                    const bvx = bsp * coastPenalty * Math.sin(headingRad);
+                    const bvy = bsp * coastPenalty * Math.cos(headingRad);
 
                     // Ground velocity
                     const gvx = bvx + (current ? current.vx : 0);
