@@ -595,9 +595,12 @@ function updateMarker(v) {
     track.points = track.points.filter(p => p.time >= cutoff);
     track.line.setLatLngs(track.points.map(p => [p.lat, p.lon]));
 
-    if (typeof CompetitorLabels !== 'undefined' && nmeaOwnPosition && competitorLabelsOn) {
-        const marker = markers.get(v.mmsi);
-        if (marker) CompetitorLabels.update(v, nmeaOwnPosition.lat, nmeaOwnPosition.lon, marker);
+    if (typeof CompetitorLabels !== 'undefined' && competitorLabelsOn) {
+        const own = nmeaOwnPosition || ownPosition;
+        if (own) {
+            const marker = markers.get(v.mmsi);
+            if (marker) CompetitorLabels.update(v, own.lat, own.lon, marker);
+        }
     }
 }
 
@@ -1032,13 +1035,16 @@ if (_labelsToggle) {
                     marker._competitorTooltip = false;
                 }
             });
-        } else if (nmeaOwnPosition) {
-            vessels.forEach(v => {
-                const marker = markers.get(v.mmsi);
-                if (marker && v.lat != null && typeof CompetitorLabels !== 'undefined') {
-                    CompetitorLabels.update(v, nmeaOwnPosition.lat, nmeaOwnPosition.lon, marker);
-                }
-            });
+        } else {
+            const own = nmeaOwnPosition || ownPosition;
+            if (own) {
+                vessels.forEach(v => {
+                    const marker = markers.get(v.mmsi);
+                    if (marker && v.lat != null && typeof CompetitorLabels !== 'undefined') {
+                        CompetitorLabels.update(v, own.lat, own.lon, marker);
+                    }
+                });
+            }
         }
     });
 }
