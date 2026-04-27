@@ -12,9 +12,9 @@ body {
     height: 100vh;
 }
 
-/* Ensure popups render above wind/tidal canvases */
+/* Ensure popups render above competitor label tooltips and wind/tidal canvases */
 .leaflet-popup-pane {
-    z-index: 800 !important;
+    z-index: 802 !important;
 }
 
 .leaflet-tooltip-pane {
