@@ -2480,21 +2480,29 @@ if (nmeaStore && nmeaClient) {
     }
 
     // Auto-connect to NMEA WebSocket on page load
+    // HTTPS pages (GitHub Pages) can't use ws://, only wss://
+    // On the Pi (HTTP), ws:// works fine. Skip auto-connect on HTTPS since
+    // the Pi doesn't have TLS — user connects manually when on boat's HTTP URL.
+    const isSecure = location.protocol === 'https:';
     const autoConnectUrl = savedUrl || 'ws://raspberrypi.local:8765';
     if (wsUrlInput && !wsUrlInput.value) wsUrlInput.value = autoConnectUrl;
-    setTimeout(() => {
-        const testWs = new WebSocket(autoConnectUrl);
-        testWs.onopen = () => {
-            testWs.close();
-            nmeaClient.connect(autoConnectUrl);
-            localStorage.setItem('nmea_ws_url', autoConnectUrl);
-            if (connectBtn) {
-                connectBtn.textContent = 'Disconnect';
-                connectBtn.classList.add('connected');
-            }
-        };
-        testWs.onerror = () => { testWs.close(); };
-    }, 2000);
+    if (!isSecure) {
+        setTimeout(() => {
+            try {
+                const testWs = new WebSocket(autoConnectUrl);
+                testWs.onopen = () => {
+                    testWs.close();
+                    nmeaClient.connect(autoConnectUrl);
+                    localStorage.setItem('nmea_ws_url', autoConnectUrl);
+                    if (connectBtn) {
+                        connectBtn.textContent = 'Disconnect';
+                        connectBtn.classList.add('connected');
+                    }
+                };
+                testWs.onerror = () => { testWs.close(); };
+            } catch (e) { /* silently fail */ }
+        }, 2000);
+    }
 
     // File replay
     const fileInput = document.getElementById('nmea-file-input');
