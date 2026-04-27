@@ -1062,10 +1062,13 @@ if (_routeDetailsBtn) {
         if (!_lastRouteResult || !_lastRouteResult.path) return;
         const path = _lastRouteResult.path;
         const startMs = path[0].timeMs;
+        const twsColor = s => s < 6 ? '#a0b0c0' : s < 12 ? '#2ecc71' : s < 18 ? '#f39c12' : '#e74c3c';
+        const awaColor = a => { a = Math.abs(a); return a < 45 ? '#e74c3c' : a < 70 ? '#f39c12' : a < 110 ? '#2ecc71' : '#3498db'; };
         let html = '<table><thead><tr><th>Time</th><th>BSP</th><th>TWS</th><th>TWA</th><th>AWS</th><th>AWA</th></tr></thead><tbody>';
         for (const pt of path) {
             const min = Math.round((pt.timeMs - startMs) / 60000);
-            html += `<tr><td>${min}m</td><td>${pt.bsp.toFixed(1)}</td><td>${pt.tws.toFixed(1)}</td><td>${Math.round(pt.twa)}\u00b0</td><td>${pt.aws.toFixed(1)}</td><td>${Math.round(Math.abs(pt.awa))}\u00b0</td></tr>`;
+            const awa = Math.round(Math.abs(pt.awa));
+            html += `<tr><td>${min}m</td><td>${pt.bsp.toFixed(1)}</td><td style="color:${twsColor(pt.tws)}">${pt.tws.toFixed(1)}</td><td>${Math.round(pt.twa)}\u00b0</td><td style="color:${twsColor(pt.aws)}">${pt.aws.toFixed(1)}</td><td style="color:${awaColor(pt.awa)}">${awa}\u00b0</td></tr>`;
         }
         html += '</tbody></table>';
         _routeDetailsBody.innerHTML = html;
