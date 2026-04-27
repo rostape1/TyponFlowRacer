@@ -260,7 +260,10 @@ def main():
     cached_hours = meta.get("sfbofs_hours", 0)
     cached_max = meta.get("sfbofs_max_hour", -1)
 
-    if same_run and cached_hours >= 49:
+    # Check if GG high-res files also exist
+    gg_complete = all((OUTPUT_DIR_GG / f"hour_{h:02d}.json").exists() for h in range(49)) if OUTPUT_DIR_GG.exists() else False
+
+    if same_run and cached_hours >= 49 and gg_complete:
         logger.info(f"SFBOFS already complete ({date_str} t{run_hour}z, {cached_hours}h), skipping")
         return
 
