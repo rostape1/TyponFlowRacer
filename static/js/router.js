@@ -459,20 +459,43 @@ function _pathDistance(path) {
 }
 
 function _pruneIsochrone(points, originLat, originLon, destLat, destLon) {
-    // Sector pruning: keep closest-to-destination per angular sector
+    // Farthest-from-centroid pruning: sectors measured from the wavefront's
+    // centroid (not the fixed origin) so angular diversity stays meaningful
+    // at any distance. Keeping the farthest point per sector preserves the
+    // outer reachable frontier — points in favorable current/wind travel
+    // farther and survive, naturally discovering current-avoiding routes.
+    let cLat = 0, cLon = 0;
+    for (const pt of points) { cLat += pt.lat; cLon += pt.lon; }
+    cLat /= points.length;
+    cLon /= points.length;
+
     const sectors = new Array(PRUNE_SECTORS).fill(null);
+    let bestToDest = null;
+    let bestDistToDest = Infinity;
 
     for (const pt of points) {
-        const brg = _bearingDeg(originLat, originLon, pt.lat, pt.lon);
+        const brg = _bearingDeg(cLat, cLon, pt.lat, pt.lon);
         const sector = Math.floor(brg / (360 / PRUNE_SECTORS)) % PRUNE_SECTORS;
-        const distToDest = _haversineNm(pt.lat, pt.lon, destLat, destLon);
+        const distFromCentroid = _haversineNm(cLat, cLon, pt.lat, pt.lon);
 
-        if (!sectors[sector] || distToDest < sectors[sector].distToDest) {
-            sectors[sector] = { pt, distToDest };
+        if (!sectors[sector] || distFromCentroid > sectors[sector].dist) {
+            sectors[sector] = { pt, dist: distFromCentroid };
+        }
+
+        const distToDest = _haversineNm(pt.lat, pt.lon, destLat, destLon);
+        if (distToDest < bestDistToDest) {
+            bestDistToDest = distToDest;
+            bestToDest = pt;
         }
     }
 
-    return sectors.filter(s => s !== null).map(s => s.pt);
+    const result = sectors.filter(s => s !== null).map(s => s.pt);
+
+    if (bestToDest && !result.includes(bestToDest)) {
+        result.push(bestToDest);
+    }
+
+    return result;
 }
 
 // Check if the straight line between two points crosses land
