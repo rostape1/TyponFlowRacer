@@ -1,12 +1,16 @@
 # AIS Tracker
 
-Real-time maritime vessel tracking platform for San Francisco Bay. Combines AIS ship data with NOAA tidal currents, wind forecasts, and tide predictions on an interactive Leaflet map with particle animations.
+Real-time maritime vessel tracking platform for San Francisco Bay. Combines AIS ship data with NOAA tidal currents, wind forecasts, and tide predictions on an interactive Leaflet map with particle animations. Includes a sailing dashboard with live NMEA instruments for on-the-water use.
 
-Deployed as a static PWA on GitHub Pages — no backend required.
+Deployed as a static PWA on GitHub Pages — no backend required. Connects to boat instruments via Raspberry Pi when on the boat's WiFi.
 
 ## Features
 
 - **Real-time AIS vessel tracking** — direct browser WebSocket to AISstream.io (API key embedded, no setup needed)
+- **Sailing dashboard** — two-view tab system (Map / Charts). Charts view shows live NMEA instrument gauges (SOG, BSP, HDG, Depth, AWA, TWA, TWD, TWS) and Chart.js time-series for wind shifts and tacking decisions
+- **NMEA instruments** — parses 10 sentence types from boat instruments ($GPGGA, $HCHDG, $IIMWV, $IIMWD, $IIVHW, $IIDPT, etc.). Live via WebSocket proxy on Raspberry Pi, or replay from saved log files
+- **Local AIS decoding** — decodes raw !AIVDM/!AIVDO sentences from the boat's VHF receiver. Works offline at sea, no internet needed
+- **Competitor labels** — toggleable labels on each vessel showing distance, speed, bearing, and trends relative to Typon. Click a label to open the vessel detail popup
 - **Tidal flow animation** — NOAA SFBOFS hydrodynamic model (276×325 grid), animated particles + speed heatmap toggled together via "Tide Flow" button
 - **Wind overlay** — 72-point Open-Meteo grid, animated arrow-tipped particles with flashing speed numbers
 - **Tide height stations** — 14 NOAA CO-OPS stations across SF Bay, toggleable markers. 6 stations have real-time gauges showing observed vs predicted height with difference
@@ -23,7 +27,7 @@ Deployed as a static PWA on GitHub Pages — no backend required.
 
 **[rostape1.github.io/TyponFlowRacer](https://rostape1.github.io/TyponFlowRacer)**
 
-No setup needed — opens and connects automatically.
+No setup needed — opens and connects automatically. When on the boat's WiFi, auto-connects to NMEA instruments via the Raspberry Pi.
 
 ## Architecture
 
@@ -39,14 +43,39 @@ Browser (PWA) — direct API fetches
 ├── Open-Meteo API → wind grid (9×8 = 72 points, 1 batched request)
 ├── Static JSON → SFBOFS current field + NDBC buoy observations
 └── Service Worker → offline caching for tiles + API responses
+
+Boat (Raspberry Pi) — NMEA instruments
+├── nmea_ws_proxy.py (TCP 192.168.47.10:10110 → WebSocket ws://0.0.0.0:8765)
+├── Browser WebSocket → nmea-client.js → nmea-parser.js → nmea-store.js
+├── nmea-store.js → sailing-charts.js (instruments + Chart.js time-series)
+├── nmea-store.js → ais-decoder.js → vessel-store.js (local AIS, no internet)
+└── nmea-store.js → competitor-labels.js (distance/speed/bearing from Typon)
 ```
+
+## On the Boat (Raspberry Pi)
+
+```bash
+# One-time setup
+git clone https://github.com/rostape1/TyponFlowRacer.git
+cd TyponFlowRacer
+pip install websockets
+
+# Start it
+./start_boat.sh
+```
+
+The Pi runs the NMEA WebSocket proxy (port 8765) and connects to the boat's instruments at `192.168.47.10:10110`.
+
+Browse to the **GitHub Pages URL** on your phone. When connected to the boat's WiFi, the app auto-connects to the Pi's WebSocket for live instruments and local AIS. Environmental data (tides, currents, wind, SFBOFS) loads from the internet and is cached by the service worker for offline use.
 
 ## Mobile UI
 
 Three-row collapsible bottom bar:
-1. **Layers tray** — Download (full-width), then: Tide Flow · Wind · Tide · Vessels
+1. **Layers tray** — Download (full-width), then: Tide Flow · Wind · Tide · Vessels · Labels · Route
 2. **Forecast buttons** — NOW · +1h · +2h · +3h · +4h · Set FCST TIME
 3. **Status bar** — `● AIS · 0 vessels · [Flow][Wind][Tide][Curr] · DL: Xm ago · ☰`
+
+Tab bar at top: **Map** (vessel tracking + environmental overlays) · **Charts** (NMEA instruments + time-series)
 
 ## Data Sources
 

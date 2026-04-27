@@ -93,7 +93,7 @@ Environmental data sources:
 |------|---------|
 | `nmea_ws_proxy.py` | Standalone TCP-to-WebSocket proxy for boat NMEA instruments. Connects to boat TCP (192.168.47.10:10110), serves ws://0.0.0.0:8765. |
 | `nmea_capture.py` | NMEA sentence logger to hourly-rotated files in `logs/` directory |
-| `start_boat.sh` | Combined Raspberry Pi launcher: starts WS proxy + static file server. Browse to http://raspberrypi.local:8888 |
+| `start_boat.sh` | Combined Raspberry Pi launcher: starts NMEA WS proxy. Browse to GitHub Pages URL — auto-connects when on boat WiFi. |
 
 ## Database Schema
 
@@ -189,17 +189,18 @@ pip install websockets
 ./start_boat.sh
 ```
 
-Opens **http://raspberrypi.local:8888** — serves the full app with NMEA instrument data via WebSocket proxy on port 8765. No internet required. Click the **Charts** tab and connect to `ws://raspberrypi.local:8765` for live instruments, or load a saved NMEA log file for replay.
+Starts the NMEA WebSocket proxy (port 8765) which connects to the boat's instruments at `192.168.47.10:10110`. Browse to the **GitHub Pages URL** on your phone — when connected to the boat's WiFi, the app auto-connects to `ws://raspberrypi.local:8765` for live NMEA instruments and local AIS. Environmental data loads from the internet and is cached for offline use. One URL for everything.
 
 ## Notable Behaviors
 
 - **Two-view tab system** — Map tab (existing vessel tracking + environmental overlays) and Charts tab (NMEA sailing instruments + time-series). Tab bar at top, both views stay in DOM for instant switching.
+- **Single URL deployment** — Always use the GitHub Pages URL. On the boat's WiFi, the app auto-connects to the Pi's NMEA WebSocket (silently fails when not on boat network). Environmental data is fetched from the internet and cached by the service worker for offline use.
 - **NMEA data pipeline** — `nmea-parser.js` → `nmea-store.js` → `sailing-charts.js` (Charts view) and `competitor-labels.js` (Map view). Data from live WebSocket (via `nmea_ws_proxy.py`) or file replay.
 - **NMEA AIS decoding** — `ais-decoder.js` decodes raw !AIVDM/!AIVDO sentences from the boat's VHF receiver. Works offline at sea. Falls back to AISstream.io cloud when internet available.
-- **Competitor labels** — Map view shows distance (nm), speed (kn), and relative bearing from Typon next to each vessel marker. Trend arrows show gaining/losing distance and accelerating/decelerating.
+- **Competitor labels** — Toggleable via Labels button. Shows distance (nm), speed (kn), and relative bearing next to each vessel marker. Click a label to open vessel detail popup. Falls back to map center when Typon's position is unknown.
 - **Instrument gauges** — 8 gauges: SOG, BSP, HDG, Depth, AWA, TWA, TWD, TWS. TWA color-coded: green (optimal VMG 30-50°), yellow (close-hauled 15-30°), red (in irons <15°).
 - **True wind computation** — When only apparent wind (AWA/AWS from $IIMWV-R) is available, computes TWS/TWA/TWD from vector math using BSP and heading. $IIMWD values override when present.
-- **Raspberry Pi deployment** — `start_boat.sh` runs both the NMEA WebSocket proxy and static file server. Same `static/` code works from Pi (http://raspberrypi.local:8888) or GitHub Pages.
+- **NMEA auto-connect** — On page load, silently tries `ws://raspberrypi.local:8765` (or saved URL from localStorage). Connects if reachable, fails silently if not.
 - **50 vessel cap** — cloud AIS mode limits to 50 closest vessels to keep the map clean
 - **AIS API key embedded** — `DEFAULT_AISSTREAM_KEY` in `app.js` so the app auto-connects on any device. Users can override via `localStorage.setItem('aisstream_api_key', ...)`.
 - **Tide forecasts are unlimited range** — harmonic math, no model dependency. Wind limited to 49h (Open-Meteo forecast_hours), current field limited to 48h (SFBOFS)
