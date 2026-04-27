@@ -71,7 +71,7 @@ body {
     display: none;
 }
 
-/* Map fills the entire viewport */
+/* Map fills its view container */
 #map {
     position: absolute;
     top: 0;
@@ -1215,6 +1215,12 @@ body.panel-collapsed #panel-toggle {
     color: #666;
 }
 
+#labels-toggle.labels-off {
+    background: rgba(100, 100, 100, 0.15);
+    border-color: rgba(100, 100, 100, 0.3);
+    color: #666;
+}
+
 .route-time-label { background: none !important; border: none !important; }
 
 .route-tooltip {
@@ -1575,5 +1581,329 @@ body.panel-collapsed #panel-toggle {
     }
     body:not(.mobile-controls-open) .offline-dl-panel {
         bottom: 38px;
+    }
+}
+
+/* === Sailing Dashboard === */
+
+#tab-bar {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 40px;
+    z-index: 1002;
+    display: flex;
+    align-items: center;
+    background: rgba(10, 22, 40, 0.85);
+    backdrop-filter: blur(12px);
+    border-bottom: 1px solid rgba(100, 150, 200, 0.15);
+    padding: 0 8px;
+    gap: 4px;
+}
+
+.tab-btn {
+    padding: 6px 16px;
+    background: none;
+    border: none;
+    color: #8395a7;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    border-bottom: 2px solid transparent;
+    transition: color 0.2s, border-color 0.2s;
+    min-height: 40px;
+}
+
+.tab-btn.active {
+    color: #3498db;
+    border-bottom-color: #3498db;
+}
+
+.tab-btn:hover {
+    color: #c8d6e5;
+}
+
+.nmea-status {
+    margin-left: auto;
+    font-size: 11px;
+    color: #8395a7;
+    padding: 0 8px;
+}
+
+.nmea-status.connected {
+    color: #2ecc71;
+}
+
+.nmea-status.replaying {
+    color: #f39c12;
+}
+
+.view-container {
+    position: absolute;
+    top: 40px;
+    left: 0;
+    right: 0;
+    bottom: 0;
+}
+
+#charts-view {
+    display: flex;
+    flex-direction: column;
+    background: #0a1628;
+    overflow-y: auto;
+}
+
+#nmea-source-bar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 12px;
+    background: rgba(255, 255, 255, 0.03);
+    border-bottom: 1px solid rgba(100, 150, 200, 0.1);
+    flex-wrap: wrap;
+    min-height: 36px;
+}
+
+.nmea-source-controls {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+}
+
+#nmea-ws-url {
+    background: rgba(255, 255, 255, 0.06);
+    border: 1px solid rgba(100, 150, 200, 0.2);
+    color: #c8d6e5;
+    padding: 4px 8px;
+    border-radius: 4px;
+    font-size: 12px;
+    width: 220px;
+}
+
+#nmea-connect-btn,
+.nmea-file-label {
+    background: rgba(52, 152, 219, 0.2);
+    border: 1px solid rgba(52, 152, 219, 0.4);
+    color: #3498db;
+    padding: 4px 10px;
+    border-radius: 4px;
+    font-size: 12px;
+    cursor: pointer;
+}
+
+#nmea-connect-btn:hover,
+.nmea-file-label:hover {
+    background: rgba(52, 152, 219, 0.3);
+}
+
+#nmea-connect-btn.connected {
+    background: rgba(46, 204, 113, 0.2);
+    border-color: rgba(46, 204, 113, 0.4);
+    color: #2ecc71;
+}
+
+.nmea-file-label input[type="file"] {
+    display: none;
+}
+
+.nmea-divider {
+    color: #576574;
+    font-size: 11px;
+}
+
+.nmea-replay-controls {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.nmea-replay-controls.hidden {
+    display: none;
+}
+
+.replay-btn {
+    background: rgba(255, 255, 255, 0.06);
+    border: 1px solid rgba(100, 150, 200, 0.2);
+    color: #c8d6e5;
+    padding: 4px 8px;
+    border-radius: 4px;
+    font-size: 12px;
+    cursor: pointer;
+    min-width: 32px;
+}
+
+#replay-speed {
+    background: rgba(255, 255, 255, 0.06);
+    border: 1px solid rgba(100, 150, 200, 0.2);
+    color: #c8d6e5;
+    padding: 3px 6px;
+    border-radius: 4px;
+    font-size: 12px;
+}
+
+#replay-progress {
+    font-size: 11px;
+    color: #8395a7;
+    font-variant-numeric: tabular-nums;
+}
+
+#instrument-panel {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 8px;
+    padding: 10px 12px;
+}
+
+.instrument-gauge {
+    background: rgba(255, 255, 255, 0.05);
+    backdrop-filter: blur(8px);
+    border: 1px solid rgba(100, 150, 200, 0.12);
+    border-radius: 8px;
+    padding: 10px 8px;
+    text-align: center;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 2px;
+}
+
+.gauge-label {
+    font-size: 10px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: #8395a7;
+}
+
+.gauge-value {
+    font-size: 28px;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+    color: #ecf0f1;
+    line-height: 1.1;
+}
+
+.gauge-unit {
+    font-size: 10px;
+    color: #576574;
+}
+
+.gauge-value.twa-irons { color: #e74c3c; }
+.gauge-value.twa-close { color: #f39c12; }
+.gauge-value.twa-optimal { color: #2ecc71; }
+
+#chart-controls {
+    display: flex;
+    gap: 4px;
+    padding: 4px 12px;
+}
+
+.chart-window-btn {
+    background: rgba(255, 255, 255, 0.06);
+    border: 1px solid rgba(100, 150, 200, 0.15);
+    color: #8395a7;
+    padding: 4px 12px;
+    border-radius: 4px;
+    font-size: 11px;
+    cursor: pointer;
+}
+
+.chart-window-btn.active {
+    background: rgba(52, 152, 219, 0.2);
+    border-color: rgba(52, 152, 219, 0.4);
+    color: #3498db;
+}
+
+#chart-area {
+    flex: 1;
+    min-height: 200px;
+    padding: 4px 12px 12px;
+    position: relative;
+}
+
+#sailing-chart {
+    width: 100% !important;
+    height: 100% !important;
+}
+
+/* Competitor labels */
+.competitor-tooltip {
+    background: rgba(10, 22, 40, 0.9) !important;
+    border: 1px solid rgba(100, 150, 200, 0.2) !important;
+    color: #c8d6e5 !important;
+    padding: 4px 8px !important;
+    border-radius: 4px !important;
+    font-size: 11px !important;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4) !important;
+    pointer-events: none !important;
+}
+
+.competitor-tooltip::before {
+    display: none !important;
+}
+
+.comp-name {
+    font-weight: 600;
+    font-size: 10px;
+    color: #8395a7;
+    margin-bottom: 2px;
+}
+
+.comp-stats {
+    display: flex;
+    gap: 8px;
+    font-variant-numeric: tabular-nums;
+    font-size: 11px;
+}
+
+@media (max-width: 600px) {
+    #instrument-panel {
+        grid-template-columns: repeat(2, 1fr);
+        gap: 6px;
+        padding: 8px;
+    }
+
+    .gauge-value {
+        font-size: 22px;
+    }
+
+    #nmea-source-bar {
+        flex-direction: column;
+        align-items: stretch;
+    }
+
+    .nmea-source-controls {
+        flex-direction: column;
+    }
+
+    #nmea-ws-url {
+        width: 100%;
+    }
+
+    #chart-area {
+        min-height: 180px;
+    }
+
+    .tab-btn {
+        flex: 1;
+        text-align: center;
+    }
+}
+
+@media (orientation: landscape) and (max-height: 500px) {
+    #instrument-panel {
+        grid-template-columns: repeat(4, 1fr);
+        gap: 4px;
+        padding: 4px 8px;
+    }
+
+    .gauge-value {
+        font-size: 20px;
+    }
+
+    .instrument-gauge {
+        padding: 6px 4px;
     }
 }

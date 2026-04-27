@@ -26,6 +26,13 @@ Browser (PWA) — direct API fetches
 ├── tidal-flow.js (SFBOFS current field particle animation)
 ├── wind-overlay.js (wind particle animation)
 └── Service Worker caches API responses + tiles for offline
+
+Boat (Raspberry Pi) — NMEA instruments
+├── nmea_ws_proxy.py (TCP 192.168.47.10:10110 → WebSocket ws://0.0.0.0:8765)
+├── Browser WebSocket → nmea-client.js → nmea-parser.js → nmea-store.js
+├── nmea-store.js → sailing-charts.js (instruments + Chart.js time-series)
+├── nmea-store.js → ais-decoder.js → vessel-store.js (local AIS, no internet needed)
+└── nmea-store.js → competitor-labels.js (distance/speed/bearing from Typon)
 ```
 
 Environmental data sources:
@@ -63,16 +70,30 @@ Environmental data sources:
 
 | File | Purpose |
 |------|---------|
-| `index.html` | Single page: map container, side panel, legends, forecast timeline, modals |
-| `js/app.js` (~1900 lines) | Main app: Leaflet map, vessel markers, popups, CPA/TCPA, speed charts, search, forecast UI, mobile quick buttons, offline pre-fetch |
+| `index.html` | Single page: tab bar (Map/Charts), map container, side panel, legends, forecast timeline, modals, sailing dashboard |
+| `js/app.js` (~2400 lines) | Main app: Leaflet map, vessel markers, popups, CPA/TCPA, speed charts, search, forecast UI, mobile quick buttons, offline pre-fetch, NMEA/sailing integration |
 | `js/aisstream.js` | Direct browser WebSocket to AISstream.io, parses AIS messages to internal format |
 | `js/vessel-store.js` | In-memory vessel database (replaces SQLite), track history, localStorage persistence |
 | `js/data-loader.js` | Direct API fetcher (NOAA CO-OPS tides/currents/water levels, Open-Meteo wind) + client-side interpolation. SFBOFS/NDBC still via static JSON. Exposes `getWindGridForHour()` and `getSfbofsRunTime()` for router. |
 | `js/router.js` | Isochrone route optimizer: Swan 47 polars, RouterDataStore (pre-loads multi-hour SFBOFS+wind grids with forecast-time-aware temporal interpolation), NOAA ENC land mask, isochrone expansion/pruning, RouteRenderer (colored Leaflet polyline) |
+| `js/nmea-parser.js` | Pure NMEA 0183 sentence parser (GGA, RMC, HCHDG, MWV, MWD, VHW, DPT, VTG, ROT, XDR). Handles log file formats with timestamps and source tags. |
+| `js/ais-decoder.js` | Browser-side AIS 6-bit decoder for !AIVDM/!AIVDO sentences. Decodes types 1/2/3/5/18/19/24. Multi-part message buffering. |
+| `js/nmea-store.js` | NMEA state manager (EventTarget). Current instrument values + time-series ring buffers (1hr @ 1Hz). True wind computation from apparent wind. Events: update, position, ais. |
+| `js/nmea-client.js` | NMEA data source: live WebSocket to nmea_ws_proxy.py or file replay with speed control (1x/2x/5x/10x/max). |
+| `js/sailing-charts.js` | Charts view: 8 instrument gauges (SOG, BSP, HDG, Depth, AWA, TWA, TWD, TWS) + Chart.js time-series (TWA/TWD/TWS/BSP). |
+| `js/competitor-labels.js` | Leaflet tooltips on competitor vessels: distance+trend, speed+trend, bearing, name relative to Typon. |
 | `js/tidal-flow.js` | Canvas particle animation + speed heatmap for tidal currents (2000-3000 particles, bilinear interpolation, offscreen-rendered color overlay) |
 | `js/wind-overlay.js` | Canvas particle animation for wind (800 arrow-tipped particles with speed number flashing, NDBC station markers, dual color schemes) |
-| `css/style.css` | Dark nautical theme, glassmorphism panels, responsive 3-row mobile layout, Leaflet control styling |
-| `sw.js` | Service Worker: cache-first for external CDN tiles (CartoDB, OSM, NOAA, OpenSeaMap via `ais-tiles-v1` cache), network-first for HTML/JS, network-first with cache fallback for env APIs (NOAA CO-OPS, Open-Meteo) and static data JSON via `ais-data-v2` cache, stale-while-revalidate after offline download |
+| `css/style.css` | Dark nautical theme, glassmorphism panels, responsive 3-row mobile layout, Leaflet control styling, sailing dashboard |
+| `sw.js` | Service Worker: cache-first for external CDN tiles (CartoDB, OSM, NOAA, OpenSeaMap, jsdelivr via `ais-tiles-v1` cache), network-first for HTML/JS, network-first with cache fallback for env APIs (NOAA CO-OPS, Open-Meteo) and static data JSON via `ais-data-v2` cache, stale-while-revalidate after offline download |
+
+### Sailing / NMEA (project root)
+
+| File | Purpose |
+|------|---------|
+| `nmea_ws_proxy.py` | Standalone TCP-to-WebSocket proxy for boat NMEA instruments. Connects to boat TCP (192.168.47.10:10110), serves ws://0.0.0.0:8765. |
+| `nmea_capture.py` | NMEA sentence logger to hourly-rotated files in `logs/` directory |
+| `start_boat.sh` | Combined Raspberry Pi launcher: starts WS proxy + static file server. Browse to http://raspberrypi.local:8888 |
 
 ## Database Schema
 
@@ -161,8 +182,24 @@ python main.py --demo              # Demo mode (simulated vessels)
 python main.py --aisstream         # Cloud AIS (needs API key in .env)
 ```
 
+### Raspberry Pi (on the boat)
+
+```bash
+pip install websockets
+./start_boat.sh
+```
+
+Opens **http://raspberrypi.local:8888** — serves the full app with NMEA instrument data via WebSocket proxy on port 8765. No internet required. Click the **Charts** tab and connect to `ws://raspberrypi.local:8765` for live instruments, or load a saved NMEA log file for replay.
+
 ## Notable Behaviors
 
+- **Two-view tab system** — Map tab (existing vessel tracking + environmental overlays) and Charts tab (NMEA sailing instruments + time-series). Tab bar at top, both views stay in DOM for instant switching.
+- **NMEA data pipeline** — `nmea-parser.js` → `nmea-store.js` → `sailing-charts.js` (Charts view) and `competitor-labels.js` (Map view). Data from live WebSocket (via `nmea_ws_proxy.py`) or file replay.
+- **NMEA AIS decoding** — `ais-decoder.js` decodes raw !AIVDM/!AIVDO sentences from the boat's VHF receiver. Works offline at sea. Falls back to AISstream.io cloud when internet available.
+- **Competitor labels** — Map view shows distance (nm), speed (kn), and relative bearing from Typon next to each vessel marker. Trend arrows show gaining/losing distance and accelerating/decelerating.
+- **Instrument gauges** — 8 gauges: SOG, BSP, HDG, Depth, AWA, TWA, TWD, TWS. TWA color-coded: green (optimal VMG 30-50°), yellow (close-hauled 15-30°), red (in irons <15°).
+- **True wind computation** — When only apparent wind (AWA/AWS from $IIMWV-R) is available, computes TWS/TWA/TWD from vector math using BSP and heading. $IIMWD values override when present.
+- **Raspberry Pi deployment** — `start_boat.sh` runs both the NMEA WebSocket proxy and static file server. Same `static/` code works from Pi (http://raspberrypi.local:8888) or GitHub Pages.
 - **50 vessel cap** — cloud AIS mode limits to 50 closest vessels to keep the map clean
 - **AIS API key embedded** — `DEFAULT_AISSTREAM_KEY` in `app.js` so the app auto-connects on any device. Users can override via `localStorage.setItem('aisstream_api_key', ...)`.
 - **Tide forecasts are unlimited range** — harmonic math, no model dependency. Wind limited to 49h (Open-Meteo forecast_hours), current field limited to 48h (SFBOFS)

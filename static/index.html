@@ -16,6 +16,15 @@
     <link rel="stylesheet" href="css/style.css" />
 </head>
 <body>
+    <!-- Tab bar -->
+    <div id="tab-bar">
+        <button class="tab-btn active" data-tab="map-view">Map</button>
+        <button class="tab-btn" data-tab="charts-view">Charts</button>
+        <span id="nmea-status" class="nmea-status">NMEA: Off</span>
+    </div>
+
+    <!-- Map view -->
+    <div id="map-view" class="view-container">
     <div id="map"></div>
 
     <!-- Offline banner -->
@@ -65,6 +74,7 @@
         <button id="wind-toggle" title="Toggle wind overlay">Wind: OFF</button>
         <button id="tide-toggle" title="Toggle tide height stations">Tide: OFF</button>
         <button id="vessels-toggle" title="Toggle vessel list">Vessels: OFF</button>
+        <button id="labels-toggle" class="labels-off" title="Toggle competitor labels">Labels: OFF</button>
         <button id="route-toggle" class="route-off" title="Plan optimal route">Route</button>
     </div>
 
@@ -162,6 +172,43 @@
         </div>
         <div id="vessel-list"></div>
     </div>
+    </div><!-- end map-view -->
+
+    <!-- Charts view (sailing dashboard) -->
+    <div id="charts-view" class="view-container" style="display:none">
+        <div id="nmea-source-bar">
+            <div class="nmea-source-controls">
+                <input type="text" id="nmea-ws-url" placeholder="ws://raspberrypi.local:8765" />
+                <button id="nmea-connect-btn">Connect</button>
+                <span class="nmea-divider">or</span>
+                <label class="nmea-file-label">
+                    <input type="file" id="nmea-file-input" accept=".txt,.nmea,.log" />
+                    Load Log
+                </label>
+            </div>
+            <div id="nmea-replay-controls" class="nmea-replay-controls hidden">
+                <button id="replay-pause" class="replay-btn">⏸</button>
+                <select id="replay-speed">
+                    <option value="1">1x</option>
+                    <option value="2">2x</option>
+                    <option value="5">5x</option>
+                    <option value="10">10x</option>
+                    <option value="0">Max</option>
+                </select>
+                <span id="replay-progress">0%</span>
+            </div>
+        </div>
+        <div id="instrument-panel"></div>
+        <div id="chart-controls">
+            <button class="chart-window-btn" data-minutes="10">10m</button>
+            <button class="chart-window-btn active" data-minutes="30">30m</button>
+            <button class="chart-window-btn" data-minutes="60">1h</button>
+            <button class="chart-window-btn" data-minutes="0">All</button>
+        </div>
+        <div id="chart-area">
+            <canvas id="sailing-chart"></canvas>
+        </div>
+    </div>
 
     <!-- Try local Leaflet first, fall back to CDN -->
     <script>
@@ -185,12 +232,20 @@
         }
 
         loadScript('lib/leaflet.js', 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.js')
+            .then(() => loadScript('https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js'))
+            .then(() => loadScript('https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3/dist/chartjs-adapter-date-fns.bundle.min.js'))
             .then(() => loadScript('js/tidal-flow.js'))
             .then(() => loadScript('js/wind-overlay.js'))
             .then(() => loadScript('js/aisstream.js'))
             .then(() => loadScript('js/vessel-store.js'))
             .then(() => loadScript('js/data-loader.js'))
             .then(() => loadScript('js/router.js'))
+            .then(() => loadScript('js/nmea-parser.js'))
+            .then(() => loadScript('js/ais-decoder.js'))
+            .then(() => loadScript('js/nmea-store.js'))
+            .then(() => loadScript('js/nmea-client.js'))
+            .then(() => loadScript('js/sailing-charts.js'))
+            .then(() => loadScript('js/competitor-labels.js'))
             .then(() => loadScript('js/app.js'));
 
         // Register service worker for PWA

@@ -8,6 +8,7 @@ const TILE_HOSTS = [
   'tile.openstreetmap.org',
   'gis.charttools.noaa.gov',
   'tiles.openseamap.org',
+  'cdn.jsdelivr.net',
 ];
 
 // External environmental API hosts to cache for offline

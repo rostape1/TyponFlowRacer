@@ -15,6 +15,8 @@ let currentStationsData = [];    // latest current station data from API
 let currentLayer = null;         // Leaflet layer group for currents
 let ownPosition = null;
 let ownVessel = null;  // full own vessel data (for SOG/COG)
+let nmeaOwnPosition = null;  // from NMEA GPS for competitor labels
+let competitorLabelsOn = false;  // toggle for competitor labels on map
 let messageCount = 0;
 const hiddenVessels = new Set();  // mmsi values of vessels hidden from map
 
@@ -592,6 +594,11 @@ function updateMarker(v) {
     const cutoff = Date.now() - TRACK_HOURS * 3600 * 1000;
     track.points = track.points.filter(p => p.time >= cutoff);
     track.line.setLatLngs(track.points.map(p => [p.lat, p.lon]));
+
+    if (typeof CompetitorLabels !== 'undefined' && nmeaOwnPosition && competitorLabelsOn) {
+        const marker = markers.get(v.mmsi);
+        if (marker) CompetitorLabels.update(v, nmeaOwnPosition.lat, nmeaOwnPosition.lon, marker);
+    }
 }
 
 // --- Toggle vessel visibility on map ---
@@ -1010,6 +1017,31 @@ map.on('click', (e) => {
 map.on('dragstart', () => {
     if (_mobileVesselsOn) closeMobileVesselList();
 });
+
+// --- Competitor Labels Toggle ---
+const _labelsToggle = document.getElementById('labels-toggle');
+if (_labelsToggle) {
+    _labelsToggle.addEventListener('click', () => {
+        competitorLabelsOn = !competitorLabelsOn;
+        _labelsToggle.textContent = competitorLabelsOn ? 'Labels: ON' : 'Labels: OFF';
+        _labelsToggle.className = competitorLabelsOn ? '' : 'labels-off';
+        if (!competitorLabelsOn) {
+            markers.forEach((marker, mmsi) => {
+                if (mmsi !== OWN_MMSI && marker._competitorTooltip) {
+                    marker.unbindTooltip();
+                    marker._competitorTooltip = false;
+                }
+            });
+        } else if (nmeaOwnPosition) {
+            vessels.forEach(v => {
+                const marker = markers.get(v.mmsi);
+                if (marker && v.lat != null && typeof CompetitorLabels !== 'undefined') {
+                    CompetitorLabels.update(v, nmeaOwnPosition.lat, nmeaOwnPosition.lon, marker);
+                }
+            });
+        }
+    });
+}
 
 // --- Route Planner ---
 let _routeMode = false;  // 'start' | 'end' | false
@@ -2346,4 +2378,147 @@ async function downloadForOffline(silent = false) {
 
 if (offlineDlBtn) {
     offlineDlBtn.addEventListener('click', downloadForOffline);
+}
+
+// === NMEA Sailing Dashboard Integration ===
+
+const nmeaStore = typeof NmeaStore !== 'undefined' ? new NmeaStore() : null;
+const nmeaClient = nmeaStore ? new NmeaClient(nmeaStore) : null;
+const sailingCharts = nmeaStore && typeof SailingCharts !== 'undefined' ? new SailingCharts(nmeaStore) : null;
+
+if (nmeaStore && nmeaClient) {
+    // Tab switching
+    document.querySelectorAll('.tab-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+            document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+            btn.classList.add('active');
+            const targetId = btn.dataset.tab;
+            document.getElementById('map-view').style.display = targetId === 'map-view' ? '' : 'none';
+            document.getElementById('charts-view').style.display = targetId === 'charts-view' ? '' : 'none';
+
+            // Map elements visibility
+            const mapOnly = ['status-bar', 'timeline-strip', 'layers-tray', 'forecast-quick-btns',
+                             'flow-legend', 'wind-legend', 'panel', 'panel-toggle'];
+            mapOnly.forEach(id => {
+                const el = document.getElementById(id);
+                if (el) el.style.display = targetId === 'map-view' ? '' : 'none';
+            });
+
+            if (targetId === 'map-view') map.invalidateSize();
+            if (targetId === 'charts-view' && sailingCharts) sailingCharts._updateChart();
+        });
+    });
+
+    // Initialize charts view
+    if (sailingCharts) sailingCharts.init();
+
+    // NMEA status display
+    const nmeaStatusEl = document.getElementById('nmea-status');
+    nmeaClient.setStatusCallback((status, rate) => {
+        if (nmeaStatusEl) {
+            nmeaStatusEl.className = 'nmea-status ' + status;
+            if (status === 'connected') nmeaStatusEl.textContent = `NMEA: ${rate}/s`;
+            else if (status === 'replaying') nmeaStatusEl.textContent = `Replay: ${rate}/s`;
+            else if (status === 'replay-paused') nmeaStatusEl.textContent = 'Replay: Paused';
+            else if (status === 'replay-done') nmeaStatusEl.textContent = 'Replay: Done';
+            else nmeaStatusEl.textContent = 'NMEA: Off';
+        }
+    });
+
+    // NMEA own position → map + competitor labels
+    nmeaStore.addEventListener('position', (e) => {
+        nmeaOwnPosition = e.detail;
+        if (e.detail.lat && e.detail.lon) {
+            ownPosition = { lat: e.detail.lat, lon: e.detail.lon };
+            const s = nmeaStore.getState();
+            const v = {
+                mmsi: OWN_MMSI, name: OWN_NAME, is_own_vessel: true,
+                lat: e.detail.lat, lon: e.detail.lon,
+                sog: s.sog, cog: s.cog, heading: s.heading,
+                ship_category: 'Sailing/Pleasure',
+            };
+            vesselStore.upsert(v);
+            updateMarker(v);
+            ownVessel = v;
+        }
+    });
+
+    // NMEA AIS → vessel store
+    nmeaStore.addEventListener('ais', (e) => {
+        const v = e.detail;
+        if (!v || !v.mmsi) return;
+        vesselStore.upsert(v);
+        const merged = vesselStore.get(v.mmsi);
+        if (merged && merged.lat != null) {
+            vessels.set(merged.mmsi, merged);
+            updateMarker(merged);
+            updatePanel();
+        }
+    });
+
+    // WebSocket connect button
+    const wsUrlInput = document.getElementById('nmea-ws-url');
+    const connectBtn = document.getElementById('nmea-connect-btn');
+    const savedUrl = localStorage.getItem('nmea_ws_url');
+    if (savedUrl && wsUrlInput) wsUrlInput.value = savedUrl;
+
+    if (connectBtn) {
+        connectBtn.addEventListener('click', () => {
+            if (nmeaClient._status === 'connected') {
+                nmeaClient.disconnect();
+                connectBtn.textContent = 'Connect';
+                connectBtn.classList.remove('connected');
+            } else {
+                const url = wsUrlInput ? wsUrlInput.value.trim() : '';
+                if (!url) return;
+                localStorage.setItem('nmea_ws_url', url);
+                nmeaClient.connect(url);
+                connectBtn.textContent = 'Disconnect';
+                connectBtn.classList.add('connected');
+            }
+        });
+    }
+
+    // File replay
+    const fileInput = document.getElementById('nmea-file-input');
+    const replayControls = document.getElementById('nmea-replay-controls');
+    const replayPauseBtn = document.getElementById('replay-pause');
+    const replaySpeedSel = document.getElementById('replay-speed');
+    const replayProgressEl = document.getElementById('replay-progress');
+
+    if (fileInput) {
+        fileInput.addEventListener('change', (e) => {
+            const file = e.target.files[0];
+            if (!file) return;
+            nmeaClient.loadFile(file, (lineCount) => {
+                if (replayControls) replayControls.classList.remove('hidden');
+                nmeaClient.startReplay(parseInt(replaySpeedSel?.value) || 1);
+                // Update progress
+                const progressTimer = setInterval(() => {
+                    const p = nmeaClient.getReplayProgress();
+                    if (!p) { clearInterval(progressTimer); return; }
+                    if (replayProgressEl) replayProgressEl.textContent = p.pct + '%';
+                    if (p.pct >= 100) clearInterval(progressTimer);
+                }, 250);
+            });
+        });
+    }
+
+    if (replayPauseBtn) {
+        replayPauseBtn.addEventListener('click', () => {
+            if (nmeaClient._replayPaused) {
+                nmeaClient.resumeReplay();
+                replayPauseBtn.textContent = '⏸';
+            } else {
+                nmeaClient.pauseReplay();
+                replayPauseBtn.textContent = '▶';
+            }
+        });
+    }
+
+    if (replaySpeedSel) {
+        replaySpeedSel.addEventListener('change', () => {
+            nmeaClient.setReplaySpeed(parseInt(replaySpeedSel.value));
+        });
+    }
 }
