@@ -33,11 +33,6 @@ class NmeaClient {
     // --- Live WebSocket ---
 
     connect(wsUrl) {
-        if (location.protocol === 'https:' && wsUrl.startsWith('ws://')) {
-            this._setStatus('error');
-            console.warn('Cannot connect ws:// from HTTPS page. Use the boat URL (HTTP) for live NMEA.');
-            return;
-        }
         this.stopReplay();
         this.store.reset();
         this._stopped = false;
