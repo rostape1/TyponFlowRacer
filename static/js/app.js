@@ -40,6 +40,11 @@ const TYPE_COLORS = {
 const DEFAULT_COLOR = '#95a5a6';
 const OWN_COLOR = '#f39c12';
 
+function _mapCenterPos() {
+    const c = map.getCenter();
+    return { lat: c.lat, lon: c.lng };
+}
+
 function getVesselColor(vessel) {
     if (vessel.mmsi === OWN_MMSI) return OWN_COLOR;
     return TYPE_COLORS[vessel.ship_category] || DEFAULT_COLOR;
@@ -596,7 +601,7 @@ function updateMarker(v) {
     track.line.setLatLngs(track.points.map(p => [p.lat, p.lon]));
 
     if (typeof CompetitorLabels !== 'undefined' && competitorLabelsOn) {
-        const own = nmeaOwnPosition || ownPosition;
+        const own = nmeaOwnPosition || ownPosition || _mapCenterPos();
         if (own) {
             const marker = markers.get(v.mmsi);
             if (marker) CompetitorLabels.update(v, own.lat, own.lon, marker);
@@ -1036,15 +1041,13 @@ if (_labelsToggle) {
                 }
             });
         } else {
-            const own = nmeaOwnPosition || ownPosition;
-            if (own) {
-                vessels.forEach(v => {
-                    const marker = markers.get(v.mmsi);
-                    if (marker && v.lat != null && typeof CompetitorLabels !== 'undefined') {
-                        CompetitorLabels.update(v, own.lat, own.lon, marker);
-                    }
-                });
-            }
+            const own = nmeaOwnPosition || ownPosition || _mapCenterPos();
+            vessels.forEach(v => {
+                const marker = markers.get(v.mmsi);
+                if (marker && v.lat != null && typeof CompetitorLabels !== 'undefined') {
+                    CompetitorLabels.update(v, own.lat, own.lon, marker);
+                }
+            });
         }
     });
 }
