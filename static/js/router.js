@@ -313,7 +313,7 @@ class RouterDataStore {
 const NUM_HEADINGS = 72;
 const HEADING_STEP = 360 / NUM_HEADINGS;
 const TIME_STEP_S = 120;
-const MAX_TIME_S = 10800;
+const MAX_TIME_S = 28800;
 const DEST_RADIUS_NM = 0.15;
 const PRUNE_SECTORS = 180;
 const MAX_DIVERSION_DEG = 120;
