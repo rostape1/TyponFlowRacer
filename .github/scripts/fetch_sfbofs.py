@@ -37,7 +37,16 @@ BOUNDS = {
 
 GRID_SPACING = 0.002  # ~200m
 
+GG_BOUNDS = {
+    "south": 37.78,
+    "north": 37.86,
+    "west": -122.53,
+    "east": -122.42,
+}
+GG_GRID_SPACING = 0.001  # ~100m
+
 OUTPUT_DIR = Path(__file__).resolve().parent.parent.parent / "static" / "data" / "sfbofs"
+OUTPUT_DIR_GG = Path(__file__).resolve().parent.parent.parent / "static" / "data" / "sfbofs_gg"
 
 
 def _s3_url(date_str: str, run_hour: str, forecast_hour: int = 0) -> str:
@@ -92,7 +101,7 @@ def _find_latest_run() -> tuple[str, str] | None:
     return None
 
 
-def _extract_and_regrid(nc_path: str, forecast_hour: int) -> dict | None:
+def _extract_and_regrid(nc_path: str, forecast_hour: int, bounds=BOUNDS, grid_spacing=GRID_SPACING) -> dict | None:
     import netCDF4 as nc
     from scipy.interpolate import griddata
 
@@ -160,10 +169,10 @@ def _extract_and_regrid(nc_path: str, forecast_hour: int) -> dict | None:
 
         margin = 0.05
         mask = (
-            (lats >= BOUNDS["south"] - margin) &
-            (lats <= BOUNDS["north"] + margin) &
-            (lons >= BOUNDS["west"] - margin) &
-            (lons <= BOUNDS["east"] + margin)
+            (lats >= bounds["south"] - margin) &
+            (lats <= bounds["north"] + margin) &
+            (lons >= bounds["west"] - margin) &
+            (lons <= bounds["east"] + margin)
         )
 
         lats_sub = lats[mask]
@@ -175,11 +184,11 @@ def _extract_and_regrid(nc_path: str, forecast_hour: int) -> dict | None:
             logger.error("Too few points in bounding box")
             return None
 
-        ny = int((BOUNDS["north"] - BOUNDS["south"]) / GRID_SPACING) + 1
-        nx = int((BOUNDS["east"] - BOUNDS["west"]) / GRID_SPACING) + 1
+        ny = int((bounds["north"] - bounds["south"]) / grid_spacing) + 1
+        nx = int((bounds["east"] - bounds["west"]) / grid_spacing) + 1
 
-        grid_lat = np.linspace(BOUNDS["south"], BOUNDS["north"], ny)
-        grid_lon = np.linspace(BOUNDS["west"], BOUNDS["east"], nx)
+        grid_lat = np.linspace(bounds["south"], bounds["north"], ny)
+        grid_lon = np.linspace(bounds["west"], bounds["east"], nx)
         grid_lon_2d, grid_lat_2d = np.meshgrid(grid_lon, grid_lat)
 
         points = np.column_stack([lons_sub, lats_sub])
@@ -190,7 +199,7 @@ def _extract_and_regrid(nc_path: str, forecast_hour: int) -> dict | None:
         v_grid = np.round(v_grid, 3)
 
         return {
-            "bounds": BOUNDS,
+            "bounds": bounds,
             "nx": nx,
             "ny": ny,
             "source": "NOAA SFBOFS",
@@ -203,8 +212,8 @@ def _extract_and_regrid(nc_path: str, forecast_hour: int) -> dict | None:
         ds.close()
 
 
-def _process_hour(args: tuple) -> tuple[int, dict | None]:
-    """Download and process a single forecast hour. Designed for multiprocessing."""
+def _process_hour(args: tuple) -> tuple[int, dict | None, dict | None]:
+    """Download and process a single forecast hour. Produces both main and GG grids."""
     forecast_hour, date_str, run_hour, model_run_label = args
     url = _s3_url(date_str, run_hour, forecast_hour=forecast_hour)
 
@@ -214,12 +223,15 @@ def _process_hour(args: tuple) -> tuple[int, dict | None]:
     try:
         if not _download_file(url, tmp_path):
             logger.warning(f"Failed to download hour {forecast_hour}")
-            return (forecast_hour, None)
+            return (forecast_hour, None, None)
 
         result = _extract_and_regrid(tmp_path, forecast_hour)
+        result_gg = _extract_and_regrid(tmp_path, forecast_hour, bounds=GG_BOUNDS, grid_spacing=GG_GRID_SPACING)
         if result:
             result["model_run"] = model_run_label
-        return (forecast_hour, result)
+        if result_gg:
+            result_gg["model_run"] = model_run_label
+        return (forecast_hour, result, result_gg)
     finally:
         try:
             os.unlink(tmp_path)
@@ -253,11 +265,14 @@ def main():
         return
 
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    OUTPUT_DIR_GG.mkdir(parents=True, exist_ok=True)
 
     # For a new run, clear stale hour files from the previous run first
     # so hours that don't exist in the new run don't serve old data
     if not same_run:
         for old in OUTPUT_DIR.glob("hour_*.json"):
+            old.unlink()
+        for old in OUTPUT_DIR_GG.glob("hour_*.json"):
             old.unlink()
         logger.info("Cleared old run hour files")
 
@@ -289,7 +304,7 @@ def main():
             with ProcessPoolExecutor(max_workers=4) as pool:
                 futures = {pool.submit(_process_hour, a): a[0] for a in args}
                 for future in as_completed(futures):
-                    hour, result = future.result()
+                    hour, result, result_gg = future.result()
                     if result:
                         out_path = OUTPUT_DIR / f"hour_{hour:02d}.json"
                         out_path.write_text(json.dumps(result))
@@ -297,7 +312,10 @@ def main():
                         batch_success += 1
                         max_hour = max(max_hour, hour)
                         logger.info(f"Wrote hour {hour:02d} ({existing_count + new_success}/49)")
-                    else:
+                    if result_gg:
+                        out_gg = OUTPUT_DIR_GG / f"hour_{hour:02d}.json"
+                        out_gg.write_text(json.dumps(result_gg))
+                    if not result:
                         logger.warning(f"Failed hour {hour}")
             if batch_success == 0:
                 logger.info(f"Batch starting at hour {batch[0]} had no successes — NOAA likely hasn't published beyond hour {max_hour}")

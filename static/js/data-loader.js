@@ -119,6 +119,19 @@ async function fetchCurrentField(minutesOffset = 0) {
     return data;
 }
 
+async function fetchCurrentFieldHighRes(minutesOffset = 0) {
+    const offsetHours = Math.max(0, Math.floor(minutesOffset / 60));
+    let elapsedHours = 0;
+    if (_sfbofsRunTime) {
+        elapsedHours = Math.max(0, Math.floor((Date.now() - _sfbofsRunTime.getTime()) / 3600000));
+    }
+    const fileIndex = Math.min(48, elapsedHours + offsetHours);
+    const url = `${DATA_BASE}/sfbofs_gg/hour_${String(fileIndex).padStart(2, '0')}.json`;
+    const res = await fetch(url);
+    if (!res.ok) return null;
+    return await res.json();
+}
+
 // --- Wind Field (batched Open-Meteo API) ---
 
 const OPEN_METEO_API = 'https://api.open-meteo.com/v1/forecast';

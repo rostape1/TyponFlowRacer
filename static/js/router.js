@@ -155,6 +155,7 @@ function _bearingDeg(lat1, lon1, lat2, lon2) {
 class RouterDataStore {
     constructor() {
         this.sfbofsGrids = new Map();
+        this.sfbofsGridsHR = new Map();
         this.windGrids = new Map();
         this.sfbofsBounds = null;
         this.sfbofsNx = 0;
@@ -165,12 +166,14 @@ class RouterDataStore {
     async preload(startTimeMs, hoursNeeded, startLat, startLon, endLat, endLon) {
         this.startTimeMs = startTimeMs;
         this.sfbofsGrids.clear();
+        this.sfbofsGridsHR.clear();
         this.windGrids.clear();
 
         const runTime = getSfbofsRunTime();
         const elapsedHours = runTime ? Math.max(0, Math.floor((startTimeMs - runTime.getTime()) / 3600000)) : 0;
 
         const sfbofsFetches = [];
+        const sfbofsHRFetches = [];
         for (let h = 0; h <= hoursNeeded; h++) {
             const fileIndex = Math.min(48, elapsedHours + h);
             sfbofsFetches.push(
@@ -180,9 +183,15 @@ class RouterDataStore {
                     }
                 }).catch(() => {})
             );
+            sfbofsHRFetches.push(
+                fetchCurrentFieldHighRes(h * 60).then(data => {
+                    if (data) this.sfbofsGridsHR.set(h, data);
+                }).catch(() => {})
+            );
         }
         await Promise.all([
             Promise.all(sfbofsFetches),
+            Promise.all(sfbofsHRFetches),
             _loadLandMask(),
         ]);
 
@@ -210,6 +219,7 @@ class RouterDataStore {
 
         return {
             sfbofsHours: this.sfbofsGrids.size,
+            sfbofsHRHours: this.sfbofsGridsHR.size,
             windHours: this.windGrids.size,
         };
     }
@@ -242,6 +252,17 @@ class RouterDataStore {
         const h0 = Math.floor(hoursFromStart);
         const h1 = h0 + 1;
         const frac = hoursFromStart - h0;
+
+        // Try high-res Golden Gate grid first
+        const hr0 = this.sfbofsGridsHR.get(h0);
+        const hr1 = this.sfbofsGridsHR.get(h1);
+        if (hr0 || hr1) {
+            const hv0 = hr0 ? this._bilinearGrid(hr0, lat, lon) : null;
+            const hv1 = hr1 ? this._bilinearGrid(hr1, lat, lon) : null;
+            if (hv0 && hv1) return { vx: _lerp(hv0.vx, hv1.vx, frac), vy: _lerp(hv0.vy, hv1.vy, frac) };
+            if (hv0) return hv0;
+            if (hv1) return hv1;
+        }
 
         const g0 = this.sfbofsGrids.get(h0);
         const g1 = this.sfbofsGrids.get(h1);
