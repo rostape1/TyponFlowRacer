@@ -379,13 +379,17 @@ function computeRoute(startLat, startLon, endLat, endLon, startTimeMs, perfFacto
                     const newLat = pt.lat + dLat;
                     const newLon = pt.lon + dLon;
 
+                    // Current benefit: dot product of current with heading direction
+                    const cBenefit = current
+                        ? current.vx * Math.sin(headingRad) + current.vy * Math.cos(headingRad)
+                        : 0;
+
                     const newPt = {
                         lat: newLat, lon: newLon,
                         timeMs: pt.timeMs + TIME_STEP_S * 1000,
                         parent: pt,
                         heading: headingDeg,
-                        cvx: current ? current.vx : 0,
-                        cvy: current ? current.vy : 0,
+                        cBenefit,
                     };
 
                     if (_haversineNm(newLat, newLon, endLat, endLon) < DEST_RADIUS_NM) {
@@ -437,7 +441,7 @@ function _backtrack(point) {
     const path = [];
     let p = point;
     while (p) {
-        path.unshift({ lat: p.lat, lon: p.lon, timeMs: p.timeMs, heading: p.heading, cvx: p.cvx || 0, cvy: p.cvy || 0 });
+        path.unshift({ lat: p.lat, lon: p.lon, timeMs: p.timeMs, heading: p.heading, cBenefit: p.cBenefit || 0 });
         p = p.parent;
     }
     return path;
@@ -452,16 +456,18 @@ function _pathDistance(path) {
 }
 
 function _pruneIsochrone(points, originLat, originLon, destLat, destLon) {
-    // Sector pruning: keep closest-to-destination per angular sector
+    // Classic James (1957) isochrone pruning: keep farthest-from-origin per sector.
+    // This preserves the full reachable wavefront, allowing detour routes
+    // (e.g., shore-hugging to avoid adverse current) to survive pruning.
     const sectors = new Array(PRUNE_SECTORS).fill(null);
 
     for (const pt of points) {
         const brg = _bearingDeg(originLat, originLon, pt.lat, pt.lon);
         const sector = Math.floor(brg / (360 / PRUNE_SECTORS)) % PRUNE_SECTORS;
-        const distToDest = _haversineNm(pt.lat, pt.lon, destLat, destLon);
+        const distFromOrigin = _haversineNm(originLat, originLon, pt.lat, pt.lon);
 
-        if (!sectors[sector] || distToDest < sectors[sector].distToDest) {
-            sectors[sector] = { pt, distToDest };
+        if (!sectors[sector] || distFromOrigin > sectors[sector].dist) {
+            sectors[sector] = { pt, dist: distFromOrigin };
         }
     }
 
@@ -486,7 +492,6 @@ function _smoothPath(path) {
     let smoothed = [path[0]];
     let i = 0;
     while (i < path.length - 1) {
-        // Try to skip ahead as far as possible without crossing land
         let best = i + 1;
         for (let j = Math.min(i + 8, path.length - 1); j > i + 1; j--) {
             if (!_segmentCrossesLand(path[i].lat, path[i].lon, path[j].lat, path[j].lon)) {
@@ -494,7 +499,12 @@ function _smoothPath(path) {
                 break;
             }
         }
-        smoothed.push(path[best]);
+        // Average cBenefit over all skipped points for accurate segment coloring
+        let sumBenefit = 0;
+        for (let k = i + 1; k <= best; k++) sumBenefit += path[k].cBenefit;
+        const avgBenefit = sumBenefit / (best - i);
+        const pt = { ...path[best], cBenefit: avgBenefit };
+        smoothed.push(pt);
         i = best;
     }
     return smoothed;
@@ -522,12 +532,10 @@ class RouteRenderer {
             const p0 = path[i - 1];
             const p1 = path[i];
 
-            // Compute current benefit along track direction
+            // Use pre-computed current benefit (dot product of current with heading)
             let color = '#ffffff';
-            const trackDirRad = Math.atan2(p1.lon - p0.lon, p1.lat - p0.lat);
-            const benefit = p0.cvx * Math.sin(trackDirRad) + p0.cvy * Math.cos(trackDirRad);
-            if (benefit > 0.3) color = '#2ecc71';
-            else if (benefit < -0.3) color = '#e74c3c';
+            if (p1.cBenefit > 0.3) color = '#2ecc71';
+            else if (p1.cBenefit < -0.3) color = '#e74c3c';
 
             L.polyline([[p0.lat, p0.lon], [p1.lat, p1.lon]], {
                 color, weight: 4, opacity: 0.9,
