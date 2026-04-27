@@ -323,7 +323,7 @@ function computeRoute(startLat, startLon, endLat, endLon, startTimeMs, perfFacto
 
     const hoursNeeded = Math.ceil(MAX_TIME_S / 3600) + 1;
 
-    return store.preload(startTimeMs, hoursNeeded, startLat, startLon, endLat, endLon).then(info => {
+    return store.preload(startTimeMs, hoursNeeded, startLat, startLon, endLat, endLon).then(async info => {
         if (info.windHours === 0) {
             return { error: 'No wind data available' };
         }
@@ -346,6 +346,11 @@ function computeRoute(startLat, startLon, endLat, endLon, startTimeMs, perfFacto
         let maxWindSeen = 0;
 
         for (let step = 0; step < maxSteps; step++) {
+            // Yield to UI thread every 10 steps to prevent hanging
+            if (step % 10 === 0 && step > 0) {
+                await new Promise(r => setTimeout(r, 0));
+            }
+
             const newPoints = [];
 
             for (const pt of wavefront) {
@@ -404,10 +409,8 @@ function computeRoute(startLat, startLon, endLat, endLon, startTimeMs, perfFacto
 
                     if (!store.isWater(newLat, newLon)) continue;
 
-                    // Check that the segment doesn't cross land
                     if (_segmentCrossesLand(pt.lat, pt.lon, newLat, newLon)) continue;
 
-                    // Bearing filter: reject points expanding >120° off course
                     const ptBrg = _bearingDeg(startLat, startLon, newLat, newLon);
                     let brgDiff = Math.abs(ptBrg - destBrg);
                     if (brgDiff > 180) brgDiff = 360 - brgDiff;
@@ -456,18 +459,16 @@ function _pathDistance(path) {
 }
 
 function _pruneIsochrone(points, originLat, originLon, destLat, destLon) {
-    // Classic James (1957) isochrone pruning: keep farthest-from-origin per sector.
-    // This preserves the full reachable wavefront, allowing detour routes
-    // (e.g., shore-hugging to avoid adverse current) to survive pruning.
+    // Sector pruning: keep closest-to-destination per angular sector
     const sectors = new Array(PRUNE_SECTORS).fill(null);
 
     for (const pt of points) {
         const brg = _bearingDeg(originLat, originLon, pt.lat, pt.lon);
         const sector = Math.floor(brg / (360 / PRUNE_SECTORS)) % PRUNE_SECTORS;
-        const distFromOrigin = _haversineNm(originLat, originLon, pt.lat, pt.lon);
+        const distToDest = _haversineNm(pt.lat, pt.lon, destLat, destLon);
 
-        if (!sectors[sector] || distFromOrigin > sectors[sector].dist) {
-            sectors[sector] = { pt, dist: distFromOrigin };
+        if (!sectors[sector] || distToDest < sectors[sector].distToDest) {
+            sectors[sector] = { pt, distToDest };
         }
     }
 
