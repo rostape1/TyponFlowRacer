@@ -389,7 +389,7 @@ function computeRoute(startLat, startLon, endLat, endLon, startTimeMs, perfFacto
                     };
 
                     if (_haversineNm(newLat, newLon, endLat, endLon) < DEST_RADIUS_NM) {
-                        const path = _backtrack(newPt);
+                        const path = _smoothPath(_backtrack(newPt));
                         return {
                             path,
                             isochrones,
@@ -399,6 +399,9 @@ function computeRoute(startLat, startLon, endLat, endLon, startTimeMs, perfFacto
                     }
 
                     if (!store.isWater(newLat, newLon)) continue;
+
+                    // Check that the segment doesn't cross land
+                    if (_segmentCrossesLand(pt.lat, pt.lon, newLat, newLon)) continue;
 
                     // Bearing filter: reject points expanding >120° off course
                     const ptBrg = _bearingDeg(startLat, startLon, newLat, newLon);
@@ -449,55 +452,52 @@ function _pathDistance(path) {
 }
 
 function _pruneIsochrone(points, originLat, originLon, destLat, destLon) {
-    // Step 1: Sector pruning — keep farthest-from-origin per angular sector.
-    // This is the standard isochrone definition: the frontier of reachable positions.
+    // Sector pruning: keep closest-to-destination per angular sector
     const sectors = new Array(PRUNE_SECTORS).fill(null);
 
     for (const pt of points) {
         const brg = _bearingDeg(originLat, originLon, pt.lat, pt.lon);
         const sector = Math.floor(brg / (360 / PRUNE_SECTORS)) % PRUNE_SECTORS;
-        const dist = _haversineNm(originLat, originLon, pt.lat, pt.lon);
+        const distToDest = _haversineNm(pt.lat, pt.lon, destLat, destLon);
 
-        if (!sectors[sector] || dist > sectors[sector].dist) {
-            sectors[sector] = { pt, dist };
+        if (!sectors[sector] || distToDest < sectors[sector].distToDest) {
+            sectors[sector] = { pt, distToDest };
         }
     }
 
-    let pruned = sectors.filter(s => s !== null);
+    return sectors.filter(s => s !== null).map(s => s.pt);
+}
 
-    // Step 2: Sort by bearing for concavity removal
-    pruned.sort((a, b) => {
-        const brgA = _bearingDeg(originLat, originLon, a.pt.lat, a.pt.lon);
-        const brgB = _bearingDeg(originLat, originLon, b.pt.lat, b.pt.lon);
-        return brgA - brgB;
-    });
+// Check if the straight line between two points crosses land
+function _segmentCrossesLand(lat1, lon1, lat2, lon2) {
+    const steps = Math.max(3, Math.ceil(_haversineNm(lat1, lon1, lat2, lon2) / 0.05));
+    for (let i = 1; i < steps; i++) {
+        const t = i / steps;
+        const lat = lat1 + (lat2 - lat1) * t;
+        const lon = lon1 + (lon2 - lon1) * t;
+        if (_isTooCloseToLand(lat, lon)) return true;
+    }
+    return false;
+}
 
-    // Step 3: Remove concavities — points closer to origin than their neighbors.
-    // This enforces a smooth, outward-expanding envelope.
-    // Don't wrap around: the filtered set doesn't span 360°.
-    if (pruned.length > 3) {
-        let changed = true;
-        while (changed) {
-            changed = false;
-            const next = [pruned[0]];
-            for (let i = 1; i < pruned.length - 1; i++) {
-                const prev = pruned[i - 1];
-                const curr = pruned[i];
-                const nxt = pruned[i + 1];
-                const neighborAvg = (prev.dist + nxt.dist) / 2;
-                if (curr.dist < neighborAvg * 0.85) {
-                    changed = true;
-                    continue;
-                }
-                next.push(curr);
+// Smooth backtracked path: remove intermediate points that zigzag
+function _smoothPath(path) {
+    if (path.length < 3) return path;
+    let smoothed = [path[0]];
+    let i = 0;
+    while (i < path.length - 1) {
+        // Try to skip ahead as far as possible without crossing land
+        let best = i + 1;
+        for (let j = Math.min(i + 8, path.length - 1); j > i + 1; j--) {
+            if (!_segmentCrossesLand(path[i].lat, path[i].lon, path[j].lat, path[j].lon)) {
+                best = j;
+                break;
             }
-            next.push(pruned[pruned.length - 1]);
-            pruned = next;
-            if (pruned.length <= 3) break;
         }
+        smoothed.push(path[best]);
+        i = best;
     }
-
-    return pruned.map(s => s.pt);
+    return smoothed;
 }
 
 // --- Route Renderer ---
