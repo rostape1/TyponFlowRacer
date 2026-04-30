@@ -1,8 +1,9 @@
 // --- Config ---
 const APP_BUILD = '6ea2bd0';  // git commit hash — updated on each deploy
 const OWN_MMSI = 338361814;
+window.OWN_MMSI = OWN_MMSI;
 const OWN_NAME = 'TYPON';
-const TRACK_HOURS = 1;
+const TRACK_HOURS = 0.5;
 const STALE_MINUTES = 10;
 const MAX_VESSELS = 50;
 
@@ -14,6 +15,7 @@ const currentMarkers = new Map(); // station_id → Leaflet marker
 let currentStationsData = [];    // latest current station data from API
 let currentLayer = null;         // Leaflet layer group for currents
 let ownPosition = null;
+window.ownPosition = null;
 let ownVessel = null;  // full own vessel data (for SOG/COG)
 let nmeaOwnPosition = null;  // from NMEA GPS for competitor labels
 let competitorLabelsOn = false;  // toggle for competitor labels on map
@@ -738,6 +740,7 @@ for (const v of vesselStore.getAll()) {
     vessels.set(v.mmsi, v);
     if (v.mmsi === OWN_MMSI && v.lat != null) {
         ownPosition = { lat: v.lat, lon: v.lon };
+        window.ownPosition = ownPosition;
         ownVessel = v;
     }
     updateMarker(v);
@@ -783,6 +786,7 @@ function connectAISStream() {
 
             if (data.mmsi === OWN_MMSI && data.lat != null) {
                 ownPosition = { lat: data.lat, lon: data.lon };
+                window.ownPosition = ownPosition;
                 ownVessel = merged;
             }
 
@@ -2404,6 +2408,8 @@ if (nmeaStore && nmeaClient) {
             const targetId = btn.dataset.tab;
             document.getElementById('map-view').style.display = targetId === 'map-view' ? '' : 'none';
             document.getElementById('charts-view').style.display = targetId === 'charts-view' ? '' : 'none';
+            const radarEl = document.getElementById('radar-view');
+            if (radarEl) radarEl.style.display = targetId === 'radar-view' ? '' : 'none';
 
             // Map elements visibility
             const mapOnly = ['status-bar', 'timeline-strip', 'layers-tray', 'forecast-quick-btns',
@@ -2414,12 +2420,18 @@ if (nmeaStore && nmeaClient) {
             });
 
             if (targetId === 'map-view') map.invalidateSize();
-            if (targetId === 'charts-view' && sailingCharts) sailingCharts._updateChart();
+            if (targetId === 'radar-view' && window._radarView) window._radarView.show();
         });
     });
 
     // Initialize charts view
     if (sailingCharts) sailingCharts.init();
+
+    // Initialize radar view
+    if (typeof RadarView !== 'undefined') {
+        window._radarView = new RadarView(vesselStore);
+        window._radarView.init();
+    }
 
     // NMEA status display
     const nmeaStatusEl = document.getElementById('nmea-status');
@@ -2439,6 +2451,7 @@ if (nmeaStore && nmeaClient) {
         nmeaOwnPosition = e.detail;
         if (e.detail.lat && e.detail.lon) {
             ownPosition = { lat: e.detail.lat, lon: e.detail.lon };
+            window.ownPosition = ownPosition;
             const s = nmeaStore.getState();
             const v = {
                 mmsi: OWN_MMSI, name: OWN_NAME, is_own_vessel: true,
@@ -2462,6 +2475,11 @@ if (nmeaStore && nmeaClient) {
             vessels.set(merged.mmsi, merged);
             updateMarker(merged);
             updatePanel();
+            if (merged.is_own_vessel || merged.mmsi === OWN_MMSI) {
+                ownPosition = { lat: merged.lat, lon: merged.lon };
+                window.ownPosition = ownPosition;
+                ownVessel = merged;
+            }
         }
     });
 
@@ -2490,23 +2508,28 @@ if (nmeaStore && nmeaClient) {
 
     // Auto-connect to NMEA WebSocket on page load
     // Auto-connect to NMEA WebSocket on page load (silently fails if Pi not reachable)
+    // Skip on HTTPS pages — browsers block ws:// from secure origins (mixed content)
     const autoConnectUrl = savedUrl || 'ws://raspberrypi.local:8765';
     if (wsUrlInput && !wsUrlInput.value) wsUrlInput.value = autoConnectUrl;
-    setTimeout(() => {
-        try {
-            const testWs = new WebSocket(autoConnectUrl);
-            testWs.onopen = () => {
-                testWs.close();
-                nmeaClient.connect(autoConnectUrl);
-                localStorage.setItem('nmea_ws_url', autoConnectUrl);
-                if (connectBtn) {
-                    connectBtn.textContent = 'Disconnect';
-                    connectBtn.classList.add('connected');
-                }
-            };
-            testWs.onerror = () => { testWs.close(); };
-        } catch (e) { /* silently fail */ }
-    }, 2000);
+    const isSecureOrigin = location.protocol === 'https:';
+    const isInsecureWs = autoConnectUrl.startsWith('ws://');
+    if (!isSecureOrigin || !isInsecureWs) {
+        setTimeout(() => {
+            try {
+                const testWs = new WebSocket(autoConnectUrl);
+                testWs.onopen = () => {
+                    testWs.close();
+                    nmeaClient.connect(autoConnectUrl);
+                    localStorage.setItem('nmea_ws_url', autoConnectUrl);
+                    if (connectBtn) {
+                        connectBtn.textContent = 'Disconnect';
+                        connectBtn.classList.add('connected');
+                    }
+                };
+                testWs.onerror = () => { testWs.close(); };
+            } catch (e) { /* silently fail */ }
+        }, 2000);
+    }
 
     // File replay
     const fileInput = document.getElementById('nmea-file-input');

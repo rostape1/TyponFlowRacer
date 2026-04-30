@@ -20,6 +20,7 @@
     <div id="tab-bar">
         <button class="tab-btn active" data-tab="map-view">Map</button>
         <button class="tab-btn" data-tab="charts-view">Charts</button>
+        <button class="tab-btn" data-tab="radar-view">Radar</button>
         <span id="nmea-status" class="nmea-status">NMEA: Off</span>
     </div>
 
@@ -198,15 +199,145 @@
                 <span id="replay-progress">0%</span>
             </div>
         </div>
-        <div id="instrument-panel"></div>
-        <div id="chart-controls">
-            <button class="chart-window-btn" data-minutes="10">10m</button>
-            <button class="chart-window-btn active" data-minutes="30">30m</button>
-            <button class="chart-window-btn" data-minutes="60">1h</button>
-            <button class="chart-window-btn" data-minutes="0">All</button>
+
+        <!-- Flowracer instrument dashboard -->
+        <div id="instrument-panel">
+            <!-- Heading hero -->
+            <div id="fr-heading" class="fr-section fr-heading-section">
+                <div class="fr-heading-left">
+                    <span class="fr-label">Heading</span>
+                    <div class="fr-heading-value">
+                        <span id="gauge-hdg" class="fr-hero-num">---</span>
+                        <span class="fr-hero-unit">°M</span>
+                    </div>
+                </div>
+                <div class="fr-heading-icon">
+                    <svg viewBox="0 0 48 48" width="56" height="56" fill="none" stroke="currentColor" stroke-width="1.5">
+                        <circle cx="24" cy="24" r="22" opacity="0.2"/>
+                        <path d="M24 6 L30 30 L24 26 L18 30 Z" fill="currentColor" opacity="0.8"/>
+                    </svg>
+                    <div class="fr-compass-ticks">
+                        <span class="fr-tick active"></span>
+                        <span class="fr-tick"></span>
+                        <span class="fr-tick"></span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- SOG / BSP grid -->
+            <div class="fr-section fr-speed-grid">
+                <div class="fr-metric-block fr-border-right">
+                    <div class="fr-metric-header">
+                        <span class="fr-label"><span class="fr-icon">◁</span> SOG</span>
+                    </div>
+                    <div class="fr-metric-body">
+                        <span id="gauge-sog" class="fr-big-num">---</span>
+                        <span class="fr-big-unit">kts</span>
+                    </div>
+                    <canvas id="spark-sog" class="fr-sparkline"></canvas>
+                </div>
+                <div class="fr-metric-block">
+                    <div class="fr-metric-header">
+                        <span class="fr-label"><span class="fr-icon">≈</span> BSP</span>
+                    </div>
+                    <div class="fr-metric-body">
+                        <span id="gauge-bsp" class="fr-big-num">---</span>
+                        <span class="fr-big-unit">kts</span>
+                    </div>
+                    <canvas id="spark-bsp" class="fr-sparkline"></canvas>
+                </div>
+            </div>
+
+            <!-- Wind section: TWD + TWS -->
+            <div class="fr-section fr-wind-grid">
+                <div class="fr-metric-block fr-wind-left fr-border-right">
+                    <span class="fr-label">True Wind Dir</span>
+                    <div class="fr-metric-body">
+                        <span id="gauge-twd" class="fr-medium-num">---</span>
+                        <span class="fr-medium-unit">°T</span>
+                    </div>
+                    <div class="fr-shift-chart-wrap">
+                        <canvas id="spark-twd-shift" class="fr-shift-chart"></canvas>
+                        <div class="fr-shift-labels">
+                            <span class="fr-shift-title">Shift Hist</span>
+                            <span class="fr-shift-lr"><span class="fr-shift-l">−10° L</span> <span class="fr-shift-r">+10° R</span></span>
+                        </div>
+                    </div>
+                </div>
+                <div class="fr-metric-block fr-wind-right">
+                    <span class="fr-label">True Wind Spd</span>
+                    <div class="fr-metric-body">
+                        <span id="gauge-tws" class="fr-medium-num">---</span>
+                        <span class="fr-medium-unit">kts</span>
+                    </div>
+                    <canvas id="spark-tws" class="fr-sparkline fr-sparkline-tall"></canvas>
+                </div>
+            </div>
+
+            <!-- Apparent wind: AWS + AWA -->
+            <div class="fr-section fr-apparent-row">
+                <div class="fr-metric-block fr-apparent-block">
+                    <span class="fr-label"><span class="fr-dot fr-dot-yellow"></span> AWS</span>
+                    <div class="fr-metric-body">
+                        <span id="gauge-aws" class="fr-medium-num">---</span>
+                        <span class="fr-medium-unit">kts</span>
+                    </div>
+                    <canvas id="spark-aws" class="fr-sparkline"></canvas>
+                </div>
+                <div class="fr-metric-block fr-apparent-block">
+                    <span class="fr-label"><span class="fr-dot"></span> AWA</span>
+                    <div class="fr-metric-body">
+                        <span id="gauge-awa" class="fr-medium-num">---</span>
+                        <span id="gauge-awa-side" class="fr-medium-unit">°</span>
+                    </div>
+                    <canvas id="spark-awa" class="fr-sparkline"></canvas>
+                </div>
+            </div>
+
+            <!-- Depth + TWA compact row -->
+            <div class="fr-section fr-extra-row">
+                <div class="fr-metric-block fr-compact">
+                    <span class="fr-label">Depth</span>
+                    <div class="fr-metric-body">
+                        <span id="gauge-depth" class="fr-small-num">---</span>
+                        <span class="fr-small-unit">ft</span>
+                    </div>
+                </div>
+                <div class="fr-metric-block fr-compact">
+                    <span class="fr-label">TWA</span>
+                    <div class="fr-metric-body">
+                        <span id="gauge-twa" class="fr-small-num">---</span>
+                        <span class="fr-small-unit">°</span>
+                    </div>
+                </div>
+            </div>
         </div>
-        <div id="chart-area">
-            <canvas id="sailing-chart"></canvas>
+
+    </div>
+
+    <!-- Radar view -->
+    <div id="radar-view" class="view-container" style="display:none">
+        <div id="radar-container">
+            <div id="radar-header">
+                <div style="display:flex;justify-content:space-between;align-items:baseline">
+                    <h2 class="radar-title">Strategic Radar</h2>
+                    <span id="radar-count" style="font:10px monospace;color:rgba(255,255,255,0.3);letter-spacing:0.15em;text-transform:uppercase"></span>
+                </div>
+                <div class="radar-legend">
+                    <span class="radar-legend-item"><span class="radar-dot" style="background:#3b82f6"></span> Slow</span>
+                    <span class="radar-legend-item"><span class="radar-dot" style="background:#4ade80"></span> Normal</span>
+                    <span class="radar-legend-item"><span class="radar-dot" style="background:#fbbf24"></span> Fast</span>
+                    <span class="radar-legend-item"><span class="radar-dot" style="background:#ef4444"></span> V.Fast</span>
+                </div>
+            </div>
+            <div id="radar-scope">
+                <canvas id="radar-canvas"></canvas>
+                <div id="radar-vessels"></div>
+                <div id="radar-zoom">
+                    <button id="radar-zoom-in" class="radar-zoom-btn">+</button>
+                    <button id="radar-zoom-out" class="radar-zoom-btn">−</button>
+                </div>
+            </div>
         </div>
     </div>
 
@@ -245,6 +376,7 @@
             .then(() => loadScript('js/nmea-store.js'))
             .then(() => loadScript('js/nmea-client.js'))
             .then(() => loadScript('js/sailing-charts.js'))
+            .then(() => loadScript('js/radar-view.js'))
             .then(() => loadScript('js/competitor-labels.js'))
             .then(() => loadScript('js/app.js'));
 

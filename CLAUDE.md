@@ -82,6 +82,7 @@ Environmental data sources:
 | `js/nmea-client.js` | NMEA data source: live WebSocket to nmea_ws_proxy.py or file replay with speed control (1x/2x/5x/10x/max). |
 | `js/sailing-charts.js` | Charts view: 8 instrument gauges (SOG, BSP, HDG, Depth, AWA, TWA, TWD, TWS) + Chart.js time-series (TWA/TWD/TWS/BSP). |
 | `js/competitor-labels.js` | Leaflet tooltips on competitor vessels: distance+trend, speed+trend, bearing, name relative to Typon. |
+| `js/radar-view.js` | Strategic Radar tab: polar plot of vessels relative to own ship. Canvas range rings + crosshairs, DOM vessel labels, track trails. Manual zoom (scroll wheel + buttons, 0.25–32nm). |
 | `js/tidal-flow.js` | Canvas particle animation + speed heatmap for tidal currents (2000-3000 particles, bilinear interpolation, offscreen-rendered color overlay) |
 | `js/wind-overlay.js` | Canvas particle animation for wind (800 arrow-tipped particles with speed number flashing, NDBC station markers, dual color schemes) |
 | `css/style.css` | Dark nautical theme, glassmorphism panels, responsive 3-row mobile layout, Leaflet control styling, sailing dashboard |
@@ -193,7 +194,8 @@ Starts the NMEA WebSocket proxy (port 8765) which connects to the boat's instrum
 
 ## Notable Behaviors
 
-- **Two-view tab system** — Map tab (existing vessel tracking + environmental overlays) and Charts tab (NMEA sailing instruments + time-series). Tab bar at top, both views stay in DOM for instant switching.
+- **Three-view tab system** — Map tab (vessel tracking + environmental overlays), Charts tab (NMEA sailing instruments + time-series), and Radar tab (polar plot of nearby vessels). Tab bar at top, all views stay in DOM for instant switching.
+- **Strategic Radar** — `radar-view.js` draws range rings + crosshairs on canvas, positions vessel labels as DOM overlays. Manual zoom via scroll wheel or +/- buttons (0.25–32nm range steps). Track trails show recent vessel movement (15min history, clamped to radar range). Falls back to map center when no own position. Speed-colored vessel icons (blue/green/yellow/red).
 - **Single URL deployment** — Always use the GitHub Pages URL. On the boat's WiFi, the app auto-connects to the Pi's NMEA WebSocket (silently fails when not on boat network). Environmental data is fetched from the internet and cached by the service worker for offline use.
 - **NMEA data pipeline** — `nmea-parser.js` → `nmea-store.js` → `sailing-charts.js` (Charts view) and `competitor-labels.js` (Map view). Data from live WebSocket (via `nmea_ws_proxy.py`) or file replay.
 - **NMEA AIS decoding** — `ais-decoder.js` decodes raw !AIVDM/!AIVDO sentences from the boat's VHF receiver. Works offline at sea. Falls back to AISstream.io cloud when internet available.

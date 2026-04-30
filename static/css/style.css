@@ -1655,7 +1655,7 @@ body.panel-collapsed #panel-toggle {
     display: flex;
     flex-direction: column;
     background: #0a1628;
-    overflow-y: auto;
+    overflow: hidden;
 }
 
 #nmea-source-bar {
@@ -1754,82 +1754,459 @@ body.panel-collapsed #panel-toggle {
 }
 
 #instrument-panel {
-    display: grid;
-    grid-template-columns: repeat(4, 1fr);
-    gap: 8px;
-    padding: 10px 12px;
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-height: 0;
+    overflow: hidden;
+    font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', 'Menlo', monospace;
 }
 
-.instrument-gauge {
-    background: rgba(255, 255, 255, 0.05);
-    backdrop-filter: blur(8px);
-    border: 1px solid rgba(100, 150, 200, 0.12);
+/* Flowracer sections */
+.fr-section {
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+    min-height: 0;
+    flex-shrink: 1;
+}
+
+.fr-label {
+    font-size: 10px;
+    font-weight: 500;
+    text-transform: uppercase;
+    letter-spacing: 0.25em;
+    color: rgba(255, 255, 255, 0.35);
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    white-space: nowrap;
+}
+
+.fr-icon {
+    opacity: 0.5;
+    font-size: 11px;
+}
+
+.fr-border-right {
+    border-right: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+/* Heading hero — flex 1.2 (largest) */
+.fr-heading-section {
+    flex: 1.2;
+    padding: 12px 20px;
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-end;
+    position: relative;
+    overflow: hidden;
+}
+
+.fr-heading-section::before {
+    content: '';
+    position: absolute;
+    top: -40px;
+    right: -40px;
+    width: 160px;
+    height: 160px;
+    background: radial-gradient(circle, rgba(0, 229, 255, 0.06), transparent 70%);
+    pointer-events: none;
+}
+
+.fr-heading-left {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.fr-heading-value {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+}
+
+.fr-hero-num {
+    font-size: clamp(36px, 8vh, 72px);
+    font-weight: 300;
+    line-height: 1;
+    letter-spacing: -0.03em;
+    color: #fff;
+    font-variant-numeric: tabular-nums;
+}
+
+.fr-hero-unit {
+    font-size: clamp(14px, 2.5vh, 22px);
+    color: rgba(255, 255, 255, 0.18);
+    font-weight: 300;
+}
+
+.fr-heading-icon {
+    color: #00E5FF;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+    padding-bottom: 2px;
+}
+
+.fr-heading-icon svg {
+    width: clamp(32px, 5vh, 56px);
+    height: clamp(32px, 5vh, 56px);
+}
+
+.fr-compass-ticks {
+    display: flex;
+    gap: 3px;
+}
+
+.fr-tick {
+    width: 8px;
+    height: 2px;
+    background: rgba(0, 229, 255, 0.25);
+    border-radius: 1px;
+}
+
+.fr-tick.active {
+    background: #00E5FF;
+}
+
+/* Speed grid (SOG / BSP) — flex 1.5 (has sparklines) */
+.fr-speed-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    flex: 1.5;
+}
+
+.fr-metric-block {
+    padding: 10px 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-height: 0;
+    overflow: hidden;
+}
+
+.fr-metric-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.fr-metric-body {
+    display: flex;
+    align-items: baseline;
+    gap: 6px;
+}
+
+.fr-big-num {
+    font-size: clamp(24px, 5vh, 44px);
+    font-weight: 300;
+    line-height: 1;
+    letter-spacing: -0.02em;
+    color: #fff;
+    font-variant-numeric: tabular-nums;
+}
+
+.fr-big-unit {
+    font-size: 12px;
+    color: rgba(255, 255, 255, 0.18);
+    text-transform: uppercase;
+    letter-spacing: 0.15em;
+}
+
+.fr-sparkline {
+    width: 100%;
+    display: block;
+    flex: 1;
+    min-height: 20px;
+}
+
+.fr-sparkline-tall {
+    flex: 1;
+    min-height: 20px;
+}
+
+/* Wind grid (TWD / TWS) — flex 2 (tallest, has shift chart) */
+.fr-wind-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    flex: 2;
+}
+
+.fr-wind-left, .fr-wind-right {
+    padding: 10px 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    min-height: 0;
+    overflow: hidden;
+}
+
+.fr-medium-num {
+    font-size: clamp(20px, 4vh, 34px);
+    font-weight: 300;
+    line-height: 1;
+    letter-spacing: -0.02em;
+    color: #fff;
+    font-variant-numeric: tabular-nums;
+}
+
+.fr-medium-unit {
+    font-size: 14px;
+    color: rgba(255, 255, 255, 0.18);
+}
+
+.fr-shift-chart-wrap {
+    position: relative;
+    background: rgba(255, 255, 255, 0.02);
     border-radius: 8px;
-    padding: 10px 8px;
-    text-align: center;
+    padding: 6px;
+    flex: 1;
+    min-height: 40px;
+    overflow: hidden;
+}
+
+.fr-shift-chart {
+    width: 100%;
+    height: 100%;
+    display: block;
+}
+
+.fr-shift-labels {
+    position: absolute;
+    bottom: 2px;
+    right: 6px;
+    text-align: right;
+}
+
+.fr-shift-title {
+    display: block;
+    font-size: 7px;
+    text-transform: uppercase;
+    letter-spacing: 0.2em;
+    color: rgba(255, 255, 255, 0.25);
+}
+
+.fr-shift-lr {
+    display: flex;
+    gap: 8px;
+    font-size: 8px;
+}
+
+.fr-shift-l {
+    color: rgba(255, 68, 68, 0.5);
+}
+
+.fr-shift-r {
+    color: rgba(68, 255, 68, 0.5);
+}
+
+/* Apparent wind row — flex 1.3 */
+.fr-apparent-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    background: rgba(255, 255, 255, 0.015);
+    flex: 1.3;
+}
+
+.fr-apparent-block {
+    padding: 10px 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-height: 0;
+    overflow: hidden;
+}
+
+.fr-dot {
+    display: inline-block;
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: rgba(255, 255, 255, 0.18);
+}
+
+.fr-dot-yellow {
+    background: rgba(250, 204, 21, 0.75);
+    animation: fr-pulse 2s ease-in-out infinite;
+}
+
+@keyframes fr-pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.4; }
+}
+
+/* Extra row (Depth + TWA) — flex 0.6 (compact) */
+.fr-extra-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    background: rgba(255, 255, 255, 0.01);
+    flex: 0.6;
+}
+
+.fr-compact {
+    padding: 8px 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    justify-content: center;
+}
+
+.fr-small-num {
+    font-size: clamp(18px, 3vh, 26px);
+    font-weight: 300;
+    line-height: 1;
+    color: #fff;
+    font-variant-numeric: tabular-nums;
+}
+
+.fr-small-unit {
+    font-size: 12px;
+    color: rgba(255, 255, 255, 0.18);
+}
+
+/* TWA color coding */
+.fr-small-num.twa-irons { color: #e74c3c; }
+.fr-small-num.twa-close { color: #f39c12; }
+.fr-small-num.twa-optimal { color: #2ecc71; }
+
+
+/* Radar view */
+#radar-view {
+    display: flex;
+    flex-direction: column;
+    background: #0a0a0a;
+    overflow: hidden;
+    height: 100%;
+}
+
+#radar-container {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    overflow: hidden;
+    height: 100%;
+}
+
+#radar-header {
+    padding: 16px 20px 8px;
+    flex-shrink: 0;
+}
+
+.radar-title {
+    font-family: 'SF Mono', 'Fira Code', 'Menlo', monospace;
+    font-size: 18px;
+    font-weight: 400;
+    color: rgba(255, 255, 255, 0.85);
+    margin: 0 0 6px;
+    letter-spacing: -0.02em;
+}
+
+.radar-legend {
+    display: flex;
+    gap: 14px;
+    flex-wrap: wrap;
+}
+
+.radar-legend-item {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    font-family: 'SF Mono', 'Fira Code', 'Menlo', monospace;
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.15em;
+    color: rgba(255, 255, 255, 0.4);
+}
+
+.radar-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    display: inline-block;
+}
+
+#radar-scope {
+    flex: 1;
+    position: relative;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 0;
+    overflow: hidden;
+}
+
+#radar-canvas {
+    display: block;
+}
+
+#radar-vessels {
+    position: absolute;
+    pointer-events: none;
+}
+
+#radar-zoom {
+    position: absolute;
+    bottom: 16px;
+    right: 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.radar-zoom-btn {
+    width: 32px;
+    height: 32px;
+    border-radius: 6px;
+    border: 1px solid rgba(255,255,255,0.1);
+    background: rgba(0,0,0,0.6);
+    color: rgba(255,255,255,0.6);
+    font-size: 18px;
+    font-family: monospace;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+}
+
+.radar-zoom-btn:hover {
+    background: rgba(255,255,255,0.1);
+    color: rgba(255,255,255,0.9);
+}
+
+.radar-vessel {
+    position: absolute;
+    transform: translate(-50%, -50%);
     display: flex;
     flex-direction: column;
     align-items: center;
     gap: 2px;
+    pointer-events: auto;
+    cursor: default;
 }
 
-.gauge-label {
-    font-size: 10px;
+.radar-vessel-icon {
+    display: block;
+    filter: drop-shadow(0 0 3px currentColor);
+}
+
+.radar-vessel-name {
+    font-family: 'SF Mono', 'Fira Code', 'Menlo', monospace;
+    font-size: 9px;
+    background: rgba(0, 0, 0, 0.8);
+    padding: 1px 5px;
+    border-radius: 3px;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    color: #fff;
+    white-space: nowrap;
+}
+
+.radar-vessel-speed {
+    font-family: 'SF Mono', 'Fira Code', 'Menlo', monospace;
+    font-size: 8px;
     font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
-    color: #8395a7;
-}
-
-.gauge-value {
-    font-size: 28px;
-    font-weight: 700;
-    font-variant-numeric: tabular-nums;
-    color: #ecf0f1;
-    line-height: 1.1;
-}
-
-.gauge-unit {
-    font-size: 10px;
-    color: #576574;
-}
-
-.gauge-value.twa-irons { color: #e74c3c; }
-.gauge-value.twa-close { color: #f39c12; }
-.gauge-value.twa-optimal { color: #2ecc71; }
-
-#chart-controls {
-    display: flex;
-    gap: 4px;
-    padding: 4px 12px;
-}
-
-.chart-window-btn {
-    background: rgba(255, 255, 255, 0.06);
-    border: 1px solid rgba(100, 150, 200, 0.15);
-    color: #8395a7;
-    padding: 4px 12px;
-    border-radius: 4px;
-    font-size: 11px;
-    cursor: pointer;
-}
-
-.chart-window-btn.active {
-    background: rgba(52, 152, 219, 0.2);
-    border-color: rgba(52, 152, 219, 0.4);
-    color: #3498db;
-}
-
-#chart-area {
-    flex: 1;
-    min-height: 200px;
-    padding: 4px 12px 12px;
-    position: relative;
-}
-
-#sailing-chart {
-    width: 100% !important;
-    height: 100% !important;
+    white-space: nowrap;
 }
 
 /* Competitor labels */
@@ -1863,31 +2240,85 @@ body.panel-collapsed #panel-toggle {
 }
 
 @media (max-width: 600px) {
-    #instrument-panel {
-        grid-template-columns: repeat(2, 1fr);
-        gap: 6px;
-        padding: 8px;
+    .fr-heading-section {
+        padding: 8px 14px;
+        flex: 0.8;
     }
 
-    .gauge-value {
-        font-size: 22px;
+    .fr-hero-num {
+        font-size: clamp(32px, 7vh, 52px);
+    }
+
+    .fr-heading-icon svg {
+        width: 32px;
+        height: 32px;
+    }
+
+    .fr-metric-block,
+    .fr-wind-left,
+    .fr-wind-right {
+        padding: 6px 14px;
+    }
+
+    .fr-apparent-block {
+        padding: 6px 14px;
+    }
+
+    .fr-compact {
+        padding: 6px 14px;
+    }
+
+    .fr-big-num {
+        font-size: clamp(22px, 4.5vh, 36px);
+    }
+
+    .fr-medium-num {
+        font-size: clamp(18px, 3.5vh, 28px);
+    }
+
+    .fr-small-num {
+        font-size: clamp(16px, 2.5vh, 22px);
+    }
+
+    .fr-label {
+        font-size: 9px;
+        letter-spacing: 0.2em;
+    }
+
+    .fr-speed-grid {
+        flex: 1.2;
+    }
+
+    .fr-wind-grid {
+        flex: 1.6;
+    }
+
+    .fr-apparent-row {
+        flex: 1;
+    }
+
+    .fr-extra-row {
+        flex: 0.5;
+    }
+
+    .fr-shift-chart-wrap {
+        padding: 4px;
+        min-height: 30px;
     }
 
     #nmea-source-bar {
         flex-direction: column;
         align-items: stretch;
+        padding: 4px 10px;
     }
 
     .nmea-source-controls {
         flex-direction: column;
+        gap: 4px;
     }
 
     #nmea-ws-url {
         width: 100%;
-    }
-
-    #chart-area {
-        min-height: 180px;
     }
 
     .tab-btn {
@@ -1897,17 +2328,35 @@ body.panel-collapsed #panel-toggle {
 }
 
 @media (orientation: landscape) and (max-height: 500px) {
-    #instrument-panel {
-        grid-template-columns: repeat(4, 1fr);
-        gap: 4px;
-        padding: 4px 8px;
+    .fr-heading-section {
+        padding: 4px 14px;
+        flex: 0.7;
     }
 
-    .gauge-value {
+    .fr-hero-num {
+        font-size: 36px;
+    }
+
+    .fr-metric-block,
+    .fr-wind-left,
+    .fr-wind-right,
+    .fr-apparent-block {
+        padding: 4px 12px;
+    }
+
+    .fr-big-num {
+        font-size: 24px;
+    }
+
+    .fr-medium-num {
         font-size: 20px;
     }
 
-    .instrument-gauge {
-        padding: 6px 4px;
+    .fr-small-num {
+        font-size: 16px;
+    }
+
+    .fr-compact {
+        padding: 4px 12px;
     }
 }

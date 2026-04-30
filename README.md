@@ -7,7 +7,8 @@ Deployed as a static PWA on GitHub Pages — no backend required. Connects to bo
 ## Features
 
 - **Real-time AIS vessel tracking** — direct browser WebSocket to AISstream.io (API key embedded, no setup needed)
-- **Sailing dashboard** — two-view tab system (Map / Charts). Charts view shows live NMEA instrument gauges (SOG, BSP, HDG, Depth, AWA, TWA, TWD, TWS) and Chart.js time-series for wind shifts and tacking decisions
+- **Strategic radar** — polar plot of nearby vessels relative to own ship. Range rings, crosshairs, auto-colored speed labels, track trails. Scroll wheel or +/- buttons to zoom (0.25–32nm range). Falls back to map center when no own position
+- **Sailing dashboard** — two-view tab system (Map / Charts / Radar). Charts view shows live NMEA instrument gauges (SOG, BSP, HDG, Depth, AWA, TWA, TWD, TWS) and Chart.js time-series for wind shifts and tacking decisions
 - **NMEA instruments** — parses 10 sentence types from boat instruments ($GPGGA, $HCHDG, $IIMWV, $IIMWD, $IIVHW, $IIDPT, etc.). Live via WebSocket proxy on Raspberry Pi, or replay from saved log files
 - **Local AIS decoding** — decodes raw !AIVDM/!AIVDO sentences from the boat's VHF receiver. Works offline at sea, no internet needed
 - **Competitor labels** — toggleable labels on each vessel showing distance, speed, bearing, and trends relative to Typon. Click a label to open the vessel detail popup
@@ -75,7 +76,7 @@ Three-row collapsible bottom bar:
 2. **Forecast buttons** — NOW · +1h · +2h · +3h · +4h · Set FCST TIME
 3. **Status bar** — `● AIS · 0 vessels · [Flow][Wind][Tide][Curr] · DL: Xm ago · ☰`
 
-Tab bar at top: **Map** (vessel tracking + environmental overlays) · **Charts** (NMEA instruments + time-series)
+Tab bar at top: **Map** (vessel tracking + environmental overlays) · **Charts** (NMEA instruments + time-series) · **Radar** (polar plot of nearby vessels with range rings, zoom, and track trails)
 
 ## Data Sources
 
