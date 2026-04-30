@@ -19,6 +19,8 @@ const TIDE_STATIONS = {
     '9414458': { name: 'San Mateo Bridge (West)', lat: 37.5800, lon: -122.2530 },
     '9414509': { name: 'Dumbarton Bridge', lat: 37.5067, lon: -122.1150 },
     '9414131': { name: 'Half Moon Bay', lat: 37.5025, lon: -122.4822 },
+    '9413663': { name: 'Elkhorn Slough', lat: 36.8567, lon: -121.7550 },
+    '9413450': { name: 'Monterey Harbor', lat: 36.6050, lon: -121.8883 },
     '9414863': { name: 'Richmond (Chevron Pier)', lat: 37.9283, lon: -122.4000 },
     '9415056': { name: 'Pinole Point', lat: 38.0150, lon: -122.3630 },
     '9415102': { name: 'Martinez', lat: 38.0346, lon: -122.1252 },
@@ -135,13 +137,13 @@ async function fetchCurrentFieldHighRes(minutesOffset = 0) {
 // --- Wind Field (batched Open-Meteo API) ---
 
 const OPEN_METEO_API = 'https://api.open-meteo.com/v1/forecast';
-const WIND_BOUNDS = { south: 37.30, north: 38.10, west: -122.95, east: -122.10 };
-const WIND_NX = 9;
-const WIND_NY = 8;
+const WIND_BOUNDS = { south: 36.40, north: 38.10, west: -122.95, east: -121.80 };
+const WIND_NX = 11;
+const WIND_NY = 16;
 let _windGridCache = null; // { grids: Map<hour, gridObj>, fetchedAt }
 
 async function _fetchWindGridFromAPI() {
-    // Generate 72 lat/lon pairs in row-major order (iy,ix)
+    // Generate lat/lon pairs in row-major order (iy,ix)
     const lats = [];
     const lons = [];
     for (let iy = 0; iy < WIND_NY; iy++) {
@@ -162,7 +164,7 @@ async function _fetchWindGridFromAPI() {
     if (!res.ok) return null;
     const data = await res.json();
 
-    // Response is an array of 72 objects (one per coordinate pair)
+    // Response is an array of objects (one per coordinate pair)
     if (!Array.isArray(data) || data.length !== lats.length) return null;
 
     const nowStr = new Date().toISOString().slice(0, 16).replace('T', ' ') + ' UTC';

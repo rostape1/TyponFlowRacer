@@ -777,7 +777,7 @@ function connectAISStream() {
 
     aisClient = new AISStreamClient({
         apiKey: apiKey,
-        bbox: [[37.4, -122.8], [38.2, -122.0]],
+        bbox: [[36.4, -122.8], [38.2, -121.8]],
         ownMmsi: OWN_MMSI,
         onMessage: (data) => {
             messageCount++;

@@ -340,10 +340,10 @@ class RouterDataStore {
 const NUM_HEADINGS = 72;
 const HEADING_STEP = 360 / NUM_HEADINGS;
 const TIME_STEP_S = 120;
-const MAX_TIME_S = 28800;
+const MAX_TIME_S = 57600;
 const DEST_RADIUS_NM = 0.15;
 const PRUNE_SECTORS = 180;
-const MAX_DIVERSION_DEG = 120;
+const MAX_DIVERSION_DEG = 150;
 
 function computeRoute(startLat, startLon, endLat, endLon, startTimeMs, perfFactor, onProgress) {
     const store = new RouterDataStore();
@@ -354,9 +354,7 @@ function computeRoute(startLat, startLon, endLat, endLon, startTimeMs, perfFacto
         if (info.windHours === 0) {
             return { error: 'No wind data available' };
         }
-        if (info.sfbofsHours === 0) {
-            return { error: 'No current data available' };
-        }
+        // sfbofsHours may be 0 for routes outside SF Bay — wind-only routing is fine
 
         const maxSteps = Math.floor(MAX_TIME_S / TIME_STEP_S);
         const dtHours = TIME_STEP_S / 3600;

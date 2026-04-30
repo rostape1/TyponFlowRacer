@@ -133,7 +133,7 @@ function parseAISStreamMessage(raw, ownMmsi) {
  * Usage:
  *   const client = new AISStreamClient({
  *     apiKey: 'your-key',
- *     bbox: [[37.4, -122.8], [38.2, -122.0]],
+ *     bbox: [[36.4, -122.8], [38.2, -121.8]],
  *     ownMmsi: 338361814,
  *     onMessage: (vesselData) => { ... },
  *     onStatus: (status) => { ... },  // 'connected', 'disconnected', 'error'
@@ -143,7 +143,7 @@ function parseAISStreamMessage(raw, ownMmsi) {
 class AISStreamClient {
     constructor({ apiKey, bbox, ownMmsi, onMessage, onStatus }) {
         this.apiKey = apiKey;
-        this.bbox = bbox || [[37.4, -122.8], [38.2, -122.0]];
+        this.bbox = bbox || [[36.4, -122.8], [38.2, -121.8]];
         this.ownMmsi = ownMmsi;
         this.onMessage = onMessage;
         this.onStatus = onStatus || (() => {});
