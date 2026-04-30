@@ -1,163 +1,238 @@
 /**
- * Sailing dashboard: instrument panel + Chart.js time-series.
+ * Flowracer sailing dashboard: instrument panel with sparklines.
  */
 
 class SailingCharts {
     constructor(store) {
         this.store = store;
-        this.chart = null;
-        this._windowMs = 30 * 60 * 1000;
-        this._updateInterval = null;
+        this._sparkInterval = null;
         this._gaugeEls = {};
-
-        this._gauges = [
-            { id: 'sog', label: 'SOG', unit: 'kn', field: 'sog', decimals: 1 },
-            { id: 'bsp', label: 'BSP', unit: 'kn', field: 'bsp', decimals: 1 },
-            { id: 'hdg', label: 'HDG', unit: '°', field: 'heading', decimals: 0 },
-            { id: 'depth', label: 'DEPTH', unit: 'ft', field: 'depth', decimals: 1, multiply: 3.28084 },
-            { id: 'awa', label: 'AWA', unit: '°', field: 'awa', decimals: 0 },
-            { id: 'twa', label: 'TWA', unit: '°', field: 'twa', decimals: 0 },
-            { id: 'twd', label: 'TWD', unit: '°', field: 'twd', decimals: 0 },
-            { id: 'tws', label: 'TWS', unit: 'kn', field: 'tws', decimals: 1 },
-        ];
+        this._sparkCanvases = {};
     }
 
     init() {
-        this._buildInstrumentPanel();
-        this._buildChart();
-        this._bindEvents();
+        this._bindGauges();
         this._startUpdates();
     }
 
-    _buildInstrumentPanel() {
-        const panel = document.getElementById('instrument-panel');
-        if (!panel) return;
-
-        for (const g of this._gauges) {
-            const div = document.createElement('div');
-            div.className = 'instrument-gauge';
-            div.innerHTML = `
-                <div class="gauge-label">${g.label}</div>
-                <div class="gauge-value" id="gauge-${g.id}">---</div>
-                <div class="gauge-unit">${g.unit}</div>
-            `;
-            panel.appendChild(div);
-            this._gaugeEls[g.id] = document.getElementById(`gauge-${g.id}`);
+    _bindGauges() {
+        const ids = ['hdg', 'sog', 'bsp', 'twd', 'tws', 'aws', 'awa', 'depth', 'twa'];
+        for (const id of ids) {
+            this._gaugeEls[id] = document.getElementById(`gauge-${id}`);
         }
-    }
+        this._gaugeEls['awa-side'] = document.getElementById('gauge-awa-side');
 
-    _buildChart() {
-        const canvas = document.getElementById('sailing-chart');
-        if (!canvas || typeof Chart === 'undefined') return;
-
-        const ctx = canvas.getContext('2d');
-        this.chart = new Chart(ctx, {
-            type: 'line',
-            data: {
-                datasets: [
-                    { label: 'TWA', borderColor: '#3498db', backgroundColor: 'rgba(52,152,219,0.1)',
-                      yAxisID: 'y', borderWidth: 1.5, pointRadius: 0, tension: 0.2, data: [] },
-                    { label: 'TWD', borderColor: '#2ecc71', backgroundColor: 'rgba(46,204,113,0.1)',
-                      yAxisID: 'y', borderWidth: 1.5, pointRadius: 0, tension: 0.2, data: [] },
-                    { label: 'TWS', borderColor: '#9b59b6', backgroundColor: 'rgba(155,89,182,0.1)',
-                      yAxisID: 'y1', borderWidth: 1.5, pointRadius: 0, tension: 0.2, data: [] },
-                    { label: 'BSP', borderColor: '#f39c12', backgroundColor: 'rgba(243,156,18,0.1)',
-                      yAxisID: 'y1', borderWidth: 1.5, pointRadius: 0, tension: 0.2, data: [] },
-                ],
-            },
-            options: {
-                responsive: true,
-                maintainAspectRatio: false,
-                animation: false,
-                interaction: { mode: 'index', intersect: false },
-                plugins: {
-                    legend: {
-                        labels: { color: '#8395a7', font: { size: 11 }, boxWidth: 12, padding: 8 },
-                    },
-                },
-                scales: {
-                    x: {
-                        type: 'time',
-                        time: { unit: 'minute', displayFormats: { minute: 'HH:mm' } },
-                        grid: { color: 'rgba(100,150,200,0.1)' },
-                        ticks: { color: '#8395a7', maxTicksLimit: 10 },
-                    },
-                    y: {
-                        position: 'left',
-                        title: { display: true, text: 'Degrees', color: '#8395a7' },
-                        grid: { color: 'rgba(100,150,200,0.1)' },
-                        ticks: { color: '#8395a7' },
-                    },
-                    y1: {
-                        position: 'right',
-                        title: { display: true, text: 'Knots', color: '#8395a7' },
-                        grid: { drawOnChartArea: false },
-                        ticks: { color: '#8395a7' },
-                    },
-                },
-            },
-        });
-    }
-
-    _bindEvents() {
-        document.querySelectorAll('.chart-window-btn').forEach(btn => {
-            btn.addEventListener('click', () => {
-                document.querySelectorAll('.chart-window-btn').forEach(b => b.classList.remove('active'));
-                btn.classList.add('active');
-                const mins = parseInt(btn.dataset.minutes);
-                this._windowMs = mins === 0 ? 0 : mins * 60 * 1000;
-                this._updateChart();
-            });
-        });
+        const sparkIds = ['sog', 'bsp', 'tws', 'aws', 'awa'];
+        for (const id of sparkIds) {
+            const canvas = document.getElementById(`spark-${id}`);
+            if (canvas) this._sparkCanvases[id] = canvas;
+        }
+        const shiftCanvas = document.getElementById('spark-twd-shift');
+        if (shiftCanvas) this._sparkCanvases['twd-shift'] = shiftCanvas;
     }
 
     _startUpdates() {
         this.store.addEventListener('update', () => this._updateGauges());
-        this._updateInterval = setInterval(() => this._updateChart(), 1000);
+        this._sparkInterval = setInterval(() => this._updateSparklines(), 500);
     }
 
     _updateGauges() {
         const s = this.store.state;
-        for (const g of this._gauges) {
-            const el = this._gaugeEls[g.id];
-            if (!el) continue;
-            let val = s[g.field];
-            if (val === null || val === undefined) {
-                el.textContent = '---';
-                el.className = 'gauge-value';
-                continue;
-            }
-            if (g.multiply) val *= g.multiply;
-            el.textContent = val.toFixed(g.decimals);
 
-            if (g.id === 'twa') {
-                const abs = Math.abs(val > 180 ? 360 - val : val);
-                if (abs < 15) el.className = 'gauge-value twa-irons';
-                else if (abs < 30) el.className = 'gauge-value twa-close';
-                else if (abs <= 50) el.className = 'gauge-value twa-optimal';
-                else el.className = 'gauge-value';
+        this._setGauge('hdg', s.heading, 0, v => Math.round(v).toString().padStart(3, '0'));
+        this._setGauge('sog', s.sog, 1);
+        this._setGauge('bsp', s.bsp, 1);
+        this._setGauge('twd', s.twd, 0, v => Math.round(v).toString());
+        this._setGauge('tws', s.tws, 1);
+        this._setGauge('aws', s.aws, 1);
+        this._setGauge('depth', s.depth, 1, v => (v * 3.28084).toFixed(1));
+
+        const awaEl = this._gaugeEls['awa'];
+        const awaSideEl = this._gaugeEls['awa-side'];
+        if (awaEl) {
+            if (s.awa === null || s.awa === undefined) {
+                awaEl.textContent = '---';
+                if (awaSideEl) awaSideEl.textContent = '°';
+            } else {
+                awaEl.textContent = Math.abs(Math.round(s.awa));
+                if (awaSideEl) awaSideEl.textContent = s.awa >= 0 ? 'R' : 'L';
+            }
+        }
+
+        const twaEl = this._gaugeEls['twa'];
+        if (twaEl) {
+            if (s.twa === null || s.twa === undefined) {
+                twaEl.textContent = '---';
+                twaEl.className = 'fr-small-num';
+            } else {
+                const abs = Math.abs(s.twa > 180 ? 360 - s.twa : s.twa);
+                twaEl.textContent = Math.round(abs);
+                if (abs < 15) twaEl.className = 'fr-small-num twa-irons';
+                else if (abs < 30) twaEl.className = 'fr-small-num twa-close';
+                else if (abs <= 50) twaEl.className = 'fr-small-num twa-optimal';
+                else twaEl.className = 'fr-small-num';
             }
         }
     }
 
-    _updateChart() {
-        if (!this.chart) return;
+    _setGauge(id, val, decimals, formatter) {
+        const el = this._gaugeEls[id];
+        if (!el) return;
+        if (val === null || val === undefined) {
+            el.textContent = '---';
+            return;
+        }
+        el.textContent = formatter ? formatter(val) : val.toFixed(decimals);
+    }
+
+    _updateSparklines() {
         const chartsView = document.getElementById('charts-view');
         if (chartsView && chartsView.style.display === 'none') return;
 
-        const fields = ['twa', 'twd', 'tws', 'bsp'];
-        const windowMs = this._windowMs || 0;
+        const sparkFields = { sog: 'sog', bsp: 'bsp', tws: 'tws', aws: 'aws', awa: 'awa' };
+        const sparkColors = {
+            sog: '#00E5FF', bsp: '#3B82F6', tws: '#00E5FF',
+            aws: '#FACC15', awa: 'rgba(255,255,255,0.5)'
+        };
 
-        for (let i = 0; i < fields.length; i++) {
-            const history = this.store.getHistory(fields[i], windowMs);
-            this.chart.data.datasets[i].data = history.map(p => ({ x: p.t, y: p.v }));
+        for (const [id, field] of Object.entries(sparkFields)) {
+            const canvas = this._sparkCanvases[id];
+            if (!canvas) continue;
+            const history = this.store.getHistory(field, 5 * 60 * 1000);
+            this._drawSparkline(canvas, history, sparkColors[id]);
         }
 
-        this.chart.update('none');
+        this._drawShiftChart();
+    }
+
+    _drawSparkline(canvas, history, color) {
+        const dpr = window.devicePixelRatio || 1;
+        const rect = canvas.getBoundingClientRect();
+        const w = rect.width;
+        const h = rect.height;
+
+        if (canvas.width !== w * dpr || canvas.height !== h * dpr) {
+            canvas.width = w * dpr;
+            canvas.height = h * dpr;
+            canvas.style.width = w + 'px';
+            canvas.style.height = h + 'px';
+        }
+
+        const ctx = canvas.getContext('2d');
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+        ctx.clearRect(0, 0, w, h);
+
+        if (history.length < 2) return;
+
+        const values = history.map(p => p.v);
+        let min = Math.min(...values);
+        let max = Math.max(...values);
+        if (max - min < 0.5) { min -= 0.5; max += 0.5; }
+
+        const padY = 4;
+        const plotH = h - padY * 2;
+
+        ctx.beginPath();
+        for (let i = 0; i < history.length; i++) {
+            const x = (i / (history.length - 1)) * w;
+            const y = padY + plotH - ((values[i] - min) / (max - min)) * plotH;
+            if (i === 0) ctx.moveTo(x, y);
+            else ctx.lineTo(x, y);
+        }
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 1.5;
+        ctx.lineJoin = 'round';
+        ctx.stroke();
+
+        ctx.lineTo(w, h);
+        ctx.lineTo(0, h);
+        ctx.closePath();
+
+        const fillGrad = ctx.createLinearGradient(0, 0, 0, h);
+        fillGrad.addColorStop(0, this._hexToRgba(color, 0.45));
+        fillGrad.addColorStop(0.4, this._hexToRgba(color, 0.2));
+        fillGrad.addColorStop(1, 'rgba(0,0,0,0)');
+        ctx.fillStyle = fillGrad;
+        ctx.fill();
+    }
+
+    _drawShiftChart() {
+        const canvas = this._sparkCanvases['twd-shift'];
+        if (!canvas) return;
+
+        const history = this.store.getHistory('twd', 5 * 60 * 1000);
+        if (history.length < 3) return;
+
+        const values = history.map(p => p.v);
+        const mean = values.reduce((a, b) => a + b, 0) / values.length;
+        const shifts = values.map(v => {
+            let diff = v - mean;
+            if (diff > 180) diff -= 360;
+            if (diff < -180) diff += 360;
+            return diff;
+        });
+
+        const dpr = window.devicePixelRatio || 1;
+        const rect = canvas.getBoundingClientRect();
+        const w = rect.width;
+        const h = rect.height;
+
+        if (canvas.width !== w * dpr || canvas.height !== h * dpr) {
+            canvas.width = w * dpr;
+            canvas.height = h * dpr;
+            canvas.style.width = w + 'px';
+            canvas.style.height = h + 'px';
+        }
+
+        const ctx = canvas.getContext('2d');
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+        ctx.clearRect(0, 0, w, h);
+
+        const cy = h / 2;
+        ctx.strokeStyle = 'rgba(255,255,255,0.08)';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(0, cy);
+        ctx.lineTo(w, cy);
+        ctx.stroke();
+
+        const range = 15;
+        const padX = 2;
+
+        ctx.beginPath();
+        for (let i = 0; i < shifts.length; i++) {
+            const x = padX + (i / (shifts.length - 1)) * (w - padX * 2);
+            const clamped = Math.max(-range, Math.min(range, shifts[i]));
+            const y = cy - (clamped / range) * (cy - 4);
+            if (i === 0) ctx.moveTo(x, y);
+            else ctx.lineTo(x, y);
+        }
+        ctx.strokeStyle = '#FF4444';
+        ctx.lineWidth = 1.5;
+        ctx.lineJoin = 'round';
+        ctx.stroke();
+
+        const lastIdx = shifts.length - 1;
+        const lastX = padX + (lastIdx / (shifts.length - 1)) * (w - padX * 2);
+        ctx.lineTo(lastX, cy);
+        ctx.lineTo(padX, cy);
+        ctx.closePath();
+        ctx.fillStyle = 'rgba(255, 68, 68, 0.08)';
+        ctx.fill();
+    }
+
+    _hexToRgba(color, alpha) {
+        if (color.startsWith('rgba') || color.startsWith('rgb')) {
+            return color.replace(/[\d.]+\)$/, alpha + ')').replace('rgb(', 'rgba(');
+        }
+        const hex = color.replace('#', '');
+        const r = parseInt(hex.substring(0, 2), 16);
+        const g = parseInt(hex.substring(2, 4), 16);
+        const b = parseInt(hex.substring(4, 6), 16);
+        return `rgba(${r},${g},${b},${alpha})`;
     }
 
     destroy() {
-        if (this._updateInterval) clearInterval(this._updateInterval);
-        if (this.chart) this.chart.destroy();
+        if (this._sparkInterval) clearInterval(this._sparkInterval);
     }
 }
