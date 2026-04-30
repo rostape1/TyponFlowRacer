@@ -179,8 +179,9 @@
     <div id="charts-view" class="view-container" style="display:none">
         <div id="nmea-source-bar">
             <div class="nmea-source-controls">
-                <input type="text" id="nmea-ws-url" placeholder="ws://raspberrypi.local:8765" />
+                <input type="text" id="nmea-ws-url" placeholder="wss://raspberrypi.local:8766" />
                 <button id="nmea-connect-btn">Connect</button>
+                <a id="cert-trust-link" href="https://raspberrypi.local:8766" target="_blank" rel="noopener" title="Accept the Pi's self-signed certificate" style="font-size:0.75em; margin-left:0.5em; color:#3498db; display:none;">Trust cert</a>
                 <span class="nmea-divider">or</span>
                 <label class="nmea-file-label">
                     <input type="file" id="nmea-file-input" accept=".txt,.nmea,.log" />

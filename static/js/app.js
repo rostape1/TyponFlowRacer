@@ -2487,7 +2487,6 @@ if (nmeaStore && nmeaClient) {
     const wsUrlInput = document.getElementById('nmea-ws-url');
     const connectBtn = document.getElementById('nmea-connect-btn');
     const savedUrl = localStorage.getItem('nmea_ws_url');
-    if (savedUrl && wsUrlInput) wsUrlInput.value = savedUrl;
 
     if (connectBtn) {
         connectBtn.addEventListener('click', () => {
@@ -2506,30 +2505,38 @@ if (nmeaStore && nmeaClient) {
         });
     }
 
-    // Auto-connect to NMEA WebSocket on page load
-    // Auto-connect to NMEA WebSocket on page load (silently fails if Pi not reachable)
-    // Skip on HTTPS pages — browsers block ws:// from secure origins (mixed content)
-    const autoConnectUrl = savedUrl || 'ws://raspberrypi.local:8765';
-    if (wsUrlInput && !wsUrlInput.value) wsUrlInput.value = autoConnectUrl;
-    const isSecureOrigin = location.protocol === 'https:';
-    const isInsecureWs = autoConnectUrl.startsWith('ws://');
-    if (!isSecureOrigin || !isInsecureWs) {
-        setTimeout(() => {
-            try {
-                const testWs = new WebSocket(autoConnectUrl);
-                testWs.onopen = () => {
-                    testWs.close();
-                    nmeaClient.connect(autoConnectUrl);
-                    localStorage.setItem('nmea_ws_url', autoConnectUrl);
-                    if (connectBtn) {
-                        connectBtn.textContent = 'Disconnect';
-                        connectBtn.classList.add('connected');
-                    }
-                };
-                testWs.onerror = () => { testWs.close(); };
-            } catch (e) { /* silently fail */ }
-        }, 2000);
+    // Auto-connect: pick ws:// or wss:// based on page protocol
+    const isSecure = location.protocol === 'https:';
+    const defaultUrl = isSecure ? 'wss://raspberrypi.local:8766' : 'ws://raspberrypi.local:8765';
+    let autoConnectUrl = savedUrl || defaultUrl;
+    // Upgrade saved ws:// to wss:// on HTTPS (or downgrade wss:// on HTTP)
+    if (isSecure && autoConnectUrl.startsWith('ws://')) {
+        autoConnectUrl = autoConnectUrl.replace('ws://', 'wss://').replace(':8765', ':8766');
+    } else if (!isSecure && autoConnectUrl.startsWith('wss://')) {
+        autoConnectUrl = autoConnectUrl.replace('wss://', 'ws://').replace(':8766', ':8765');
     }
+    if (wsUrlInput) wsUrlInput.value = autoConnectUrl;
+
+    // Show cert trust link on HTTPS (first-time setup for self-signed Pi cert)
+    const certLink = document.getElementById('cert-trust-link');
+    if (certLink) certLink.style.display = location.protocol === 'https:' ? 'inline' : 'none';
+
+    setTimeout(() => {
+        try {
+            const testWs = new WebSocket(autoConnectUrl);
+            testWs.onopen = () => {
+                testWs.close();
+                nmeaClient.connect(autoConnectUrl);
+                localStorage.setItem('nmea_ws_url', autoConnectUrl);
+                if (connectBtn) {
+                    connectBtn.textContent = 'Disconnect';
+                    connectBtn.classList.add('connected');
+                }
+                if (certLink) certLink.style.display = 'none';
+            };
+            testWs.onerror = () => { testWs.close(); };
+        } catch (e) { /* silently fail */ }
+    }, 2000);
 
     // File replay
     const fileInput = document.getElementById('nmea-file-input');

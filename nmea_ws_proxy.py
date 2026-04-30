@@ -4,6 +4,7 @@
 import argparse
 import asyncio
 import signal
+import ssl
 
 try:
     import websockets
@@ -51,17 +52,29 @@ async def ws_handler(ws):
         print(f"Browser disconnected ({len(clients)} clients)")
 
 
-async def main(tcp_host, tcp_port, ws_port):
+async def main(tcp_host, tcp_port, ws_port, wss_port, ssl_cert, ssl_key):
     loop = asyncio.get_running_loop()
     stop = loop.create_future()
     for sig in (signal.SIGINT, signal.SIGTERM):
         loop.add_signal_handler(sig, stop.set_result, None)
 
     tcp_task = asyncio.create_task(tcp_to_broadcast(tcp_host, tcp_port))
-    async with websockets.serve(ws_handler, "0.0.0.0", ws_port):
-        print(f"WebSocket proxy on ws://0.0.0.0:{ws_port}")
-        await stop
 
+    ws_server = await websockets.serve(ws_handler, "0.0.0.0", ws_port)
+    print(f"WebSocket proxy on ws://0.0.0.0:{ws_port}")
+
+    wss_server = None
+    if ssl_cert and ssl_key:
+        ssl_ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        ssl_ctx.load_cert_chain(ssl_cert, ssl_key)
+        wss_server = await websockets.serve(ws_handler, "0.0.0.0", wss_port, ssl=ssl_ctx)
+        print(f"Secure WebSocket proxy on wss://0.0.0.0:{wss_port}")
+
+    await stop
+
+    ws_server.close()
+    if wss_server:
+        wss_server.close()
     tcp_task.cancel()
 
 
@@ -70,5 +83,9 @@ if __name__ == "__main__":
     p.add_argument("--tcp-host", default="192.168.47.10")
     p.add_argument("--tcp-port", type=int, default=10110)
     p.add_argument("--ws-port", type=int, default=8765)
+    p.add_argument("--wss-port", type=int, default=8766)
+    p.add_argument("--ssl-cert", default=None)
+    p.add_argument("--ssl-key", default=None)
     args = p.parse_args()
-    asyncio.run(main(args.tcp_host, args.tcp_port, args.ws_port))
+    asyncio.run(main(args.tcp_host, args.tcp_port, args.ws_port,
+                      args.wss_port, args.ssl_cert, args.ssl_key))
