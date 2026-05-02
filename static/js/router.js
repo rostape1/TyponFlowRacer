@@ -189,6 +189,7 @@ class RouterDataStore {
     constructor() {
         this.sfbofsGrids = new Map();
         this.sfbofsGridsHR = new Map();
+        this.hycomGrids = new Map();
         this.windGrids = new Map();
         this.sfbofsBounds = null;
         this.sfbofsNx = 0;
@@ -200,6 +201,7 @@ class RouterDataStore {
         this.startTimeMs = startTimeMs;
         this.sfbofsGrids.clear();
         this.sfbofsGridsHR.clear();
+        this.hycomGrids.clear();
         this.windGrids.clear();
 
         // Offset from now to the route start time (forecast mode)
@@ -226,6 +228,13 @@ class RouterDataStore {
             Promise.all(sfbofsFetches),
             Promise.all(sfbofsHRFetches),
             _loadLandMask(),
+            fetchHycomCurrents().then(cache => {
+                if (cache) {
+                    for (const [h, grid] of cache.grids) {
+                        this.hycomGrids.set(h, grid);
+                    }
+                }
+            }).catch(() => {}),
         ]);
 
         // Wind grids: offset by forecast hours from now
@@ -255,6 +264,7 @@ class RouterDataStore {
         return {
             sfbofsHours: this.sfbofsGrids.size,
             sfbofsHRHours: this.sfbofsGridsHR.size,
+            hycomHours: this.hycomGrids.size,
             windHours: this.windGrids.size,
         };
     }
@@ -302,7 +312,39 @@ class RouterDataStore {
         const g0 = this.sfbofsGrids.get(h0);
         const g1 = this.sfbofsGrids.get(h1);
 
-        if (!g0 && !g1) return null;
+        if (!g0 && !g1) {
+            // Fall back to HYCOM ocean currents (3-hourly, coarser grid)
+            return this._interpolateHycom(lat, lon, hoursFromStart);
+        }
+        if (!g0) return this._bilinearGrid(g1, lat, lon) || this._interpolateHycom(lat, lon, hoursFromStart);
+        if (!g1) return this._bilinearGrid(g0, lat, lon) || this._interpolateHycom(lat, lon, hoursFromStart);
+
+        const v0 = this._bilinearGrid(g0, lat, lon);
+        const v1 = this._bilinearGrid(g1, lat, lon);
+        if (!v0 && !v1) return this._interpolateHycom(lat, lon, hoursFromStart);
+        if (!v0) return v1;
+        if (!v1) return v0;
+
+        return {
+            vx: _lerp(v0.vx, v1.vx, frac),
+            vy: _lerp(v0.vy, v1.vy, frac),
+        };
+    }
+
+    _interpolateHycom(lat, lon, hoursFromStart) {
+        if (this.hycomGrids.size === 0) return null;
+        // HYCOM grids keyed by 3-hourly offsets (0, 3, 6, 9, ...)
+        const h3 = hoursFromStart / 3;
+        const h0 = Math.floor(h3) * 3;
+        const h1 = h0 + 3;
+        const frac = (hoursFromStart - h0) / 3;
+
+        const g0 = this.hycomGrids.get(h0);
+        const g1 = this.hycomGrids.get(h1);
+        if (!g0 && !g1) {
+            const nearest = this.hycomGrids.get(Math.round(h3) * 3);
+            return nearest ? this._bilinearGrid(nearest, lat, lon) : null;
+        }
         if (!g0) return this._bilinearGrid(g1, lat, lon);
         if (!g1) return this._bilinearGrid(g0, lat, lon);
 
@@ -311,11 +353,7 @@ class RouterDataStore {
         if (!v0 && !v1) return null;
         if (!v0) return v1;
         if (!v1) return v0;
-
-        return {
-            vx: _lerp(v0.vx, v1.vx, frac),
-            vy: _lerp(v0.vy, v1.vy, frac),
-        };
+        return { vx: _lerp(v0.vx, v1.vx, frac), vy: _lerp(v0.vy, v1.vy, frac) };
     }
 
     interpolateWind(lat, lon, timeMs) {

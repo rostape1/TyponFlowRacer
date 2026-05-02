@@ -598,3 +598,38 @@ function getWindGridForHour(hour) {
 function getSfbofsRunTime() {
     return _sfbofsRunTime;
 }
+
+// --- HYCOM Ocean Currents (for coastal routing outside SF Bay) ---
+// Fetched server-side by GitHub Actions, deployed as static JSON.
+
+let _hycomCache = null; // { grids: Map<hour, {u,v,bounds,nx,ny}>, fetchedAt }
+
+async function fetchHycomCurrents() {
+    if (_hycomCache && (Date.now() - _hycomCache.fetchedAt) < 3600000) {
+        return _hycomCache;
+    }
+
+    try {
+        const res = await fetch(`${DATA_BASE}/hycom/currents.json`);
+        if (!res.ok) return null;
+        const data = await res.json();
+
+        const grids = new Map();
+        for (const [hourStr, grid] of Object.entries(data.hours)) {
+            grids.set(parseInt(hourStr), grid);
+        }
+
+        _hycomCache = { grids, fetchedAt: Date.now() };
+        console.log(`HYCOM loaded: ${grids.size} time steps, ${data.ny}x${data.nx} grid`);
+        return _hycomCache;
+    } catch (e) {
+        console.warn('HYCOM fetch failed:', e);
+        return null;
+    }
+}
+
+function getHycomGridForHour(hour) {
+    if (!_hycomCache) return null;
+    const h = Math.round(hour / 3) * 3;
+    return _hycomCache.grids.get(h) || null;
+}
