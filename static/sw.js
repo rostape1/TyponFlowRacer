@@ -1,5 +1,5 @@
-const CACHE_NAME = 'ais-tracker-v13';
-const DATA_CACHE = 'ais-data-v5';
+const CACHE_NAME = 'ais-tracker-v14';
+const DATA_CACHE = 'ais-data-v7';
 const TILE_CACHE = 'ais-tiles-v1';
 
 // External tile CDN hosts to cache
