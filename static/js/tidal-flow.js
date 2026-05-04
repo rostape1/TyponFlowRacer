@@ -82,6 +82,9 @@ class TidalFlowOverlay {
         // Grid data (from SFBOFS)
         this.grid = null;  // { bounds, nx, ny, u[][], v[][] }
 
+        // HYCOM ocean currents (outside SFBOFS bounds)
+        this.hycomGrid = null;  // { bounds, nx, ny, u[][], v[][] }
+
         // Heatmap
         this.heatmapCanvas = null;
         this.heatmapCtx = null;
@@ -114,8 +117,19 @@ class TidalFlowOverlay {
     }
 
     _isWater(lat, lon) {
-        if (!this.useWaterMask) return true;
-        return _pointInPolygon(lat, lon, this.waterPolygon);
+        // Inside SFBOFS grid: grid cells with zero velocity are land
+        if (this.grid) {
+            const b = this.grid.bounds;
+            if (lat >= b.south && lat <= b.north && lon >= b.west && lon <= b.east) return true;
+        }
+        // Outside SFBOFS: check HYCOM — only ocean cells have nonzero currents
+        if (this.hycomGrid) {
+            const result = this._interpolateAtHycom(lat, lon);
+            if (result && result.speed > 0.001) return true;
+        }
+        // Fallback to bay water polygon
+        if (this.useWaterMask) return _pointInPolygon(lat, lon, this.waterPolygon);
+        return false;
     }
 
     _initCanvas() {
@@ -205,16 +219,25 @@ class TidalFlowOverlay {
                 for (let r = 1; r <= 5; r++) {
                     for (let dy = -r; dy <= r; dy++) {
                         for (let dx = -r; dx <= r; dx++) {
-                            if (Math.abs(dy) !== r && Math.abs(dx) !== r) continue; // only ring
+                            if (Math.abs(dy) !== r && Math.abs(dx) !== r) continue;
                             const nearby = this._interpolateAtGrid(lat + dy * stepLat, lon + dx * stepLon);
                             if (nearby && nearby.speed > 0.01) return nearby;
                         }
                     }
                 }
+                // Inside SFBOFS bounds but no data — use IDW stations
+                return this._interpolateIDW(lat, lon);
             }
         }
 
-        // Fallback to IDW station interpolation
+        // Outside SFBOFS: use HYCOM ocean currents
+        const hycom = this._interpolateAtHycom(lat, lon);
+        if (hycom) return hycom;
+
+        return { vx: 0, vy: 0, speed: 0 };
+    }
+
+    _interpolateIDW(lat, lon) {
         if (this.stations.length === 0) return { vx: 0, vy: 0, speed: 0 };
 
         const cosLat = Math.cos(lat * Math.PI / 180);
@@ -299,6 +322,45 @@ class TidalFlowOverlay {
         console.log(`Tidal flow grid loaded: ${data.nx}x${data.ny}`);
         this._renderHeatmapImage();
         this._drawHeatmap();
+    }
+
+    setHycomGrid(data) {
+        if (!data || !data.u || !data.v) {
+            this.hycomGrid = null;
+            return;
+        }
+        this.hycomGrid = {
+            bounds: data.bounds,
+            nx: data.nx,
+            ny: data.ny,
+            u: data.u,
+            v: data.v,
+        };
+        console.log(`HYCOM tidal overlay: ${data.nx}x${data.ny}`);
+        this._resetParticles();
+    }
+
+    _interpolateAtHycom(lat, lon) {
+        const g = this.hycomGrid;
+        if (!g) return null;
+        const b = g.bounds;
+        if (lat < b.south || lat > b.north || lon < b.west || lon > b.east) return null;
+        const fy = (lat - b.south) / (b.north - b.south) * (g.ny - 1);
+        const fx = (lon - b.west) / (b.east - b.west) * (g.nx - 1);
+        const iy = Math.floor(fy);
+        const ix = Math.floor(fx);
+        if (iy < 0 || iy >= g.ny - 1 || ix < 0 || ix >= g.nx - 1) return null;
+        const ty = fy - iy;
+        const tx = fx - ix;
+        const u00 = g.u[iy][ix], u01 = g.u[iy][ix + 1];
+        const u10 = g.u[iy + 1][ix], u11 = g.u[iy + 1][ix + 1];
+        const v00 = g.v[iy][ix], v01 = g.v[iy][ix + 1];
+        const v10 = g.v[iy + 1][ix], v11 = g.v[iy + 1][ix + 1];
+        if (u00 === 0 && u10 === 0 && u01 === 0 && u11 === 0 &&
+            v00 === 0 && v10 === 0 && v01 === 0 && v11 === 0) return null;
+        const vx = (1 - ty) * ((1 - tx) * u00 + tx * u01) + ty * ((1 - tx) * u10 + tx * u11);
+        const vy = (1 - ty) * ((1 - tx) * v00 + tx * v01) + ty * ((1 - tx) * v10 + tx * v11);
+        return { vx, vy, speed: Math.sqrt(vx * vx + vy * vy) };
     }
 
     /** Pre-render the grid speed data to an offscreen image (called once per grid load) */

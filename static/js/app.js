@@ -1422,6 +1422,19 @@ async function loadCurrentField() {
 loadCurrentField();
 autoRefreshTimers.field = setInterval(loadCurrentField, 300000);  // Refresh every 5 minutes
 
+// Load HYCOM ocean currents for tidal flow visualization outside SF Bay
+async function loadHycomForOverlay() {
+    if (!tidalFlow) return;
+    try {
+        const cache = await fetchHycomCurrents();
+        if (cache && cache.grids.size > 0) {
+            const grid = cache.grids.values().next().value;
+            if (grid) tidalFlow.setHycomGrid(grid);
+        }
+    } catch (e) {}
+}
+loadHycomForOverlay();
+
 // Tide Flow toggle — controls flow animation + heatmap together
 document.getElementById('flow-toggle').addEventListener('click', () => {
     if (!tidalFlow) return;
