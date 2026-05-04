@@ -374,7 +374,9 @@ self.onmessage = function(e) {
                     awa: Math.atan2(awx, awy) * RAD2DEG,
                 };
 
-                if (_haversineNm(newLat, newLon, endLat, endLon) < DEST_RADIUS_NM) {
+                if (_haversineNm(newLat, newLon, endLat, endLon) < DEST_RADIUS_NM &&
+                    !_isTooCloseToLand(newLat, newLon) &&
+                    !_segmentCrossesLand(pt.lat, pt.lon, newLat, newLon)) {
                     const path = _smoothPath(_backtrack(newPt));
                     self.postMessage({ type: 'result', data: {
                         path, isochrones,

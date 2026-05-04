@@ -231,80 +231,97 @@ def _is_land_polygon(lat, lon, polygons):
 
 
 GRID_RES = 0.005  # ~550m resolution
-GRID_BUFFER_PX = 0  # grid cell size (550m) provides natural buffer
-
-def _scanline_fill(ring, grid, rows, cols, south, west, res, value=True):
-    """Fill grid cells inside a polygon ring using scanline rasterization."""
-    n = len(ring)
-    for r in range(rows):
-        lat = south + (r + 0.5) * res
-        # Find all x-intersections at this latitude
-        intersections = []
-        for i in range(n):
-            j = (i + 1) % n
-            y0, x0 = ring[i]
-            y1, x1 = ring[j]
-            if y0 == y1:
-                continue
-            if (y0 > lat) == (y1 > lat):
-                continue
-            x_int = x0 + (lat - y0) * (x1 - x0) / (y1 - y0)
-            intersections.append(x_int)
-        intersections.sort()
-        # Fill between pairs
-        for k in range(0, len(intersections) - 1, 2):
-            c_start = max(0, int((intersections[k] - west) / res))
-            c_end = min(cols, int((intersections[k + 1] - west) / res) + 1)
-            for c in range(c_start, c_end):
-                idx = r * cols + c
-                if value:
-                    grid[idx // 8] |= 1 << (idx % 8)
-                else:
-                    grid[idx // 8] &= ~(1 << (idx % 8))
 
 
 def rasterize(polygons):
-    """Pre-compute a binary land grid for O(1) lookups in the browser."""
+    """Pre-compute a binary land grid for O(1) lookups in the browser.
+
+    After polygon rasterization, flood-fills from known ocean points so only
+    water cells connected to the ocean/bay are navigable. Inland reservoirs
+    and lakes are reclassified as land — they aren't sailboat-navigable.
+    """
+    from collections import deque
+
     print("\nStep 3: Rasterizing land grid")
     rows = int((NORTH - SOUTH) / GRID_RES)
     cols = int((EAST - WEST) / GRID_RES)
-    print(f"  Grid: {rows}x{cols} = {rows*cols:,} cells at {GRID_RES}° ({GRID_RES*111000:.0f}m)")
+    total = rows * cols
+    print(f"  Grid: {rows}x{cols} = {total:,} cells at {GRID_RES}° ({GRID_RES*111000:.0f}m)")
 
-    bits = bytearray((rows * cols + 7) // 8)
+    # Phase 1: rasterize polygons (1 = land, 0 = any water including reservoirs)
+    land = bytearray((total + 7) // 8)
+    for r in range(rows):
+        lat = SOUTH + (r + 0.5) * GRID_RES
+        for c in range(cols):
+            lon = WEST + (c + 0.5) * GRID_RES
+            if _is_land_polygon(lat, lon, polygons):
+                idx = r * cols + c
+                land[idx // 8] |= 1 << (idx % 8)
+        if r % 50 == 0:
+            print(f"\r  Rasterizing polygons... {r*100//rows}%", end="", flush=True)
+    print(f"\r  Rasterizing polygons... 100%")
 
-    # Scanline fill each polygon
-    for pi, p in enumerate(polygons):
-        outer = p["outer"]
-        if isinstance(outer[0], list):
-            outer = [(pt[0], pt[1]) for pt in outer]
-        _scanline_fill(outer, bits, rows, cols, SOUTH, WEST, GRID_RES, value=True)
-        for hole in p["holes"]:
-            h = hole
-            if isinstance(h[0], list):
-                h = [(pt[0], pt[1]) for pt in h]
-            _scanline_fill(h, bits, rows, cols, SOUTH, WEST, GRID_RES, value=False)
+    raw_land = sum(bin(b).count('1') for b in land)
+    raw_water = total - raw_land
+    print(f"  Raw: {raw_land:,} land, {raw_water:,} water (incl. reservoirs)")
 
-    # Count before dilation
-    land_before = sum(bin(b).count('1') for b in bits)
+    # Phase 2: flood-fill from ocean to find navigable water
+    ocean_seeds = [
+        (37.80, -122.35),   # Central SF Bay
+        (37.60, -122.20),   # South Bay
+        (37.50, -122.60),   # Pacific off HMB
+        (37.70, -122.55),   # Pacific off SF
+        (37.00, -122.50),   # Pacific off Santa Cruz
+        (36.60, -121.88),   # Monterey Bay
+        (37.90, -122.45),   # North Bay / Golden Gate
+        (38.05, -122.50),   # San Pablo Bay
+        (36.80, -121.80),   # Monterey Bay south
+        (37.30, -122.50),   # Pacific off Ano Nuevo
+    ]
+    navigable = bytearray((total + 7) // 8)
+    queue = deque()
 
-    # Dilate: expand land cells by GRID_BUFFER_PX pixels in all 4 directions
-    if GRID_BUFFER_PX > 0:
-        for _ in range(GRID_BUFFER_PX):
-            orig = bytearray(bits)
-            for r in range(rows):
-                for c in range(cols):
-                    idx = r * cols + c
-                    if (orig[idx // 8] >> (idx % 8)) & 1:
-                        for dr, dc in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
-                            nr, nc = r + dr, c + dc
-                            if 0 <= nr < rows and 0 <= nc < cols:
-                                nidx = nr * cols + nc
-                                bits[nidx // 8] |= 1 << (nidx % 8)
+    for slat, slon in ocean_seeds:
+        r = int((slat - SOUTH) / GRID_RES)
+        c = int((slon - WEST) / GRID_RES)
+        if 0 <= r < rows and 0 <= c < cols:
+            idx = r * cols + c
+            is_land = (land[idx >> 3] & (1 << (idx & 7))) != 0
+            already = (navigable[idx >> 3] & (1 << (idx & 7))) != 0
+            if not is_land and not already:
+                navigable[idx >> 3] |= 1 << (idx & 7)
+                queue.append((r, c))
 
-    land_after = sum(bin(b).count('1') for b in bits)
+    print(f"  Flood-filling from {len(ocean_seeds)} ocean seeds ({len(queue)} valid)...", end="", flush=True)
+    filled = len(queue)
+    while queue:
+        r, c = queue.popleft()
+        for dr, dc in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
+            nr, nc = r + dr, c + dc
+            if 0 <= nr < rows and 0 <= nc < cols:
+                nidx = nr * cols + nc
+                is_land = (land[nidx >> 3] & (1 << (nidx & 7))) != 0
+                already = (navigable[nidx >> 3] & (1 << (nidx & 7))) != 0
+                if not is_land and not already:
+                    navigable[nidx >> 3] |= 1 << (nidx & 7)
+                    queue.append((nr, nc))
+                    filled += 1
+
+    print(f" {filled:,} navigable water cells found")
+    inland_water = raw_water - filled
+    print(f"  Inland water (reservoirs/lakes → land): {inland_water:,} cells")
+
+    # Phase 3: final grid — land = NOT navigable
+    bits = bytearray((total + 7) // 8)
+    for idx in range(total):
+        is_navigable = (navigable[idx >> 3] & (1 << (idx & 7))) != 0
+        if not is_navigable:
+            bits[idx // 8] |= 1 << (idx % 8)
+
+    land_count = sum(bin(b).count('1') for b in bits)
+    print(f"  Final: {land_count:,} land / {total - land_count:,} water")
 
     encoded = base64.b64encode(bytes(bits)).decode("ascii")
-    print(f"  Land cells: {land_before:,} -> {land_after:,} (after {GRID_BUFFER_PX}px dilation)")
     print(f"  Encoded size: {len(encoded):,} bytes")
 
     return {
@@ -316,16 +333,24 @@ def rasterize(polygons):
 
 def validate(polygons):
     tests = [
+        # Land points
         (37.78, -122.41, True, "Downtown SF"),
         (37.60, -122.45, True, "Pacifica"),
         (37.50, -122.35, True, "SF Peninsula inland"),
         (37.40, -122.10, True, "South Bay inland"),
         (37.33, -122.03, True, "Santa Cruz Mtns"),
         (36.97, -122.03, True, "Santa Cruz city"),
+        # Bay water
         (37.80, -122.35, False, "Central SF Bay"),
-        (37.50, -122.60, False, "Pacific Ocean off HMB"),
-        (37.00, -122.50, False, "Pacific Ocean off SC"),
         (37.825, -122.475, False, "Golden Gate strait"),
+        # Pacific Ocean (critical — route must be able to sail down the coast)
+        (37.70, -122.52, False, "Pacific off SF"),
+        (37.60, -122.55, False, "Pacific off Pacifica"),
+        (37.50, -122.60, False, "Pacific Ocean off HMB"),
+        (37.40, -122.45, False, "Pacific off Pescadero"),
+        (37.20, -122.45, False, "Pacific off Ano Nuevo"),
+        (37.00, -122.50, False, "Pacific Ocean off SC"),
+        (36.80, -121.95, False, "Monterey Bay north"),
         (36.62, -121.90, False, "Monterey Bay"),
     ]
     print("\nValidation:")
@@ -380,6 +405,35 @@ def main():
 
     # Rasterize for fast browser lookups
     grid = rasterize(polygons)
+
+    # Validate grid matches polygon results
+    print("\nGrid validation:")
+    grid_ok = True
+    grid_bits = base64.b64decode(grid["data"])
+    grid_bits = bytearray(grid_bits)
+    for lat, lon, expect, name in [
+        (37.78, -122.41, True, "Downtown SF"),
+        (37.80, -122.35, False, "Central SF Bay"),
+        (37.70, -122.52, False, "Pacific off SF"),
+        (37.60, -122.55, False, "Pacific off Pacifica"),
+        (37.50, -122.60, False, "Pacific off HMB"),
+        (37.40, -122.45, False, "Pacific off Pescadero"),
+        (37.50, -122.30, True, "SF Peninsula inland"),
+        (36.60, -121.88, False, "Monterey Bay"),
+        # Inland reservoirs must be LAND in the grid (not navigable)
+        (37.53, -122.36, True, "Crystal Springs Reservoir"),
+        (37.47, -122.14, True, "Anderson Reservoir area"),
+        (37.35, -122.08, True, "Santa Cruz Mtns interior"),
+    ]:
+        r = int((lat - grid["south"]) / grid["resolution"])
+        c = int((lon - grid["west"]) / grid["resolution"])
+        idx = r * grid["cols"] + c
+        is_land = (grid_bits[idx >> 3] & (1 << (idx & 7))) != 0
+        status = "PASS" if is_land == expect else "FAIL"
+        if status == "FAIL":
+            grid_ok = False
+            passed = False
+        print(f"  [{status}] {name}: grid={'LAND' if is_land else 'WATER'} (expected {'LAND' if expect else 'WATER'})")
 
     # Round and write
     for p in polygons:

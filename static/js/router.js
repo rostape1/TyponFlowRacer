@@ -58,7 +58,7 @@ let _landMaskLoading = null;
 async function _loadLandMask() {
     if (_landPolygons) return _landPolygons;
     if (_landMaskLoading) return _landMaskLoading;
-    _landMaskLoading = fetch('data/land_mask.json')
+    _landMaskLoading = fetch('data/land_mask.json?v=3')
         .then(r => r.json())
         .then(data => {
             _landPolygons = data.polygons.map(poly => {
@@ -81,7 +81,8 @@ async function _loadLandMask() {
                     south: g.south, west: g.west, north: g.north, east: g.east,
                     res: g.resolution, rows: g.rows, cols: g.cols, bits: bytes,
                 };
-                console.log(`Land mask loaded: grid ${g.rows}x${g.cols} + ${_landPolygons.length} polygons`);
+                const landCells = Array.from(bytes).reduce((n, b) => n + (b ? (b.toString(2).match(/1/g) || []).length : 0), 0);
+                console.log(`Land mask loaded: grid ${g.rows}x${g.cols}, ${landCells} land / ${g.rows * g.cols - landCells} water + ${_landPolygons.length} polygons`);
             } else {
                 console.log(`Land mask loaded: ${_landPolygons.length} polygons (no grid)`);
             }
