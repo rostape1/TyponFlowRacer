@@ -1,5 +1,5 @@
-const CACHE_NAME = 'ais-tracker-v12';
-const DATA_CACHE = 'ais-data-v4';
+const CACHE_NAME = 'ais-tracker-v13';
+const DATA_CACHE = 'ais-data-v5';
 const TILE_CACHE = 'ais-tiles-v1';
 
 // External tile CDN hosts to cache
@@ -127,7 +127,7 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // External environmental APIs — same strategy as data JSON
+  // External environmental APIs — network-first, never cache errors
   if (ENV_API_HOSTS.some(h => url.hostname === h)) {
     if (_dataCacheFirst) {
       event.respondWith(
@@ -143,6 +143,8 @@ self.addEventListener('fetch', (event) => {
               return cached;
             }
             return networkFetch.then((resp) => {
+              if (resp && resp.ok) return resp;
+              if (resp && !resp.ok && cached) return cached;
               if (resp) return resp;
               return new Response('{"error":"offline"}', {
                 status: 503,
@@ -158,6 +160,11 @@ self.addEventListener('fetch', (event) => {
           if (response.ok) {
             const clone = response.clone();
             caches.open(DATA_CACHE).then((cache) => cache.put(event.request, clone));
+          }
+          if (!response.ok) {
+            return caches.open(DATA_CACHE).then((cache) =>
+              cache.match(event.request).then((cached) => cached || response)
+            );
           }
           return response;
         }).catch(() =>
