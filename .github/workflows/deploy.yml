@@ -37,6 +37,9 @@ jobs:
           restore-keys: |
             env-data-
 
+      - name: Restore land_mask.json from git
+        run: git checkout HEAD -- static/data/land_mask.json
+
       - name: List data files
         run: |
           echo "=== Data directory ==="
