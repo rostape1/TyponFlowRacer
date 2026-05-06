@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 """
-Generate land_mask.json from US Census TIGER/Line data.
+Generate land_mask.json from GSHHS (Global Self-consistent Hierarchical
+High-resolution Shoreline) coastline data.
 
-Uses two TIGER datasets:
-  1. State boundary (cb_2022_us_state_500k) — mainland California polygon
-  2. Area water (tl_2022_XXXXX_areawater) — SF Bay and other water bodies as holes
+GSHHS Level 1 polygons trace the actual ocean/land boundary — the bay,
+Golden Gate, and Pacific coast are all correctly represented as water
+without needing separate water-body downloads or flood-fill heuristics.
 
-Data source: US Census Bureau (public domain, no API key).
+Data source: NOAA/NCEI (public domain).
 
 Usage:  python3 .github/scripts/generate_land_mask.py
 Output: static/data/land_mask.json
@@ -28,22 +29,12 @@ except ImportError:
     sys.exit(1)
 
 SOUTH, WEST, NORTH, EAST = 36.4, -123.1, 38.15, -121.6
-SIMPLIFY_TOLERANCE = 0.0001
+GRID_RES = 0.002  # ~222m — Golden Gate is ~7 cells wide
+SIMPLIFY_TOLERANCE = 0.0005  # ~55m Douglas-Peucker (grid is 222m, so 55m detail is sufficient)
 MIN_RING_POINTS = 6
 
-# Bay-area county FIPS codes for water body extraction
-WATER_COUNTIES = [
-    "06075",  # San Francisco
-    "06001",  # Alameda
-    "06041",  # Marin
-    "06081",  # San Mateo
-    "06013",  # Contra Costa
-    "06085",  # Santa Clara
-    "06087",  # Santa Cruz
-    "06053",  # Monterey
-]
-# Minimum water body area (sq degrees) to include as a hole — filters out tiny ponds
-MIN_WATER_AREA = 0.00001
+GSHHG_URL = "https://github.com/GenericMappingTools/gshhg-gmt/releases/download/2.3.7/gshhg-shp-2.3.7.zip"
+GSHHG_LOCAL = "/tmp/gshhg-shp-2.3.7.zip"
 
 
 def _parse_shapefile(shp_bytes):
@@ -85,24 +76,9 @@ def _parse_shapefile(shp_bytes):
     return records
 
 
-def _download_shp(url, label):
-    """Download a zip, extract .shp, parse it."""
-    print(f"  Downloading {label}...", end="", flush=True)
-    r = requests.get(url, timeout=120)
-    r.raise_for_status()
-    z = zipfile.ZipFile(io.BytesIO(r.content))
-    shp_name = [n for n in z.namelist() if n.endswith(".shp")][0]
-    records = _parse_shapefile(z.read(shp_name))
-    print(f" {len(r.content)//1024}KB, {len(records)} records")
-    return records
-
-
 def _to_latlon(ring):
-    """Convert (lon,lat) shapefile ring to (lat,lon) and ensure CCW."""
-    converted = [(lat, lon) for lon, lat in ring]
-    if _signed_area(converted) < 0:
-        converted = list(reversed(converted))
-    return converted
+    """Convert (lon,lat) shapefile ring to (lat,lon)."""
+    return [(lat, lon) for lon, lat in ring]
 
 
 def _signed_area(ring):
@@ -127,7 +103,6 @@ def _point_in_ring(lat, lon, ring):
 
 
 def _ring_in_bbox(ring):
-    """Check if (lat,lon) ring overlaps our bbox."""
     lats = [p[0] for p in ring]
     lons = [p[1] for p in ring]
     return max(lats) >= SOUTH and min(lats) <= NORTH and max(lons) >= WEST and min(lons) <= EAST
@@ -136,190 +111,120 @@ def _ring_in_bbox(ring):
 def _point_line_dist(p, a, b):
     dx, dy = b[1] - a[1], b[0] - a[0]
     if dx == 0 and dy == 0:
-        return math.sqrt((p[0]-a[0])**2 + (p[1]-a[1])**2)
-    t = max(0, min(1, ((p[1]-a[1])*dx + (p[0]-a[0])*dy) / (dx*dx + dy*dy)))
-    return math.sqrt((p[0] - a[0] - t*dy)**2 + (p[1] - a[1] - t*dx)**2)
+        return math.sqrt((p[0] - a[0]) ** 2 + (p[1] - a[1]) ** 2)
+    t = max(0, min(1, ((p[1] - a[1]) * dx + (p[0] - a[0]) * dy) / (dx * dx + dy * dy)))
+    return math.sqrt((p[0] - a[0] - t * dy) ** 2 + (p[1] - a[1] - t * dx) ** 2)
 
 
 def _simplify(ring, tol):
     if len(ring) <= 4:
         return ring
+
     def dp(pts, s, e):
         if e - s < 2:
             return [pts[s], pts[e]]
         mx, mi = 0, s
-        for i in range(s+1, e):
+        for i in range(s + 1, e):
             d = _point_line_dist(pts[i], pts[s], pts[e])
             if d > mx:
                 mx, mi = d, i
         if mx > tol:
             return dp(pts, s, mi)[:-1] + dp(pts, mi, e)
         return [pts[s], pts[e]]
-    sys.setrecursionlimit(max(sys.getrecursionlimit(), len(ring)*2))
-    r = dp(ring, 0, len(ring)-1)
+
+    sys.setrecursionlimit(max(sys.getrecursionlimit(), len(ring) * 2))
+    r = dp(ring, 0, len(ring) - 1)
     if len(r) >= 3 and ring[0] == ring[-1]:
         r[-1] = r[0]
     return r
 
 
-def fetch_mainland():
-    """Get California mainland polygon from TIGER state boundaries."""
-    print("Step 1: Mainland polygon")
-    url = "https://www2.census.gov/geo/tiger/GENZ2022/shp/cb_2022_us_state_500k.zip"
-    records = _download_shp(url, "state boundaries (500k)")
+def fetch_gshhs():
+    """Download GSHHS high-resolution coastline, extract land polygons overlapping our bbox."""
+    print("Step 1: Loading GSHHS coastline data")
 
-    # Find all rings from records overlapping our bbox, convert to (lat,lon)
-    all_rings = []
+    # Try local file first, fall back to download
+    local = Path(GSHHG_LOCAL)
+    if local.exists():
+        print(f"  Using local file: {local}")
+        outer_zip = zipfile.ZipFile(str(local))
+    else:
+        print(f"  Downloading {GSHHG_URL}...", end="", flush=True)
+        r = requests.get(GSHHG_URL, timeout=300)
+        r.raise_for_status()
+        print(f" {len(r.content) // 1024}KB")
+        outer_zip = zipfile.ZipFile(io.BytesIO(r.content))
+
+    # GSHHS Level 1 = ocean/land boundary (high resolution)
+    shp_path = "GSHHS_shp/h/GSHHS_h_L1.shp"
+    print(f"  Extracting {shp_path}...")
+    shp_bytes = outer_zip.read(shp_path)
+    records = _parse_shapefile(shp_bytes)
+    print(f"  {len(records)} Level 1 (land) polygons worldwide")
+
+    polygons = []
     for rec in records:
         for ring_raw in rec:
             ring = _to_latlon(ring_raw)
-            if len(ring) >= 4:
-                all_rings.append(ring)
+            if len(ring) >= 4 and _ring_in_bbox(ring):
+                polygons.append(ring)
 
-    # Sort by area, keep only those overlapping bbox
-    all_rings.sort(key=lambda r: abs(_signed_area(r)), reverse=True)
-    in_bbox = [r for r in all_rings if _ring_in_bbox(r)]
+    polygons.sort(key=lambda r: abs(_signed_area(r)), reverse=True)
+    print(f"  {len(polygons)} polygons overlap bbox")
+    for i, p in enumerate(polygons[:5]):
+        lats = [pt[0] for pt in p]
+        lons = [pt[1] for pt in p]
+        print(f"    #{i}: {len(p)} pts, lat {min(lats):.2f}-{max(lats):.2f}, "
+              f"lon {min(lons):.2f}-{max(lons):.2f}")
 
-    # The largest ring overlapping our bbox is the California mainland
-    mainland = in_bbox[0] if in_bbox else None
-    islands = in_bbox[1:]  # smaller rings = islands (Farallon, Yerba Buena, etc.)
-
-    if mainland:
-        lats = [p[0] for p in mainland]
-        lons = [p[1] for p in mainland]
-        print(f"  Mainland: {len(mainland)} pts, lat {min(lats):.2f}-{max(lats):.2f}")
-        print(f"  Islands: {len(islands)}")
-
-    return mainland, islands
+    return polygons
 
 
-def fetch_water_bodies():
-    """Get water body polygons from TIGER areawater for bay-area counties."""
-    print("\nStep 2: Water bodies (holes)")
-    water_rings = []
-
-    for fips in WATER_COUNTIES:
-        url = f"https://www2.census.gov/geo/tiger/TIGER2022/AREAWATER/tl_2022_{fips}_areawater.zip"
-        try:
-            records = _download_shp(url, f"county {fips}")
-        except Exception as e:
-            print(f"  WARNING: Failed to download {fips}: {e}")
-            continue
-
-        for rec in records:
-            for ring_raw in rec:
-                ring = _to_latlon(ring_raw)
-                area = abs(_signed_area(ring))
-                if area < MIN_WATER_AREA:
-                    continue
-                if not _ring_in_bbox(ring):
-                    continue
-                water_rings.append(ring)
-
-    print(f"  Total water bodies in bbox: {len(water_rings)}")
-    return water_rings
-
-
-def _is_land_polygon(lat, lon, polygons):
-    """Check if a point is on land using polygon testing."""
+def _is_land(lat, lon, polygons):
     for p in polygons:
         if _point_in_ring(lat, lon, p["outer"]):
-            if any(_point_in_ring(lat, lon, h) for h in p["holes"]):
-                return False
             return True
     return False
 
 
-GRID_RES = 0.005  # ~550m resolution
-
-
 def rasterize(polygons):
-    """Pre-compute a binary land grid for O(1) lookups in the browser.
+    """Pre-compute a binary land grid for O(1) lookups in the browser."""
+    from matplotlib.path import Path
+    import numpy as np
 
-    After polygon rasterization, flood-fills from known ocean points so only
-    water cells connected to the ocean/bay are navigable. Inland reservoirs
-    and lakes are reclassified as land — they aren't sailboat-navigable.
-    """
-    from collections import deque
-
-    print("\nStep 3: Rasterizing land grid")
+    print("\nStep 2: Rasterizing land grid")
     rows = int((NORTH - SOUTH) / GRID_RES)
     cols = int((EAST - WEST) / GRID_RES)
     total = rows * cols
-    print(f"  Grid: {rows}x{cols} = {total:,} cells at {GRID_RES}° ({GRID_RES*111000:.0f}m)")
+    print(f"  Grid: {rows}x{cols} = {total:,} cells at {GRID_RES}° ({GRID_RES * 111000:.0f}m)")
 
-    # Phase 1: rasterize polygons (1 = land, 0 = any water including reservoirs)
-    land = bytearray((total + 7) // 8)
-    for r in range(rows):
-        lat = SOUTH + (r + 0.5) * GRID_RES
-        for c in range(cols):
-            lon = WEST + (c + 0.5) * GRID_RES
-            if _is_land_polygon(lat, lon, polygons):
-                idx = r * cols + c
-                land[idx // 8] |= 1 << (idx % 8)
-        if r % 50 == 0:
-            print(f"\r  Rasterizing polygons... {r*100//rows}%", end="", flush=True)
-    print(f"\r  Rasterizing polygons... 100%")
+    # Build grid of all cell centers
+    lats = np.linspace(SOUTH + GRID_RES / 2, NORTH - GRID_RES / 2, rows)
+    lons = np.linspace(WEST + GRID_RES / 2, EAST - GRID_RES / 2, cols)
+    lon_grid, lat_grid = np.meshgrid(lons, lats)
+    points = np.column_stack([lon_grid.ravel(), lat_grid.ravel()])
 
-    raw_land = sum(bin(b).count('1') for b in land)
-    raw_water = total - raw_land
-    print(f"  Raw: {raw_land:,} land, {raw_water:,} water (incl. reservoirs)")
+    land = np.zeros(total, dtype=bool)
 
-    # Phase 2: flood-fill from ocean to find navigable water
-    ocean_seeds = [
-        (37.80, -122.35),   # Central SF Bay
-        (37.60, -122.20),   # South Bay
-        (37.50, -122.60),   # Pacific off HMB
-        (37.70, -122.55),   # Pacific off SF
-        (37.00, -122.50),   # Pacific off Santa Cruz
-        (36.60, -121.88),   # Monterey Bay
-        (37.90, -122.45),   # North Bay / Golden Gate
-        (38.05, -122.50),   # San Pablo Bay
-        (36.80, -121.80),   # Monterey Bay south
-        (37.30, -122.50),   # Pacific off Ano Nuevo
-    ]
-    navigable = bytearray((total + 7) // 8)
-    queue = deque()
+    for i, poly in enumerate(polygons):
+        ring = poly["outer"]
+        # matplotlib Path uses (x, y) = (lon, lat)
+        verts = [(p[1], p[0]) for p in ring]
+        path = Path(verts)
+        print(f"  Testing polygon {i} ({len(ring)} pts)...", end="", flush=True)
+        inside = path.contains_points(points)
+        count = inside.sum()
+        land |= inside
+        print(f" {count:,} cells inside")
 
-    for slat, slon in ocean_seeds:
-        r = int((slat - SOUTH) / GRID_RES)
-        c = int((slon - WEST) / GRID_RES)
-        if 0 <= r < rows and 0 <= c < cols:
-            idx = r * cols + c
-            is_land = (land[idx >> 3] & (1 << (idx & 7))) != 0
-            already = (navigable[idx >> 3] & (1 << (idx & 7))) != 0
-            if not is_land and not already:
-                navigable[idx >> 3] |= 1 << (idx & 7)
-                queue.append((r, c))
+    land_count = land.sum()
+    print(f"  Land: {land_count:,} / Water: {total - land_count:,}")
 
-    print(f"  Flood-filling from {len(ocean_seeds)} ocean seeds ({len(queue)} valid)...", end="", flush=True)
-    filled = len(queue)
-    while queue:
-        r, c = queue.popleft()
-        for dr, dc in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
-            nr, nc = r + dr, c + dc
-            if 0 <= nr < rows and 0 <= nc < cols:
-                nidx = nr * cols + nc
-                is_land = (land[nidx >> 3] & (1 << (nidx & 7))) != 0
-                already = (navigable[nidx >> 3] & (1 << (nidx & 7))) != 0
-                if not is_land and not already:
-                    navigable[nidx >> 3] |= 1 << (nidx & 7)
-                    queue.append((nr, nc))
-                    filled += 1
-
-    print(f" {filled:,} navigable water cells found")
-    inland_water = raw_water - filled
-    print(f"  Inland water (reservoirs/lakes → land): {inland_water:,} cells")
-
-    # Phase 3: final grid — land = NOT navigable
+    # Pack into bitfield
     bits = bytearray((total + 7) // 8)
     for idx in range(total):
-        is_navigable = (navigable[idx >> 3] & (1 << (idx & 7))) != 0
-        if not is_navigable:
+        if land[idx]:
             bits[idx // 8] |= 1 << (idx % 8)
-
-    land_count = sum(bin(b).count('1') for b in bits)
-    print(f"  Final: {land_count:,} land / {total - land_count:,} water")
 
     encoded = base64.b64encode(bytes(bits)).decode("ascii")
     print(f"  Encoded size: {len(encoded):,} bytes")
@@ -331,38 +236,35 @@ def rasterize(polygons):
     }
 
 
-def validate(polygons):
+def validate_polygons(polygons):
     tests = [
-        # Land points
+        # Land
         (37.78, -122.41, True, "Downtown SF"),
         (37.60, -122.45, True, "Pacifica"),
         (37.50, -122.35, True, "SF Peninsula inland"),
         (37.40, -122.10, True, "South Bay inland"),
         (37.33, -122.03, True, "Santa Cruz Mtns"),
         (36.97, -122.03, True, "Santa Cruz city"),
+        (37.10, -122.25, True, "Davenport coast"),
+        (37.05, -122.20, True, "Santa Cruz Mtns coast"),
+        (37.00, -122.15, True, "North Santa Cruz"),
         # Bay water
         (37.80, -122.35, False, "Central SF Bay"),
-        (37.825, -122.475, False, "Golden Gate strait"),
-        # Pacific Ocean (critical — route must be able to sail down the coast)
+        (37.60, -122.20, False, "South Bay near RWC"),
+        # Golden Gate
+        (37.825, -122.475, False, "Golden Gate mid-channel"),
+        # Pacific
         (37.70, -122.52, False, "Pacific off SF"),
-        (37.60, -122.55, False, "Pacific off Pacifica"),
-        (37.50, -122.60, False, "Pacific Ocean off HMB"),
-        (37.40, -122.45, False, "Pacific off Pescadero"),
+        (37.50, -122.60, False, "Pacific off HMB"),
         (37.20, -122.45, False, "Pacific off Ano Nuevo"),
-        (37.00, -122.50, False, "Pacific Ocean off SC"),
+        (37.00, -122.50, False, "Pacific off SC"),
         (36.80, -121.95, False, "Monterey Bay north"),
-        (36.62, -121.90, False, "Monterey Bay"),
+        (36.65, -121.90, False, "Monterey Bay"),
     ]
-    print("\nValidation:")
+    print("\nPolygon validation:")
     ok = True
     for lat, lon, expect, name in tests:
-        is_land = False
-        for p in polygons:
-            if _point_in_ring(lat, lon, p["outer"]):
-                in_hole = any(_point_in_ring(lat, lon, h) for h in p["holes"])
-                if not in_hole:
-                    is_land = True
-                    break
+        is_land = any(_point_in_ring(lat, lon, p["outer"]) for p in polygons)
         status = "PASS" if is_land == expect else "FAIL"
         if status == "FAIL":
             ok = False
@@ -370,75 +272,74 @@ def validate(polygons):
     return ok
 
 
-def main():
-    out_path = Path(__file__).resolve().parent.parent.parent / "static" / "data" / "land_mask.json"
-
-    mainland, islands = fetch_mainland()
-    if not mainland:
-        print("ERROR: No mainland polygon found")
-        return 1
-
-    water = fetch_water_bodies()
-
-    # Filter water bodies: only keep those inside the mainland polygon
-    holes = [w for w in water if _point_in_ring(w[0][0], w[0][1], mainland)]
-    print(f"\n{len(holes)} water bodies inside mainland polygon")
-
-    # Build output: mainland + holes, plus island polygons
-    polygons = [{"outer": mainland, "holes": holes}]
-    for island in islands:
-        polygons.append({"outer": island, "holes": []})
-
-    print(f"{len(polygons)} total polygons ({len(islands)} islands)")
-
-    # Simplify
-    total_before = sum(len(p["outer"]) + sum(len(h) for h in p["holes"]) for p in polygons)
-    for p in polygons:
-        p["outer"] = _simplify(p["outer"], SIMPLIFY_TOLERANCE)
-        p["holes"] = [_simplify(h, SIMPLIFY_TOLERANCE) for h in p["holes"]]
-        p["holes"] = [h for h in p["holes"] if len(h) >= MIN_RING_POINTS]
-    polygons = [p for p in polygons if len(p["outer"]) >= MIN_RING_POINTS]
-    total_after = sum(len(p["outer"]) + sum(len(h) for h in p["holes"]) for p in polygons)
-    print(f"Simplified: {total_before} -> {total_after} points")
-
-    passed = validate(polygons)
-
-    # Rasterize for fast browser lookups
-    grid = rasterize(polygons)
-
-    # Validate grid matches polygon results
-    print("\nGrid validation:")
-    grid_ok = True
-    grid_bits = base64.b64decode(grid["data"])
-    grid_bits = bytearray(grid_bits)
-    for lat, lon, expect, name in [
+def validate_grid(grid):
+    tests = [
+        # Land
         (37.78, -122.41, True, "Downtown SF"),
-        (37.80, -122.35, False, "Central SF Bay"),
-        (37.70, -122.52, False, "Pacific off SF"),
-        (37.60, -122.55, False, "Pacific off Pacifica"),
-        (37.50, -122.60, False, "Pacific off HMB"),
-        (37.40, -122.45, False, "Pacific off Pescadero"),
         (37.50, -122.30, True, "SF Peninsula inland"),
-        (36.60, -121.88, False, "Monterey Bay"),
-        # Inland reservoirs must be LAND in the grid (not navigable)
+        (37.10, -122.25, True, "Davenport coast"),
+        (37.05, -122.20, True, "Santa Cruz Mtns coast"),
+        (37.00, -122.15, True, "North Santa Cruz"),
         (37.53, -122.36, True, "Crystal Springs Reservoir"),
         (37.47, -122.14, True, "Anderson Reservoir area"),
         (37.35, -122.08, True, "Santa Cruz Mtns interior"),
-    ]:
+        # Water
+        (37.80, -122.35, False, "Central SF Bay"),
+        (37.60, -122.20, False, "South Bay near RWC"),
+        (37.825, -122.475, False, "Golden Gate mid-channel"),
+        (37.82, -122.48, False, "Golden Gate west"),
+        (37.83, -122.47, False, "Golden Gate east"),
+        (37.70, -122.52, False, "Pacific off SF"),
+        (37.50, -122.60, False, "Pacific off HMB"),
+        (37.40, -122.45, False, "Pacific off Pescadero"),
+        (37.20, -122.45, False, "Pacific off Ano Nuevo"),
+        (37.10, -122.40, False, "Pacific off Davenport"),
+        (37.00, -122.25, False, "Pacific off Santa Cruz"),
+        (36.65, -121.90, False, "Monterey Bay"),
+    ]
+    print("\nGrid validation:")
+    bits = base64.b64decode(grid["data"])
+    ok = True
+    for lat, lon, expect, name in tests:
         r = int((lat - grid["south"]) / grid["resolution"])
         c = int((lon - grid["west"]) / grid["resolution"])
         idx = r * grid["cols"] + c
-        is_land = (grid_bits[idx >> 3] & (1 << (idx & 7))) != 0
+        is_land = (bits[idx >> 3] & (1 << (idx & 7))) != 0
         status = "PASS" if is_land == expect else "FAIL"
         if status == "FAIL":
-            grid_ok = False
-            passed = False
-        print(f"  [{status}] {name}: grid={'LAND' if is_land else 'WATER'} (expected {'LAND' if expect else 'WATER'})")
+            ok = False
+        print(f"  [{status}] {name}: grid={'LAND' if is_land else 'WATER'} "
+              f"(expected {'LAND' if expect else 'WATER'})")
+    return ok
+
+
+def main():
+    out_path = Path(__file__).resolve().parent.parent.parent / "static" / "data" / "land_mask.json"
+
+    raw_polygons = fetch_gshhs()
+    if not raw_polygons:
+        print("ERROR: No GSHHS polygons found in bbox")
+        return 1
+
+    # Simplify
+    total_before = sum(len(p) for p in raw_polygons)
+    simplified = [_simplify(p, SIMPLIFY_TOLERANCE) for p in raw_polygons]
+    simplified = [p for p in simplified if len(p) >= MIN_RING_POINTS]
+    total_after = sum(len(p) for p in simplified)
+    print(f"\nSimplified: {total_before} -> {total_after} points")
+
+    # GSHHS Level 1 = land polygons (no holes needed — bay is outside the polygon)
+    polygons = [{"outer": p, "holes": []} for p in simplified]
+
+    passed = validate_polygons(polygons)
+
+    grid = rasterize(polygons)
+    if not validate_grid(grid):
+        passed = False
 
     # Round and write
     for p in polygons:
         p["outer"] = [[round(a, 6), round(b, 6)] for a, b in p["outer"]]
-        p["holes"] = [[[round(a, 6), round(b, 6)] for a, b in h] for h in p["holes"]]
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
     with open(out_path, "w") as f:

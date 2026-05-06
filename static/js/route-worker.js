@@ -234,7 +234,7 @@ const TIME_STEP_OPEN_S = 300;
 const MAX_TIME_S = 86400;
 const DEST_RADIUS_NM = 0.15;
 const PRUNE_SECTORS = 180;
-const MAX_DIVERSION_DEG = 150;
+const MAX_DIVERSION_DEG = 180;
 
 function _pruneIsochrone(points, startLat, startLon, destLat, destLon) {
     let cLat = 0, cLon = 0;

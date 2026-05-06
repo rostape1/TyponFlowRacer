@@ -58,7 +58,7 @@ let _landMaskLoading = null;
 async function _loadLandMask() {
     if (_landPolygons) return _landPolygons;
     if (_landMaskLoading) return _landMaskLoading;
-    _landMaskLoading = fetch('data/land_mask.json?v=3')
+    _landMaskLoading = fetch('data/land_mask.json?v=4')
         .then(r => r.json())
         .then(data => {
             _landPolygons = data.polygons.map(poly => {
