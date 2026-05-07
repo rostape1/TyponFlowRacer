@@ -292,13 +292,20 @@ function _pathDistance(path) {
     return Math.round(d * 10) / 10;
 }
 
+function _inHRZone(lat, lon) {
+    return lat >= HR_ZONE.south && lat <= HR_ZONE.north &&
+           lon >= HR_ZONE.west && lon <= HR_ZONE.east;
+}
+
 function _smoothPath(path) {
     if (path.length < 3) return path;
     let smoothed = [path[0]];
     let i = 0;
     while (i < path.length - 1) {
         let best = i + 1;
-        for (let j = Math.min(i + 8, path.length - 1); j > i + 1; j--) {
+        // In HR zone, limit look-ahead to 2 (preserve current-riding detail)
+        const maxLook = _inHRZone(path[i].lat, path[i].lon) ? 2 : 8;
+        for (let j = Math.min(i + maxLook, path.length - 1); j > i + 1; j--) {
             if (!_segmentCrossesLand(path[i].lat, path[i].lon, path[j].lat, path[j].lon)) {
                 best = j; break;
             }
