@@ -374,14 +374,15 @@ self.onmessage = function(e) {
                 const bsp = getBoatSpeed(twa, wind.speed, perfFactor);
                 if (bsp < 0.5) continue;
 
-                // Tack/gybe penalty: large heading changes cost speed
+                // Tack/gybe penalty: large heading changes cost nearly a full step
                 let tackPenalty = 1.0;
                 if (pt.heading >= 0) {
                     let hdgChange = Math.abs(headingDeg - pt.heading);
                     if (hdgChange > 180) hdgChange = 360 - hdgChange;
                     if (hdgChange > 60) {
-                        // Lose ~2kn for 60s equivalent: reduce this step's distance
-                        tackPenalty = Math.max(0.3, 1.0 - (2.0 / bsp) * (60 / stepS));
+                        tackPenalty = 0.15;
+                    } else if (hdgChange > 30) {
+                        tackPenalty = 0.7;
                     }
                 }
 
