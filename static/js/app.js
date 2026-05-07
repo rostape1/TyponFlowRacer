@@ -2238,8 +2238,11 @@ function _initDlBadges() {
     const sixHours = 6 * 3600 * 1000;
     for (const cat of DL_CATEGORIES) {
         const ts = s[cat] ? new Date(s[cat]).getTime() : 0;
-        const isDone = ts && (Date.now() - ts < sixHours);
-        // Recompute hoursAhead fresh from stored model_run + count so it stays accurate on reload
+        let isDone = ts && (Date.now() - ts < sixHours);
+        // Wind badge: only show green if data is actually cached in memory
+        if (cat === 'wind' && isDone && typeof getWindGridForHour === 'function' && !getWindGridForHour(0)) {
+            isDone = false;
+        }
         const hoursAhead = (cat === 'flow' && isDone)
             ? _flowHoursAhead(s['flow_model_run'], s['flow_count'])
             : null;
