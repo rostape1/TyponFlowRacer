@@ -228,13 +228,19 @@ function interpolateWind(windGrids, startTimeMs, lat, lon, timeMs) {
 
 // --- Pruning ---
 const NUM_HEADINGS = 72;
+const NUM_HEADINGS_HR = 144;
 const HEADING_STEP = 360 / NUM_HEADINGS;
+const HEADING_STEP_HR = 360 / NUM_HEADINGS_HR;
 const TIME_STEP_S = 120;
+const TIME_STEP_HR_S = 60;
 const TIME_STEP_OPEN_S = 300;
 const MAX_TIME_S = 86400;
 const DEST_RADIUS_NM = 0.15;
 const PRUNE_SECTORS = 180;
 const MAX_DIVERSION_DEG = 180;
+
+// High-resolution zone: Golden Gate + approaches (within ~1nm of narrows)
+const HR_ZONE = { south: 37.78, north: 37.86, west: -122.53, east: -122.42 };
 
 function _pruneIsochrone(points, startLat, startLon, destLat, destLon) {
     let cLat = 0, cLon = 0;
@@ -337,7 +343,12 @@ self.onmessage = function(e) {
 
     while (elapsedS < MAX_TIME_S && step < maxSteps) {
         const nearLand = wavefront.some(pt => _isTooCloseToLand(pt.lat, pt.lon));
-        const stepS = nearLand ? TIME_STEP_S : TIME_STEP_OPEN_S;
+        const inHRZone = wavefront.some(pt =>
+            pt.lat >= HR_ZONE.south && pt.lat <= HR_ZONE.north &&
+            pt.lon >= HR_ZONE.west && pt.lon <= HR_ZONE.east);
+        const stepS = inHRZone ? TIME_STEP_HR_S : (nearLand ? TIME_STEP_S : TIME_STEP_OPEN_S);
+        const numH = inHRZone ? NUM_HEADINGS_HR : NUM_HEADINGS;
+        const hStep = inHRZone ? HEADING_STEP_HR : HEADING_STEP;
         const dtHours = stepS / 3600;
         const newPoints = [];
 
@@ -348,8 +359,8 @@ self.onmessage = function(e) {
             if (wind.speed > maxWindSeen) maxWindSeen = wind.speed;
             const windFromDeg = (Math.atan2(-wind.u, -wind.v) * RAD2DEG + 360) % 360;
 
-            for (let hi = 0; hi < NUM_HEADINGS; hi++) {
-                const headingDeg = hi * HEADING_STEP;
+            for (let hi = 0; hi < numH; hi++) {
+                const headingDeg = hi * hStep;
                 const headingRad = headingDeg * DEG2RAD;
                 let twa = Math.abs(headingDeg - windFromDeg);
                 if (twa > 180) twa = 360 - twa;
