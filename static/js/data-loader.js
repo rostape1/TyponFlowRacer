@@ -589,7 +589,10 @@ async function downloadAllForOffline(onProgress, onCategory) {
 
     // Wind grid — single batched Open-Meteo request
     let windOk = 0;
-    try { await _fetchWindGridFromAPI(); windOk++; } catch (e) {}
+    try {
+        const windResult = await _fetchWindGridFromAPI();
+        if (windResult) windOk++;
+    } catch (e) {}
     tick();
     if (onCategory) onCategory('wind', windOk > 0);
 
