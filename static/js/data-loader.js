@@ -161,6 +161,11 @@ async function _fetchWindGridFromAPI() {
         + '&models=gfs_seamless&wind_speed_unit=kn&forecast_hours=49';
 
     const res = await fetch(url);
+    if (res.status === 429) {
+        _windRateLimitedUntil = Date.now() + 5 * 60000;
+        console.warn('Open-Meteo rate limited — backing off 5 min');
+        return null;
+    }
     if (!res.ok) return null;
     const data = await res.json();
 
@@ -216,11 +221,14 @@ async function _fetchWindGridFromAPI() {
     return grids;
 }
 
+let _windRateLimitedUntil = 0;
+
 async function fetchWindField(minutesOffset = 0) {
     const hour = forecastHour(minutesOffset);
 
-    // Check wind grid cache (30min TTL)
-    if (!_windGridCache || Date.now() - _windGridCache.fetchedAt > 30 * 60000) {
+    // Check wind grid cache (30min TTL) — skip if rate-limited
+    if ((!_windGridCache || Date.now() - _windGridCache.fetchedAt > 30 * 60000)
+        && Date.now() > _windRateLimitedUntil) {
         try {
             const grids = await _fetchWindGridFromAPI();
             if (grids) {
