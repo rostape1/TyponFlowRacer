@@ -374,8 +374,20 @@ self.onmessage = function(e) {
                 const bsp = getBoatSpeed(twa, wind.speed, perfFactor);
                 if (bsp < 0.5) continue;
 
-                const gvx = bsp * Math.sin(headingRad) + (current ? current.vx : 0);
-                const gvy = bsp * Math.cos(headingRad) + (current ? current.vy : 0);
+                // Tack/gybe penalty: large heading changes cost speed
+                let tackPenalty = 1.0;
+                if (pt.heading >= 0) {
+                    let hdgChange = Math.abs(headingDeg - pt.heading);
+                    if (hdgChange > 180) hdgChange = 360 - hdgChange;
+                    if (hdgChange > 60) {
+                        // Lose ~2kn for 60s equivalent: reduce this step's distance
+                        tackPenalty = Math.max(0.3, 1.0 - (2.0 / bsp) * (60 / stepS));
+                    }
+                }
+
+                const effBsp = bsp * tackPenalty;
+                const gvx = effBsp * Math.sin(headingRad) + (current ? current.vx : 0);
+                const gvy = effBsp * Math.cos(headingRad) + (current ? current.vy : 0);
                 const newLat = pt.lat + (gvy / NM_PER_DEG_LAT) * dtHours;
                 const newLon = pt.lon + (gvx / (NM_PER_DEG_LAT * Math.cos(pt.lat * DEG2RAD))) * dtHours;
 
