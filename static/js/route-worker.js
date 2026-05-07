@@ -374,21 +374,16 @@ self.onmessage = function(e) {
                 const bsp = getBoatSpeed(twa, wind.speed, perfFactor);
                 if (bsp < 0.5) continue;
 
-                // Tack/gybe penalty: ~60s at 40% speed (realistic Swan 47)
-                let tackPenalty = 1.0;
+                // Tack/gybe penalty: adds dead time (boat stalls during maneuver)
+                let tackTimePenaltyS = 0;
                 if (pt.heading >= 0) {
                     let hdgChange = Math.abs(headingDeg - pt.heading);
                     if (hdgChange > 180) hdgChange = 360 - hdgChange;
-                    if (hdgChange > 60) {
-                        // Full tack: lose 60% of speed for 60s, scaled to step duration
-                        tackPenalty = 1.0 - 0.6 * Math.min(1, 60 / stepS);
-                    } else if (hdgChange > 30) {
-                        // Large bearing change: mild slowdown
-                        tackPenalty = 1.0 - 0.2 * Math.min(1, 30 / stepS);
-                    }
+                    if (hdgChange > 60) tackTimePenaltyS = 60;
+                    else if (hdgChange > 30) tackTimePenaltyS = 20;
                 }
 
-                const effBsp = bsp * tackPenalty;
+                const effBsp = bsp;
                 const gvx = effBsp * Math.sin(headingRad) + (current ? current.vx : 0);
                 const gvy = effBsp * Math.cos(headingRad) + (current ? current.vy : 0);
                 const newLat = pt.lat + (gvy / NM_PER_DEG_LAT) * dtHours;
@@ -400,7 +395,7 @@ self.onmessage = function(e) {
                 const awy = wind.speed * Math.cos(twaRad) - bsp;
 
                 const newPt = {
-                    lat: newLat, lon: newLon, timeMs: pt.timeMs + stepS * 1000,
+                    lat: newLat, lon: newLon, timeMs: pt.timeMs + (stepS + tackTimePenaltyS) * 1000,
                     parent: pt, heading: headingDeg, cBenefit,
                     tws: wind.speed, twa, bsp,
                     aws: Math.sqrt(awx * awx + awy * awy),
