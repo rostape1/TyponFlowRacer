@@ -292,39 +292,6 @@ function _pathDistance(path) {
     return Math.round(d * 10) / 10;
 }
 
-function _inHRZone(lat, lon) {
-    return lat >= HR_ZONE.south && lat <= HR_ZONE.north &&
-           lon >= HR_ZONE.west && lon <= HR_ZONE.east;
-}
-
-function _smoothPath(path) {
-    if (path.length < 3) return path;
-    let smoothed = [path[0]];
-    let i = 0;
-    while (i < path.length - 1) {
-        let best = i + 1;
-        // In HR zone, limit look-ahead to 2 (preserve current-riding detail)
-        const maxLook = _inHRZone(path[i].lat, path[i].lon) ? 2 : 8;
-        for (let j = Math.min(i + maxLook, path.length - 1); j > i + 1; j--) {
-            if (!_segmentCrossesLand(path[i].lat, path[i].lon, path[j].lat, path[j].lon)) {
-                best = j; break;
-            }
-        }
-        let sumB = 0, sumTws = 0, sumTwa = 0, sumBsp = 0, sumAws = 0, sumAwa = 0;
-        for (let k = i + 1; k <= best; k++) {
-            sumB += path[k].cBenefit; sumTws += path[k].tws; sumTwa += path[k].twa;
-            sumBsp += path[k].bsp; sumAws += path[k].aws; sumAwa += path[k].awa;
-        }
-        const n = best - i;
-        smoothed.push({ ...path[best],
-            cBenefit: sumB / n, tws: sumTws / n, twa: sumTwa / n,
-            bsp: sumBsp / n, aws: sumAws / n, awa: sumAwa / n,
-        });
-        i = best;
-    }
-    return smoothed;
-}
-
 // --- Main computation ---
 self.onmessage = function(e) {
     const { params, sfbofsGrids: sfRaw, sfbofsGridsHR: sfHRRaw,
@@ -383,9 +350,8 @@ self.onmessage = function(e) {
                     else if (hdgChange > 30) tackTimePenaltyS = 20;
                 }
 
-                const effBsp = bsp;
-                const gvx = effBsp * Math.sin(headingRad) + (current ? current.vx : 0);
-                const gvy = effBsp * Math.cos(headingRad) + (current ? current.vy : 0);
+                const gvx = bsp * Math.sin(headingRad) + (current ? current.vx : 0);
+                const gvy = bsp * Math.cos(headingRad) + (current ? current.vy : 0);
                 const newLat = pt.lat + (gvy / NM_PER_DEG_LAT) * dtHours;
                 const newLon = pt.lon + (gvx / (NM_PER_DEG_LAT * Math.cos(pt.lat * DEG2RAD))) * dtHours;
 
