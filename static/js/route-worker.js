@@ -374,15 +374,17 @@ self.onmessage = function(e) {
                 const bsp = getBoatSpeed(twa, wind.speed, perfFactor);
                 if (bsp < 0.5) continue;
 
-                // Tack/gybe penalty: large heading changes cost nearly a full step
+                // Tack/gybe penalty: ~60s at 40% speed (realistic Swan 47)
                 let tackPenalty = 1.0;
                 if (pt.heading >= 0) {
                     let hdgChange = Math.abs(headingDeg - pt.heading);
                     if (hdgChange > 180) hdgChange = 360 - hdgChange;
                     if (hdgChange > 60) {
-                        tackPenalty = 0.15;
+                        // Full tack: lose 60% of speed for 60s, scaled to step duration
+                        tackPenalty = 1.0 - 0.6 * Math.min(1, 60 / stepS);
                     } else if (hdgChange > 30) {
-                        tackPenalty = 0.7;
+                        // Large bearing change: mild slowdown
+                        tackPenalty = 1.0 - 0.2 * Math.min(1, 30 / stepS);
                     }
                 }
 
