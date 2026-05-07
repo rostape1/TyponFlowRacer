@@ -395,7 +395,7 @@ self.onmessage = function(e) {
                 if (_haversineNm(newLat, newLon, endLat, endLon) < DEST_RADIUS_NM &&
                     !_isTooCloseToLand(newLat, newLon) &&
                     !_segmentCrossesLand(pt.lat, pt.lon, newLat, newLon)) {
-                    const path = _smoothPath(_backtrack(newPt));
+                    const path = _backtrack(newPt);
                     self.postMessage({ type: 'result', data: {
                         path, isochrones,
                         elapsedMin: Math.round((newPt.timeMs - startTimeMs) / 60000),
