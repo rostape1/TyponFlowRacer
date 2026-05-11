@@ -124,9 +124,9 @@ body {
 }
 
 .dl-badge {
-    font-size: 9px;
+    font-size: 10px;
     font-weight: 600;
-    padding: 1px 5px;
+    padding: 2px 6px;
     border-radius: 10px;
     background: rgba(100, 150, 200, 0.12);
     color: #3a4f63;
@@ -1330,13 +1330,13 @@ body.panel-collapsed #panel-toggle {
         display: none !important;
     }
 
-    /* === Status bar: narrow bottom row === */
+    /* === Status bar: bottom row (60px for touch targets) === */
     #status-bar {
-        height: 32px;
+        height: 60px;
         flex-wrap: nowrap;
         justify-content: flex-start;
         align-items: center;
-        padding: 0 10px;
+        padding: 0 12px;
         gap: 8px;
         z-index: 1001;
     }
@@ -1358,7 +1358,7 @@ body.panel-collapsed #panel-toggle {
     #connection-status::before { display: inline-block !important; }
     #connection-status::after {
         content: 'AIS';
-        font-size: 10px;
+        font-size: 11px;
         color: #7a8fa6;
     }
     /* When needs-key class is set, show full tap-to-connect prompt */
@@ -1372,7 +1372,7 @@ body.panel-collapsed #panel-toggle {
     }
     #connection-status.needs-key::after { display: none; }
 
-    #vessel-count { font-size: 11px; }
+    #vessel-count { font-size: 12px; }
     #message-count { display: none; }
 
     /* === Layers button: visible on mobile, in status bar === */
@@ -1381,30 +1381,30 @@ body.panel-collapsed #panel-toggle {
         align-items: center;
         justify-content: center;
         margin-left: auto;
-        background: rgba(100, 150, 200, 0.1);
-        border: 1px solid rgba(100, 150, 200, 0.2);
-        border-radius: 4px;
-        color: #7a8fa6;
+        background: rgba(100, 150, 200, 0.15);
+        border: 1px solid rgba(100, 150, 200, 0.25);
+        border-radius: 6px;
+        color: #c8d6e5;
         cursor: pointer;
         transition: all 0.2s;
-        /* Large by default (collapsed state) */
-        min-width: 48px;
-        min-height: 28px;
-        font-size: 20px;
+        /* Large touch target for easy tapping */
+        min-width: 56px;
+        min-height: 56px;
+        font-size: 28px;
     }
-    #layers-btn:active { background: rgba(100, 150, 200, 0.25); }
+    #layers-btn:active { background: rgba(100, 150, 200, 0.35); }
 
-    /* When controls are open, make the button smaller */
+    /* When controls are open, keep it tappable */
     body.mobile-controls-open #layers-btn {
-        min-width: 36px;
-        min-height: 24px;
-        font-size: 16px;
+        min-width: 56px;
+        min-height: 56px;
+        font-size: 28px;
     }
 
     /* === Layers tray: 2 rows on mobile === */
     #layers-tray {
         position: fixed;
-        bottom: 92px; /* 32px status + 60px forecast */
+        bottom: 120px; /* 60px status + 60px forecast */
         left: 0;
         right: 0;
         z-index: 1003;
@@ -1448,7 +1448,7 @@ body.panel-collapsed #panel-toggle {
     #forecast-quick-btns {
         display: flex;
         position: fixed;
-        bottom: 32px; /* above status bar */
+        bottom: 60px; /* above status bar */
         left: 0;
         right: 0;
         z-index: 1002;
@@ -1533,7 +1533,7 @@ body.panel-collapsed #panel-toggle {
         width: 100%;
         height: 30vh;
         top: auto;
-        bottom: 120px; /* 32 + 44 + 44 */
+        bottom: 132px; /* 44 + 44 + 44 */
         border-left: none;
         border-top: 1px solid rgba(100, 150, 200, 0.12);
     }
@@ -1548,21 +1548,21 @@ body.panel-collapsed #panel-toggle {
         font-size: 16px;
     }
 
-    /* === Legends: reposition above 3-row bar (32+44+44=120) === */
-    #flow-legend { bottom: 126px; }
-    #wind-legend { bottom: 210px; }
+    /* === Legends: reposition above 3-row bar (44+44+44=132) === */
+    #flow-legend { bottom: 138px; }
+    #wind-legend { bottom: 222px; }
 
     /* When controls collapsed, move legends down */
-    body:not(.mobile-controls-open) #flow-legend { bottom: 38px; }
-    body:not(.mobile-controls-open) #wind-legend { bottom: 122px; }
+    body:not(.mobile-controls-open) #flow-legend { bottom: 50px; }
+    body:not(.mobile-controls-open) #wind-legend { bottom: 134px; }
 
     /* === Mobile vessel list === */
     .mobile-vessel-list {
-        bottom: 206px; /* 92px forecast+status + ~110px 2-row tray + 4px gap */
+        bottom: 218px; /* 104px forecast+status + ~110px 2-row tray + 4px gap */
     }
 
     body:not(.mobile-controls-open) .mobile-vessel-list {
-        bottom: 32px;
+        bottom: 60px;
     }
 
     /* === Leaflet controls: larger touch targets === */
@@ -1575,16 +1575,16 @@ body.panel-collapsed #panel-toggle {
 
     /* === Time picker and offline download panels === */
     .time-picker-panel {
-        bottom: 126px;
+        bottom: 138px;
     }
     .offline-dl-panel {
-        bottom: 126px;
+        bottom: 138px;
     }
     body:not(.mobile-controls-open) .time-picker-panel {
-        bottom: 38px;
+        bottom: 50px;
     }
     body:not(.mobile-controls-open) .offline-dl-panel {
-        bottom: 38px;
+        bottom: 50px;
     }
 }
 
