@@ -1050,7 +1050,7 @@ body.panel-collapsed #panel-toggle {
 /* Route planner panel */
 .route-panel {
     position: fixed;
-    bottom: 200px;
+    bottom: 280px;
     right: 12px;
     width: 210px;
     background: rgba(10, 22, 40, 0.92);
@@ -1549,8 +1549,8 @@ body.panel-collapsed #panel-toggle {
     }
 
     /* === Legends: reposition above 3-row bar (60+60+60=180) === */
-    #flow-legend { bottom: 186px; }
-    #wind-legend { bottom: 270px; }
+    #flow-legend { bottom: 260px; }
+    #wind-legend { bottom: 344px; }
 
     /* When controls collapsed, move legends down */
     body:not(.mobile-controls-open) #flow-legend { bottom: 66px; }
@@ -1575,10 +1575,10 @@ body.panel-collapsed #panel-toggle {
 
     /* === Time picker and offline download panels === */
     .time-picker-panel {
-        bottom: 186px;
+        bottom: 260px;
     }
     .offline-dl-panel {
-        bottom: 186px;
+        bottom: 260px;
     }
     body:not(.mobile-controls-open) .time-picker-panel {
         bottom: 66px;
