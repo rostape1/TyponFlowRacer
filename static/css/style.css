@@ -958,10 +958,10 @@ body.panel-collapsed #panel-toggle {
 /* Date/time picker panel */
 .time-picker-panel {
     position: fixed;
-    bottom: 90px;
+    bottom: 200px;
     left: 50%;
     transform: translateX(-50%);
-    z-index: 1002;
+    z-index: 1006;
     background: rgba(10, 22, 40, 0.95);
     backdrop-filter: blur(12px);
     border: 1px solid rgba(243, 156, 18, 0.25);
@@ -1050,7 +1050,7 @@ body.panel-collapsed #panel-toggle {
 /* Route planner panel */
 .route-panel {
     position: fixed;
-    bottom: 90px;
+    bottom: 200px;
     right: 12px;
     width: 210px;
     background: rgba(10, 22, 40, 0.92);
@@ -1548,17 +1548,17 @@ body.panel-collapsed #panel-toggle {
         font-size: 16px;
     }
 
-    /* === Legends: reposition above 3-row bar (44+44+44=132) === */
-    #flow-legend { bottom: 138px; }
-    #wind-legend { bottom: 222px; }
+    /* === Legends: reposition above 3-row bar (60+60+60=180) === */
+    #flow-legend { bottom: 186px; }
+    #wind-legend { bottom: 270px; }
 
     /* When controls collapsed, move legends down */
-    body:not(.mobile-controls-open) #flow-legend { bottom: 50px; }
-    body:not(.mobile-controls-open) #wind-legend { bottom: 134px; }
+    body:not(.mobile-controls-open) #flow-legend { bottom: 66px; }
+    body:not(.mobile-controls-open) #wind-legend { bottom: 150px; }
 
     /* === Mobile vessel list === */
     .mobile-vessel-list {
-        bottom: 218px; /* 104px forecast+status + ~110px 2-row tray + 4px gap */
+        bottom: 250px; /* 60+60 forecast+status + ~120px 2-row tray + gap */
     }
 
     body:not(.mobile-controls-open) .mobile-vessel-list {
@@ -1575,16 +1575,16 @@ body.panel-collapsed #panel-toggle {
 
     /* === Time picker and offline download panels === */
     .time-picker-panel {
-        bottom: 138px;
+        bottom: 186px;
     }
     .offline-dl-panel {
-        bottom: 138px;
+        bottom: 186px;
     }
     body:not(.mobile-controls-open) .time-picker-panel {
-        bottom: 50px;
+        bottom: 66px;
     }
     body:not(.mobile-controls-open) .offline-dl-panel {
-        bottom: 50px;
+        bottom: 66px;
     }
 }
 
