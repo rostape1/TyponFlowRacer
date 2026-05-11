@@ -243,15 +243,12 @@ const MAX_DIVERSION_DEG = 180;
 const HR_ZONE = { south: 37.78, north: 37.86, west: -122.53, east: -122.42 };
 
 function _pruneIsochrone(points, startLat, startLon, destLat, destLon) {
-    let cLat = 0, cLon = 0;
-    for (const pt of points) { cLat += pt.lat; cLon += pt.lon; }
-    cLat /= points.length; cLon /= points.length;
     const sectors = new Array(PRUNE_SECTORS).fill(null);
     let bestToDest = null, bestDistToDest = Infinity;
     for (const pt of points) {
-        const brg = _bearingDeg(cLat, cLon, pt.lat, pt.lon);
+        const brg = _bearingDeg(startLat, startLon, pt.lat, pt.lon);
         const sector = Math.floor(brg / (360 / PRUNE_SECTORS)) % PRUNE_SECTORS;
-        const dist = _haversineNm(cLat, cLon, pt.lat, pt.lon);
+        const dist = _haversineNm(startLat, startLon, pt.lat, pt.lon);
         if (!sectors[sector] || dist > sectors[sector].dist) sectors[sector] = { pt, dist };
         const dDest = _haversineNm(pt.lat, pt.lon, destLat, destLon);
         if (dDest < bestDistToDest) { bestDistToDest = dDest; bestToDest = pt; }
