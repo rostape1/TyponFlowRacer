@@ -355,7 +355,7 @@ self.onmessage = function(e) {
                 const cBenefit = current ? current.vx * Math.sin(headingRad) + current.vy * Math.cos(headingRad) : 0;
                 const twaRad = twa * DEG2RAD;
                 const awx = wind.speed * Math.sin(twaRad);
-                const awy = wind.speed * Math.cos(twaRad) - bsp;
+                const awy = wind.speed * Math.cos(twaRad) + bsp;
 
                 const newPt = {
                     lat: newLat, lon: newLon, timeMs: pt.timeMs + (stepS + tackTimePenaltyS) * 1000,
