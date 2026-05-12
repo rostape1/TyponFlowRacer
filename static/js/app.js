@@ -1206,6 +1206,13 @@ async function _runRoute() {
 
         if (_routeEta) _routeEta.innerHTML = `<span style="color:#a0b0c0">ETA</span><span style="color:#f39c12;font-weight:600">${result.elapsedMin} min</span>`;
         if (_routeDistance) _routeDistance.innerHTML = `<span style="color:#a0b0c0">Distance</span><span>${result.distanceNm} nm</span>`;
+        const _routeEfficiency = document.getElementById('route-efficiency');
+        if (_routeEfficiency && _routeStart && _routeEnd) {
+            const rhumb = haversineNm(_routeStart.lat, _routeStart.lon, _routeEnd.lat, _routeEnd.lon);
+            const ratio = (result.distanceNm / rhumb).toFixed(2);
+            const avgSpd = (result.distanceNm / (result.elapsedMin / 60)).toFixed(1);
+            _routeEfficiency.innerHTML = `<span style="color:#a0b0c0">Avg</span><span>${avgSpd} kn</span><span style="color:#a0b0c0;margin-left:8px">Ratio</span><span>${ratio}x (${rhumb.toFixed(1)} nm rhumb)</span>`;
+        }
         if (_routeResult) _routeResult.classList.remove('hidden');
         if (_routeClear) _routeClear.classList.remove('hidden');
     } catch (e) {
