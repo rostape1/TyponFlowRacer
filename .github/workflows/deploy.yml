@@ -51,6 +51,7 @@ jobs:
         run: |
           HASH=$(git rev-parse --short HEAD)
           sed -i "s/const APP_BUILD = '[^']*'/const APP_BUILD = '$HASH'/" static/js/app.js
+          sed -i "s/const APP_VERSION = '[^']*'/const APP_VERSION = '$HASH'/" static/sw.js
 
       - name: Setup Pages
         uses: actions/configure-pages@v6

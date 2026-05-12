@@ -1,6 +1,7 @@
-const CACHE_NAME = 'ais-tracker-v16';
+const CACHE_NAME = 'ais-tracker-' + APP_VERSION;
 const DATA_CACHE = 'ais-data-v9';
 const TILE_CACHE = 'ais-tiles-v1';
+const APP_VERSION = 'dev';
 
 // External tile CDN hosts to cache
 const TILE_HOSTS = [
