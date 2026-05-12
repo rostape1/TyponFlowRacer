@@ -186,7 +186,7 @@ function computeRoute(startLat, startLon, endLat, endLon, startTimeMs, perfFacto
 
         return new Promise((resolve, reject) => {
             if (_routeWorker) _routeWorker.terminate();
-            _routeWorker = new Worker('js/route-worker.js');
+            _routeWorker = new Worker('js/route-worker.js?v=' + Date.now());
 
             _routeWorker.onmessage = (e) => {
                 if (e.data.type === 'progress') {
