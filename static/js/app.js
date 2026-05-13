@@ -1118,12 +1118,14 @@ if (_routeDetailsBtn) {
         html += '</tbody></table>';
         _routeDetailsBody.innerHTML = html;
         _routeDetailsModal.classList.remove('hidden');
+        if (_routePanel) _routePanel.classList.add('hidden');
     });
 }
 
 if (_routeDetailsClose) {
     _routeDetailsClose.addEventListener('click', () => {
         _routeDetailsModal.classList.add('hidden');
+        if (_routePanel && _routeMode) _routePanel.classList.remove('hidden');
     });
 }
 
