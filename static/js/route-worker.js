@@ -20,12 +20,22 @@ const POLAR_BSP = [
 
 function _lerp(a, b, t) { return a + (b - a) * t; }
 
+function apparentWind(twaDeg, tws, bsp) {
+    const twaRad = twaDeg * Math.PI / 180;
+    const awx = tws * Math.sin(twaRad);
+    const awy = tws * Math.cos(twaRad) + bsp; // Boat motion adds headwind on forward axis (not -bsp — see commit a21d5d7)
+    return {
+        aws: Math.sqrt(awx * awx + awy * awy),
+        awa: Math.atan2(awx, awy) * 180 / Math.PI,
+    };
+}
+
 function getBoatSpeed(twaDeg, tws, perfFactor) {
-    if (twaDeg > 180) twaDeg = 360 - twaDeg;
+    if (twaDeg > 180) twaDeg = 360 - twaDeg; // Polar is symmetric port/starboard
     if (twaDeg < POLAR_TWA[0]) return 0;
     if (tws < 1) return 0;
     let lightAirScale = 1.0;
-    if (tws < POLAR_TWS[0]) { lightAirScale = tws / POLAR_TWS[0]; tws = POLAR_TWS[0]; }
+    if (tws < POLAR_TWS[0]) { lightAirScale = tws / POLAR_TWS[0]; tws = POLAR_TWS[0]; } // Linear fade to zero below 6kn (polar undefined in light air)
     const twaClamped = Math.min(twaDeg, POLAR_TWA[POLAR_TWA.length - 1]);
     const twsClamped = Math.min(tws, POLAR_TWS[POLAR_TWS.length - 1]);
     let ti = 0;
@@ -353,16 +363,14 @@ self.onmessage = function(e) {
                 const newLon = pt.lon + (gvx / (NM_PER_DEG_LAT * Math.cos(pt.lat * DEG2RAD))) * dtHours;
 
                 const cBenefit = current ? current.vx * Math.sin(headingRad) + current.vy * Math.cos(headingRad) : 0;
-                const twaRad = twa * DEG2RAD;
-                const awx = wind.speed * Math.sin(twaRad);
-                const awy = wind.speed * Math.cos(twaRad) + bsp;
+                const aw = apparentWind(twa, wind.speed, bsp);
 
                 const newPt = {
                     lat: newLat, lon: newLon, timeMs: pt.timeMs + (stepS + tackTimePenaltyS) * 1000,
                     parent: pt, heading: headingDeg, cBenefit,
                     tws: wind.speed, twa, bsp,
-                    aws: Math.sqrt(awx * awx + awy * awy),
-                    awa: Math.atan2(awx, awy) * RAD2DEG,
+                    aws: aw.aws,
+                    awa: aw.awa,
                 };
 
                 if (_haversineNm(newLat, newLon, endLat, endLon) < DEST_RADIUS_NM &&

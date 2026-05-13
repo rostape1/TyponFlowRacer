@@ -15,21 +15,10 @@ const workerSrc = readFileSync(join(__dirname, '../static/js/route-worker.js'), 
 // Expose internals for testing
 const sandbox = {};
 const fn = new Function('self', 'module',
-    workerSrc + `\nmodule.getBoatSpeed = getBoatSpeed;\nmodule._lerp = _lerp;`
+    workerSrc + `\nmodule.getBoatSpeed = getBoatSpeed;\nmodule._lerp = _lerp;\nmodule.apparentWind = apparentWind;`
 );
 fn({ postMessage() {} }, sandbox);
-const { getBoatSpeed } = sandbox;
-
-// Apparent wind helper (same formula as route-worker)
-function apparentWind(twa, tws, bsp) {
-    const twaRad = twa * Math.PI / 180;
-    const awx = tws * Math.sin(twaRad);
-    const awy = tws * Math.cos(twaRad) + bsp;
-    return {
-        aws: Math.sqrt(awx * awx + awy * awy),
-        awa: Math.atan2(awx, awy) * 180 / Math.PI,
-    };
-}
+const { getBoatSpeed, apparentWind } = sandbox;
 
 let passed = 0, failed = 0;
 
@@ -56,6 +45,18 @@ const bsp_light = getBoatSpeed(90, 3, 1.0);
 const bsp_6 = getBoatSpeed(90, 6, 1.0);
 assert(bsp_light < bsp_6, `Light air (3kn) BSP should be less than 6kn BSP`);
 assert(bsp_light > 0, `BSP in 3kn wind should still be positive`);
+
+// Boundary: port/starboard symmetry past 180°
+assert(getBoatSpeed(270, 10, 1.0) === getBoatSpeed(90, 10, 1.0),
+    `Port/starboard mirror: TWA=270 should equal TWA=90`);
+
+// Boundary: TWA clamp above polar table max (150°)
+assert(getBoatSpeed(170, 10, 1.0) === getBoatSpeed(150, 10, 1.0),
+    `TWA clamp: TWA=170 should equal TWA=150 (table max)`);
+
+// Boundary: TWS clamp above polar table max (20kn)
+assert(getBoatSpeed(90, 25, 1.0) === getBoatSpeed(90, 20, 1.0),
+    `TWS clamp: TWS=25 should equal TWS=20 (table max)`);
 
 console.log(`  ${passed} passed`);
 

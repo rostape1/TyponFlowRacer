@@ -20,7 +20,18 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Run physics tests
+        run: node tests/test_physics.mjs
+
   deploy:
+    needs: test
     runs-on: ubuntu-latest
     environment:
       name: github-pages
@@ -52,6 +63,8 @@ jobs:
           HASH=$(git rev-parse --short HEAD)
           sed -i "s/const APP_BUILD = '[^']*'/const APP_BUILD = '$HASH'/" static/js/app.js
           sed -i "s/const APP_VERSION = '[^']*'/const APP_VERSION = '$HASH'/" static/sw.js
+          grep -q "const APP_BUILD = '$HASH'" static/js/app.js || { echo "::error::Failed to inject APP_BUILD into app.js"; exit 1; }
+          grep -q "const APP_VERSION = '$HASH'" static/sw.js || { echo "::error::Failed to inject APP_VERSION into sw.js"; exit 1; }
 
       - name: Setup Pages
         uses: actions/configure-pages@v6

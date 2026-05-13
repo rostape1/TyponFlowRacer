@@ -1,7 +1,7 @@
+const APP_VERSION = 'dev';
 const CACHE_NAME = 'ais-tracker-' + APP_VERSION;
 const DATA_CACHE = 'ais-data-v9';
 const TILE_CACHE = 'ais-tiles-v1';
-const APP_VERSION = 'dev';
 
 // External tile CDN hosts to cache
 const TILE_HOSTS = [
@@ -27,6 +27,8 @@ const ASSETS = [
   'js/aisstream.js',
   'js/vessel-store.js',
   'js/data-loader.js',
+  'js/router.js',
+  'js/route-worker.js',
   'lib/leaflet.js',
   'lib/leaflet.css',
   'lib/images/layers.png',
