@@ -1,5 +1,5 @@
-const APP_VERSION = 'dev';
-const CACHE_NAME = 'ais-tracker-' + APP_VERSION;
+const APP_BUILD = 'dev';  // git commit hash — updated on each deploy
+const CACHE_NAME = 'ais-tracker-' + APP_BUILD;
 const DATA_CACHE = 'ais-data-v9';
 const TILE_CACHE = 'ais-tiles-v1';
 
@@ -64,6 +64,22 @@ self.addEventListener('activate', (event) => {
 // Stale-while-revalidate flag for downloaded data
 let _dataCacheFirst = false;
 
+// cache.put with quota-aware eviction. On QuotaExceededError, drop the oldest
+// ~20% of entries (Cache API preserves insertion order) so the next put has room.
+async function safeCachePut(cacheName, request, response) {
+  const cache = await caches.open(cacheName);
+  try {
+    await cache.put(request, response);
+  } catch (err) {
+    const quota = err && (err.name === 'QuotaExceededError' || /quota/i.test(err.message || ''));
+    if (!quota) return;
+    const keys = await cache.keys();
+    const toDelete = Math.max(1, Math.floor(keys.length * 0.2));
+    await Promise.all(keys.slice(0, toDelete).map((k) => cache.delete(k)));
+    // Don't retry: response.clone() may already be consumed; next request will succeed.
+  }
+}
+
 self.addEventListener('message', (event) => {
   if (event.data && event.data.type === 'CLEAR_ENV_CACHE') {
     _dataCacheFirst = false;
@@ -87,7 +103,7 @@ self.addEventListener('fetch', (event) => {
           cache.match(event.request).then((cached) => {
             // Background refresh
             const networkFetch = fetch(event.request).then((response) => {
-              if (response.ok) cache.put(event.request, response.clone());
+              if (response.ok) safeCachePut(DATA_CACHE, event.request, response.clone());
               return response;
             }).catch(() => null);
 
@@ -110,8 +126,7 @@ self.addEventListener('fetch', (event) => {
       event.respondWith(
         fetch(event.request).then((response) => {
           if (response.ok) {
-            const clone = response.clone();
-            caches.open(DATA_CACHE).then((cache) => cache.put(event.request, clone));
+            safeCachePut(DATA_CACHE, event.request, response.clone());
           }
           return response;
         }).catch(() =>
@@ -137,7 +152,7 @@ self.addEventListener('fetch', (event) => {
         caches.open(DATA_CACHE).then((cache) =>
           cache.match(event.request).then((cached) => {
             const networkFetch = fetch(event.request).then((response) => {
-              if (response.ok) cache.put(event.request, response.clone());
+              if (response.ok) safeCachePut(DATA_CACHE, event.request, response.clone());
               return response;
             }).catch(() => null);
 
@@ -161,8 +176,7 @@ self.addEventListener('fetch', (event) => {
       event.respondWith(
         fetch(event.request).then((response) => {
           if (response.ok) {
-            const clone = response.clone();
-            caches.open(DATA_CACHE).then((cache) => cache.put(event.request, clone));
+            safeCachePut(DATA_CACHE, event.request, response.clone());
           }
           if (!response.ok) {
             return caches.open(DATA_CACHE).then((cache) =>
@@ -193,7 +207,7 @@ self.addEventListener('fetch', (event) => {
         cache.match(event.request).then((cached) => {
           if (cached) return cached;
           return fetch(event.request).then((response) => {
-            if (response.ok) cache.put(event.request, response.clone());
+            if (response.ok) safeCachePut(TILE_CACHE, event.request, response.clone());
             return response;
           }).catch(() => new Response('', { status: 404 }));
         })
@@ -206,10 +220,9 @@ self.addEventListener('fetch', (event) => {
   event.respondWith(
     fetch(event.request).then((response) => {
       if (response.ok && url.origin === self.location.origin) {
-        const clone = response.clone();
-        caches.open(CACHE_NAME).then((cache) => cache.put(event.request, clone));
+        safeCachePut(CACHE_NAME, event.request, response.clone());
       }
       return response;
-    }).catch(() => caches.match(event.request))
+    }).catch(() => caches.match(event.request, { ignoreSearch: true }))
   );
 });

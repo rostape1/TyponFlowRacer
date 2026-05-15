@@ -110,6 +110,12 @@ Two tables in SQLite (`ais_tracker.db`):
 
 WAL mode + async lock serializes writes. Periodic commits every 2 seconds.
 
+## Tests
+
+| File | Purpose |
+|------|---------|
+| `tests/test_physics.mjs` | Node-based sanity tests for `route-worker.js` polar lookup + apparent wind math. Loads worker source via `new Function` sandbox with a stubbed `self`. Run: `node tests/test_physics.mjs` (also runs in CI before deploy). |
+
 ## Static Data Files
 
 | Path | Description |
@@ -174,6 +180,14 @@ python -m http.server 8888 --directory static
 ```
 
 Open **http://localhost:8888**. You'll be prompted for your AISstream.io API key on first load (stored in localStorage).
+
+### Tests
+
+```bash
+node tests/test_physics.mjs   # polar lookup + apparent wind sanity tests
+```
+
+CI runs this in the `test` job of `.github/workflows/deploy.yml` before the deploy job.
 
 ### Legacy Backend (original server mode)
 

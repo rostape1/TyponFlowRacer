@@ -60,11 +60,11 @@ jobs:
 
       - name: Inject build hash
         run: |
-          HASH=$(git rev-parse --short HEAD)
-          sed -i "s/const APP_BUILD = '[^']*'/const APP_BUILD = '$HASH'/" static/js/app.js
-          sed -i "s/const APP_VERSION = '[^']*'/const APP_VERSION = '$HASH'/" static/sw.js
-          grep -q "const APP_BUILD = '$HASH'" static/js/app.js || { echo "::error::Failed to inject APP_BUILD into app.js"; exit 1; }
-          grep -q "const APP_VERSION = '$HASH'" static/sw.js || { echo "::error::Failed to inject APP_VERSION into sw.js"; exit 1; }
+          HASH=$(git rev-parse --short=12 HEAD)
+          for f in static/js/app.js static/sw.js; do
+            sed -i "s/const APP_BUILD = '[^']*'/const APP_BUILD = '$HASH'/" "$f"
+            grep -q "const APP_BUILD = '$HASH'" "$f" || { echo "::error::cache-bust injection failed in $f"; exit 1; }
+          done
 
       - name: Setup Pages
         uses: actions/configure-pages@v6

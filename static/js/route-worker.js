@@ -23,7 +23,7 @@ function _lerp(a, b, t) { return a + (b - a) * t; }
 function apparentWind(twaDeg, tws, bsp) {
     const twaRad = twaDeg * Math.PI / 180;
     const awx = tws * Math.sin(twaRad);
-    const awy = tws * Math.cos(twaRad) + bsp; // Boat motion adds headwind on forward axis (not -bsp — see commit a21d5d7)
+    const awy = tws * Math.cos(twaRad) + bsp; // Boat moves forward into wind, so +bsp on boat-relative y-axis (forward axis)
     return {
         aws: Math.sqrt(awx * awx + awy * awy),
         awa: Math.atan2(awx, awy) * 180 / Math.PI,

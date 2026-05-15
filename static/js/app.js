@@ -1125,7 +1125,9 @@ if (_routeDetailsBtn) {
 if (_routeDetailsClose) {
     _routeDetailsClose.addEventListener('click', () => {
         _routeDetailsModal.classList.add('hidden');
-        if (_routePanel && _routeMode) _routePanel.classList.remove('hidden');
+        // Panel was visible when modal opened (open path unconditionally hides it),
+        // so always restore it on close — handles both active route-mode and completed-route states.
+        if (_routePanel) _routePanel.classList.remove('hidden');
     });
 }
 
