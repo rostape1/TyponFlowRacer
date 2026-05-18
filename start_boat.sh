@@ -1,11 +1,15 @@
 #!/bin/bash
-# Start NMEA WebSocket proxy + static file server for Raspberry Pi
+# Start the boat-mode server on the Raspberry Pi.
+# Single process: serves the static AIS Tracker UI over HTTPS, reverse-proxies
+# environmental APIs, and bridges local NMEA TCP to a WebSocket.
+#
 # Usage: ./start_boat.sh
-# Browse to http://raspberrypi.local:8888
+# Browse to https://raspberrypi.local:8443 (trust the self-signed cert once).
 
+set -e
 DIR="$(cd "$(dirname "$0")" && pwd)"
 
-# Generate self-signed TLS certificate for WSS (allows HTTPS pages to connect)
+# --- Self-signed TLS cert (required for Service Worker + geolocation) -----
 CERT_DIR="$DIR/certs"
 CERT_FILE="$CERT_DIR/server.crt"
 KEY_FILE="$CERT_DIR/server.key"
@@ -25,30 +29,43 @@ fi
 
 cleanup() {
     echo "Shutting down..."
-    kill $PROXY_PID $SERVER_PID 2>/dev/null
-    wait $PROXY_PID $SERVER_PID 2>/dev/null
+    kill $SERVER_PID 2>/dev/null
+    wait $SERVER_PID 2>/dev/null
     exit 0
 }
-
 trap cleanup SIGINT SIGTERM
 
-echo "Starting NMEA WebSocket proxy on port 8765 (ws) + 8766 (wss)..."
-python3 "$DIR/nmea_ws_proxy.py" --ssl-cert "$CERT_FILE" --ssl-key "$KEY_FILE" &
-PROXY_PID=$!
+# Kill any stale instances from previous runs.
+kill_stale() {
+    local pat="$1"
+    local pids
+    pids=$(pgrep -f "$pat" | grep -v "^$$\$" || true)
+    if [ -n "$pids" ]; then
+        echo "Killing stale ($pat): $(echo $pids | tr '\n' ' ')"
+        kill $pids 2>/dev/null || true
+        sleep 0.5
+        kill -9 $pids 2>/dev/null || true
+    fi
+}
+kill_stale "boat_server.py"
+kill_stale "nmea_ws_proxy.py"        # legacy
+kill_stale "http.server 8888"        # legacy
 
-echo "Starting static file server on port 8888..."
-python3 -m http.server 8888 --directory "$DIR/static" &
+PORT=${PORT:-8443}
+OWN_MMSI=${OWN_MMSI:-338361814}
+
+echo "Starting boat-mode server on port $PORT..."
+python3 "$DIR/pi/boat_server.py" \
+    --ssl-cert "$CERT_FILE" --ssl-key "$KEY_FILE" \
+    --port "$PORT" --mmsi "$OWN_MMSI" &
 SERVER_PID=$!
 
 echo ""
 echo "Sailing dashboard ready:"
-echo "  http://$(hostname).local:8888"
-echo "  NMEA WebSocket (plain): ws://$(hostname).local:8765"
-echo "  NMEA WebSocket (TLS):   wss://$(hostname).local:8766"
+echo "  https://$(hostname).local:$PORT/"
+echo "  NMEA WebSocket:          wss://$(hostname).local:$PORT/nmea"
 echo ""
-echo "First time on HTTPS? Trust the certificate by opening:"
-echo "  https://$(hostname).local:8766"
-echo ""
+echo "First time? Open https://$(hostname).local:$PORT/ once to trust the cert."
 echo "Press Ctrl+C to stop."
 
 wait

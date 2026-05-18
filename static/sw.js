@@ -1,6 +1,6 @@
 const APP_BUILD = 'dev';  // git commit hash — updated on each deploy
 const CACHE_NAME = 'ais-tracker-' + APP_BUILD;
-const DATA_CACHE = 'ais-data-v9';
+const DATA_CACHE = 'ais-data-v10';
 const TILE_CACHE = 'ais-tiles-v1';
 
 // External tile CDN hosts to cache
@@ -94,6 +94,11 @@ self.addEventListener('message', (event) => {
 
 self.addEventListener('fetch', (event) => {
   const url = new URL(event.request.url);
+
+  // /config.json is the boat-mode runtime config. It must always reflect the
+  // serving origin's truth — never serve a stale cached config when the Pi
+  // briefly flaps. Bypass the SW entirely.
+  if (url.pathname === '/config.json') return;
 
   // Data JSON files (data/**/*.json) — stale-while-revalidate when downloaded
   if (url.pathname.includes('/data/') && url.pathname.endsWith('.json')) {

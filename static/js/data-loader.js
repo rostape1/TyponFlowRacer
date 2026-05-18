@@ -51,8 +51,12 @@ const _tideCache = new Map();   // stationId → { predictions, fetchedAt }
 const _currentCache = new Map();
 const _waterLevelCache = new Map(); // stationId → { value, time, fetchedAt }
 
-const DATA_BASE = 'data';  // Relative to site root (for SFBOFS + NDBC static JSON)
-const NOAA_API = 'https://api.tidesandcurrents.noaa.gov/api/prod/datagetter';
+// API endpoints — read from window.APP_CONFIG at call time so the boat-mode
+// /config.json bootstrap can redirect them to the Pi reverse-proxy. In web
+// mode (no /config.json) these return today's absolute URLs unchanged.
+function dataBase()     { return (typeof window !== 'undefined' && window.APP_CONFIG?.dataBase)         || 'data'; }
+function noaaApi()      { return (typeof window !== 'undefined' && window.APP_CONFIG?.apiBase?.noaa)      || 'https://api.tidesandcurrents.noaa.gov/api/prod/datagetter'; }
+function openMeteoApi() { return (typeof window !== 'undefined' && window.APP_CONFIG?.apiBase?.openMeteo) || 'https://api.open-meteo.com/v1/forecast'; }
 
 // --- Helpers ---
 
@@ -111,7 +115,7 @@ async function fetchCurrentField(minutesOffset = 0) {
     }
 
     const fileIndex = Math.min(48, elapsedHours + offsetHours);
-    const url = `${DATA_BASE}/sfbofs/hour_${String(fileIndex).padStart(2, '0')}.json`;
+    const url = `${dataBase()}/sfbofs/hour_${String(fileIndex).padStart(2, '0')}.json`;
     const res = await fetch(url);
     if (!res.ok) return { unavailable: true, requestedHour: fileIndex };
     const data = await res.json();
@@ -128,7 +132,7 @@ async function fetchCurrentFieldHighRes(minutesOffset = 0) {
         elapsedHours = Math.max(0, Math.floor((Date.now() - _sfbofsRunTime.getTime()) / 3600000));
     }
     const fileIndex = Math.min(48, elapsedHours + offsetHours);
-    const url = `${DATA_BASE}/sfbofs_gg/hour_${String(fileIndex).padStart(2, '0')}.json`;
+    const url = `${dataBase()}/sfbofs_gg/hour_${String(fileIndex).padStart(2, '0')}.json`;
     const res = await fetch(url);
     if (!res.ok) return null;
     return await res.json();
@@ -136,7 +140,6 @@ async function fetchCurrentFieldHighRes(minutesOffset = 0) {
 
 // --- Wind Field (batched Open-Meteo API) ---
 
-const OPEN_METEO_API = 'https://api.open-meteo.com/v1/forecast';
 const WIND_BOUNDS = { south: 36.40, north: 38.10, west: -122.95, east: -121.80 };
 const WIND_NX = 11;
 const WIND_NY = 16;
@@ -155,7 +158,7 @@ async function _fetchWindGridFromAPI() {
         }
     }
 
-    const url = `${OPEN_METEO_API}?latitude=${lats.join(',')}&longitude=${lons.join(',')}`
+    const url = `${openMeteoApi()}?latitude=${lats.join(',')}&longitude=${lons.join(',')}`
         + '&current=wind_speed_10m,wind_direction_10m,wind_gusts_10m'
         + '&hourly=wind_speed_10m,wind_direction_10m,wind_gusts_10m'
         + '&models=gfs_seamless&wind_speed_unit=kn&forecast_hours=49';
@@ -248,7 +251,7 @@ async function fetchWindField(minutesOffset = 0) {
     let stations = [];
     if (minutesOffset === 0) {
         try {
-            const stationsRes = await fetch(`${DATA_BASE}/wind/stations.json`);
+            const stationsRes = await fetch(`${dataBase()}/wind/stations.json`);
             if (stationsRes.ok) stations = await stationsRes.json();
         } catch (e) { /* optional */ }
     }
@@ -335,7 +338,7 @@ async function fetchTideHeights(minutesOffset = 0) {
         try {
             let data = _tideCache.get(stationId);
             if (!data || Date.now() - data.fetchedAt > 6 * 3600000) {
-                const url = `${NOAA_API}?begin_date=${begin}&end_date=${end}&station=${stationId}&product=predictions&datum=MLLW&units=english&time_zone=gmt&format=json&interval=6`;
+                const url = `${noaaApi()}?begin_date=${begin}&end_date=${end}&station=${stationId}&product=predictions&datum=MLLW&units=english&time_zone=gmt&format=json&interval=6`;
                 const res = await fetch(url);
                 if (!res.ok) return null;
                 const json = await res.json();
@@ -373,7 +376,7 @@ async function fetchWaterLevels() {
                 return { station_id: stationId, ...cached };
             }
 
-            const url = `${NOAA_API}?date=latest&station=${stationId}&product=water_level&datum=MLLW&units=english&time_zone=gmt&format=json`;
+            const url = `${noaaApi()}?date=latest&station=${stationId}&product=water_level&datum=MLLW&units=english&time_zone=gmt&format=json`;
             const res = await fetch(url);
             if (!res.ok) return null;
             const json = await res.json();
@@ -489,7 +492,7 @@ async function fetchCurrents(minutesOffset = 0) {
         try {
             let data = _currentCache.get(stationId);
             if (!data || Date.now() - data.fetchedAt > 6 * 3600000) {
-                const url = `${NOAA_API}?begin_date=${begin}&end_date=${end}&station=${stationId}&product=currents_predictions&units=english&time_zone=gmt&format=json&interval=6`;
+                const url = `${noaaApi()}?begin_date=${begin}&end_date=${end}&station=${stationId}&product=currents_predictions&units=english&time_zone=gmt&format=json&interval=6`;
                 const res = await fetch(url);
                 if (!res.ok) return null;
                 const json = await res.json();
@@ -521,7 +524,7 @@ async function fetchCurrents(minutesOffset = 0) {
 
 async function fetchMeta() {
     try {
-        const res = await fetch(`${DATA_BASE}/meta.json`);
+        const res = await fetch(`${dataBase()}/meta.json`);
         if (!res.ok) return null;
         return res.json();
     } catch (e) {
@@ -546,7 +549,7 @@ async function downloadAllForOffline(onProgress, onCategory) {
     let flowModelRun = null;
     for (let h = 0; h <= 48; h++) {
         try {
-            const resp = await fetch(`${DATA_BASE}/sfbofs/hour_${String(h).padStart(2, '0')}.json`);
+            const resp = await fetch(`${dataBase()}/sfbofs/hour_${String(h).padStart(2, '0')}.json`);
             if (!resp.ok) break;
             flowOk++;
             if (h === 0) {
@@ -562,14 +565,14 @@ async function downloadAllForOffline(onProgress, onCategory) {
     if (onCategory) onCategory('flow', flowOk > 0 ? { count: flowOk, modelRun: flowModelRun } : false);
 
     // NDBC stations (still static JSON)
-    try { await fetch(`${DATA_BASE}/wind/stations.json`); } catch (e) {}
+    try { await fetch(`${dataBase()}/wind/stations.json`); } catch (e) {}
     tick();
 
     // Tides — NOAA API (SW caches each response)
     let tidesOk = 0;
     for (const stationId of Object.keys(TIDE_STATIONS)) {
         try {
-            await fetch(`${NOAA_API}?begin_date=${begin}&end_date=${end}&station=${stationId}&product=predictions&datum=MLLW&units=english&time_zone=gmt&format=json&interval=6`);
+            await fetch(`${noaaApi()}?begin_date=${begin}&end_date=${end}&station=${stationId}&product=predictions&datum=MLLW&units=english&time_zone=gmt&format=json&interval=6`);
             tidesOk++;
         } catch (e) {}
         tick();
@@ -580,7 +583,7 @@ async function downloadAllForOffline(onProgress, onCategory) {
     let currOk = 0;
     for (const stationId of Object.keys(CURRENT_STATIONS)) {
         try {
-            await fetch(`${NOAA_API}?begin_date=${begin}&end_date=${end}&station=${stationId}&product=currents_predictions&units=english&time_zone=gmt&format=json&interval=6`);
+            await fetch(`${noaaApi()}?begin_date=${begin}&end_date=${end}&station=${stationId}&product=currents_predictions&units=english&time_zone=gmt&format=json&interval=6`);
             currOk++;
         } catch (e) {}
         tick();
@@ -621,7 +624,7 @@ async function fetchHycomCurrents() {
     }
 
     try {
-        const res = await fetch(`${DATA_BASE}/hycom/currents.json`);
+        const res = await fetch(`${dataBase()}/hycom/currents.json`);
         if (!res.ok) return null;
         const data = await res.json();
 

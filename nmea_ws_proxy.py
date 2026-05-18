@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""NMEA TCP-to-WebSocket proxy for browser access to boat instruments."""
+"""NMEA TCP-to-WebSocket proxy for browser access to boat instruments.
+
+Standalone CLI for legacy use, plus a reusable `nmea_tcp_broadcast()` coroutine
+that boat_server.py uses to feed aiohttp WebSocket clients.
+"""
 
 import argparse
 import asyncio
@@ -9,15 +13,55 @@ import ssl
 try:
     import websockets
 except ImportError:
-    print("Install websockets: pip install websockets")
-    raise SystemExit(1)
+    websockets = None  # only required for the standalone CLI path
 
 clients = set()
 tcp_reader = None
 
 
+async def nmea_tcp_broadcast(host, port, clients_iter, send_fn):
+    """Connect to a TCP NMEA source and broadcast each line to all clients.
+
+    Args:
+        host, port: TCP source.
+        clients_iter: zero-arg callable returning an iterable snapshot of
+            currently connected clients (so callers can manage the set with
+            their own connection lifecycle).
+        send_fn: async callable `send_fn(client, text)` that delivers one
+            NMEA line to one client. Exceptions are swallowed per-client.
+    """
+    while True:
+        try:
+            reader, _ = await asyncio.open_connection(host, port)
+            print(f"Connected to NMEA source {host}:{port}")
+            while True:
+                line = await reader.readline()
+                if not line:
+                    break
+                text = line.decode("ascii", errors="ignore").strip()
+                if not text:
+                    continue
+                snapshot = list(clients_iter())
+                if not snapshot:
+                    continue
+                await asyncio.gather(
+                    *(send_fn(c, text) for c in snapshot),
+                    return_exceptions=True,
+                )
+        except (ConnectionRefusedError, OSError) as e:
+            print(f"TCP connection failed: {e}, retrying in 5s...")
+        except asyncio.CancelledError:
+            return
+        await asyncio.sleep(5)
+
+
 async def tcp_to_broadcast(host, port):
+    """Standalone-CLI variant that broadcasts to the module-level `clients` set."""
     global tcp_reader
+
+    async def _send(c, text):
+        await c.send(text)
+
     while True:
         try:
             reader, _ = await asyncio.open_connection(host, port)
@@ -53,6 +97,9 @@ async def ws_handler(ws):
 
 
 async def main(tcp_host, tcp_port, ws_port, wss_port, ssl_cert, ssl_key):
+    if websockets is None:
+        print("Install websockets: pip install websockets")
+        raise SystemExit(1)
     loop = asyncio.get_running_loop()
     stop = loop.create_future()
     for sig in (signal.SIGINT, signal.SIGTERM):
@@ -89,3 +136,4 @@ if __name__ == "__main__":
     args = p.parse_args()
     asyncio.run(main(args.tcp_host, args.tcp_port, args.ws_port,
                       args.wss_port, args.ssl_cert, args.ssl_key))
+

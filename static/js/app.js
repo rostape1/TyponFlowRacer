@@ -1,11 +1,32 @@
 // --- Config ---
 const APP_BUILD = '6ea2bd0';  // git commit hash — updated on each deploy
-const OWN_MMSI = 338361814;
+let OWN_MMSI = 338361814;
 window.OWN_MMSI = OWN_MMSI;
 const OWN_NAME = 'TYPON';
 const TRACK_HOURS = 0.5;
 const STALE_MINUTES = 10;
 const MAX_VESSELS = 50;
+
+// Boat-mode runtime config. Pi serves /config.json; GH Pages 404s, so the app
+// falls through to today's web-mode defaults. Started immediately so the fetch
+// is in flight while the rest of the script parses.
+window.APP_CONFIG = window.APP_CONFIG || null;
+const _configPromise = (async () => {
+    try {
+        const res = await fetch('/config.json', { cache: 'no-store' });
+        if (res.ok) {
+            window.APP_CONFIG = await res.json();
+        }
+    } catch (e) { /* offline or 404 — fall through */ }
+    if (!window.APP_CONFIG) {
+        window.APP_CONFIG = { mode: 'web', useCloudAIS: true };
+    }
+    if (Number.isFinite(window.APP_CONFIG.ownMmsi)) {
+        OWN_MMSI = window.APP_CONFIG.ownMmsi;
+        window.OWN_MMSI = OWN_MMSI;
+    }
+    return window.APP_CONFIG;
+})();
 
 // --- State ---
 const vessels = new Map();       // mmsi → vessel data
@@ -335,18 +356,24 @@ map.on('click', (e) => {
         .openOn(map);
 });
 
-// Tile layers — external CDN tiles cached by service worker for offline use
-const darkLayer = L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+// Tile layers — CDN URLs on the deployed site, local Pi-served tiles otherwise.
+// GitHub Pages → CDN (full zoom range). Pi/LAN/localhost → local /tiles/ for offline.
+const _useLocalTiles = !location.hostname.endsWith('github.io');
+const _darkTpl = _useLocalTiles ? 'tiles/dark/{z}/{x}/{y}.png' : 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png';
+const _osmTpl  = _useLocalTiles ? 'tiles/osm/{z}/{x}/{y}.png'  : 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png';
+const _seaTpl  = _useLocalTiles ? 'tiles/sea/{z}/{x}/{y}.png'  : 'https://tiles.openseamap.org/seamark/{z}/{x}/{y}.png';
+
+const darkLayer = L.tileLayer(_darkTpl, {
     attribution: '&copy; CartoDB',
     maxZoom: 19,
 });
 
-const osmLayer = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+const osmLayer = L.tileLayer(_osmTpl, {
     attribution: '&copy; OpenStreetMap contributors',
     maxZoom: 19,
 });
 
-const seaLayer = L.tileLayer('https://tiles.openseamap.org/seamark/{z}/{x}/{y}.png', {
+const seaLayer = L.tileLayer(_seaTpl, {
     attribution: '&copy; OpenSeaMap',
     maxZoom: 18,
     opacity: 0.8,
@@ -756,6 +783,15 @@ function getAISStreamApiKey() {
 let aisClient = null;
 
 function connectAISStream() {
+    // Boat mode: AIS comes from local NMEA only — no cloud, no key prompt.
+    if (window.APP_CONFIG && window.APP_CONFIG.useCloudAIS === false) {
+        const statusEl = document.getElementById('connection-status');
+        if (statusEl) {
+            statusEl.textContent = 'AIS: local NMEA';
+            statusEl.className = 'status-connected';
+        }
+        return;
+    }
     const apiKey = getAISStreamApiKey();
     if (!apiKey) {
         const statusEl = document.getElementById('connection-status');
@@ -1233,7 +1269,7 @@ document.getElementById('vessel-search').addEventListener('input', () => updateP
 if (!ownPosition) {
     map.setView([37.81, -122.42], 12);
 }
-connectAISStream();
+_configPromise.then(() => connectAISStream());
 updatePanel();
 
 // Auto-download with retry on failure
@@ -2548,7 +2584,26 @@ if (nmeaStore && nmeaClient) {
     const certLink = document.getElementById('cert-trust-link');
     if (certLink) certLink.style.display = location.protocol === 'https:' ? 'inline' : 'none';
 
-    setTimeout(() => {
+    // In boat mode the Pi serves /config.json with the canonical NMEA URL
+    // (e.g. wss://<pi>:8443/nmea). Honor that over saved/default values.
+    _configPromise.then((cfg) => {
+        if (cfg && cfg.nmeaWsUrl) {
+            let url = cfg.nmeaWsUrl;
+            // Resolve relative paths ("/nmea") against the page origin so the
+            // server can stay agnostic about its public hostname.
+            if (url.startsWith('/')) {
+                const wsScheme = location.protocol === 'https:' ? 'wss:' : 'ws:';
+                url = `${wsScheme}//${location.host}${url}`;
+            }
+            autoConnectUrl = url;
+            if (wsUrlInput) wsUrlInput.value = autoConnectUrl;
+        }
+    });
+
+    setTimeout(async () => {
+        // Make sure the config (and thus any boat-mode nmeaWsUrl) has resolved
+        // before we open the test socket.
+        await _configPromise;
         try {
             const testWs = new WebSocket(autoConnectUrl);
             testWs.onopen = () => {
