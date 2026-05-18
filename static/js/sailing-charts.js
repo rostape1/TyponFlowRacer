@@ -122,6 +122,12 @@ class SailingCharts {
         ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
         ctx.clearRect(0, 0, w, h);
 
+        const windowMs = 5 * 60 * 1000;
+        const axisH = 10;          // reserved for tick labels
+        const plotBottom = h - axisH;
+
+        this._drawTimeAxis(ctx, w, h, plotBottom, windowMs);
+
         if (history.length < 2) return;
 
         const values = history.map(p => p.v);
@@ -130,12 +136,18 @@ class SailingCharts {
         if (max - min < 0.5) { min -= 0.5; max += 0.5; }
 
         const padY = 4;
-        const plotH = h - padY * 2;
+        const plotH = plotBottom - padY * 2;
+        const yFor = v => padY + plotH - ((v - min) / (max - min)) * plotH;
+
+        this._drawValueGrid(ctx, w, padY, plotH, min, max, yFor);
+
+        const now = Date.now();
+        const xFor = t => w - ((now - t) / windowMs) * w;
 
         ctx.beginPath();
         for (let i = 0; i < history.length; i++) {
-            const x = (i / (history.length - 1)) * w;
-            const y = padY + plotH - ((values[i] - min) / (max - min)) * plotH;
+            const x = xFor(history[i].t);
+            const y = yFor(values[i]);
             if (i === 0) ctx.moveTo(x, y);
             else ctx.lineTo(x, y);
         }
@@ -144,11 +156,11 @@ class SailingCharts {
         ctx.lineJoin = 'round';
         ctx.stroke();
 
-        ctx.lineTo(w, h);
-        ctx.lineTo(0, h);
+        ctx.lineTo(xFor(history[history.length - 1].t), plotBottom);
+        ctx.lineTo(xFor(history[0].t), plotBottom);
         ctx.closePath();
 
-        const fillGrad = ctx.createLinearGradient(0, 0, 0, h);
+        const fillGrad = ctx.createLinearGradient(0, 0, 0, plotBottom);
         fillGrad.addColorStop(0, this._hexToRgba(color, 0.45));
         fillGrad.addColorStop(0.4, this._hexToRgba(color, 0.2));
         fillGrad.addColorStop(1, 'rgba(0,0,0,0)');
@@ -156,21 +168,62 @@ class SailingCharts {
         ctx.fill();
     }
 
+    /** Vertical tick + label at every minute boundary across the time window. */
+    _drawTimeAxis(ctx, w, h, plotBottom, windowMs) {
+        const minutes = Math.round(windowMs / 60000);
+        ctx.save();
+        ctx.font = '8px -apple-system, system-ui, sans-serif';
+        ctx.fillStyle = 'rgba(255,255,255,0.45)';
+        ctx.strokeStyle = 'rgba(255,255,255,0.10)';
+        ctx.lineWidth = 1;
+        ctx.textBaseline = 'top';
+        for (let m = 0; m <= minutes; m++) {
+            const x = w - (m / minutes) * w;
+            ctx.beginPath();
+            ctx.moveTo(x, plotBottom);
+            ctx.lineTo(x, plotBottom + 2);
+            ctx.stroke();
+            const label = m === 0 ? 'now' : `-${m}m`;
+            const tw = ctx.measureText(label).width;
+            // Clamp labels so they don't clip past the canvas edges.
+            let tx = x - tw / 2;
+            if (tx < 0) tx = 0;
+            else if (tx + tw > w) tx = w - tw;
+            ctx.fillText(label, tx, plotBottom + 2);
+        }
+        ctx.restore();
+    }
+
+    /** Horizontal reference lines + small left-edge labels (kt for speed sparklines). */
+    _drawValueGrid(ctx, w, padY, plotH, min, max, yFor) {
+        const range = max - min;
+        // Pick a "nice" step so we render 3-6 grid lines in the visible band.
+        const step = range > 25 ? 10 : range > 10 ? 5 : range > 4 ? 2 : range > 1.5 ? 1 : 0.5;
+        const first = Math.ceil(min / step) * step;
+        ctx.save();
+        ctx.font = '8px -apple-system, system-ui, sans-serif';
+        ctx.fillStyle = 'rgba(255,255,255,0.35)';
+        ctx.strokeStyle = 'rgba(255,255,255,0.07)';
+        ctx.lineWidth = 1;
+        ctx.textBaseline = 'middle';
+        for (let v = first; v <= max + 1e-9; v += step) {
+            const y = yFor(v);
+            ctx.beginPath();
+            ctx.moveTo(0, y);
+            ctx.lineTo(w, y);
+            ctx.stroke();
+            const label = step >= 1 ? Math.round(v).toString() : v.toFixed(1);
+            ctx.fillText(label, 2, y - 1);
+        }
+        ctx.restore();
+    }
+
     _drawShiftChart() {
         const canvas = this._sparkCanvases['twd-shift'];
         if (!canvas) return;
 
-        const history = this.store.getHistory('twd', 5 * 60 * 1000);
-        if (history.length < 3) return;
-
-        const values = history.map(p => p.v);
-        const mean = values.reduce((a, b) => a + b, 0) / values.length;
-        const shifts = values.map(v => {
-            let diff = v - mean;
-            if (diff > 180) diff -= 360;
-            if (diff < -180) diff += 360;
-            return diff;
-        });
+        const windowMs = 5 * 60 * 1000;
+        const history = this.store.getHistory('twd', windowMs);
 
         const dpr = window.devicePixelRatio || 1;
         const rect = canvas.getBoundingClientRect();
@@ -188,20 +241,52 @@ class SailingCharts {
         ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
         ctx.clearRect(0, 0, w, h);
 
-        const cy = h / 2;
-        ctx.strokeStyle = 'rgba(255,255,255,0.08)';
+        const axisH = 10;
+        const plotBottom = h - axisH;
+        this._drawTimeAxis(ctx, w, h, plotBottom, windowMs);
+
+        if (history.length < 3) return;
+
+        const values = history.map(p => p.v);
+        const mean = values.reduce((a, b) => a + b, 0) / values.length;
+        const shifts = values.map(v => {
+            let diff = v - mean;
+            if (diff > 180) diff -= 360;
+            if (diff < -180) diff += 360;
+            return diff;
+        });
+
+        const cy = plotBottom / 2;
+        const range = 15;
+        const yForShift = d => cy - (d / range) * (cy - 4);
+        // Reference lines at ±5° and ±10° (faint) plus center line.
+        ctx.save();
+        ctx.font = '8px -apple-system, system-ui, sans-serif';
+        ctx.fillStyle = 'rgba(255,255,255,0.35)';
         ctx.lineWidth = 1;
+        for (const d of [-10, -5, 5, 10]) {
+            const y = yForShift(d);
+            ctx.strokeStyle = 'rgba(255,255,255,0.06)';
+            ctx.beginPath();
+            ctx.moveTo(0, y);
+            ctx.lineTo(w, y);
+            ctx.stroke();
+            ctx.fillText(`${d > 0 ? '+' : ''}${d}°`, 2, y - 1);
+        }
+        ctx.strokeStyle = 'rgba(255,255,255,0.10)';
         ctx.beginPath();
         ctx.moveTo(0, cy);
         ctx.lineTo(w, cy);
         ctx.stroke();
+        ctx.restore();
 
-        const range = 15;
         const padX = 2;
+        const now = Date.now();
+        const xFor = t => padX + ((windowMs - (now - t)) / windowMs) * (w - padX * 2);
 
         ctx.beginPath();
         for (let i = 0; i < shifts.length; i++) {
-            const x = padX + (i / (shifts.length - 1)) * (w - padX * 2);
+            const x = xFor(history[i].t);
             const clamped = Math.max(-range, Math.min(range, shifts[i]));
             const y = cy - (clamped / range) * (cy - 4);
             if (i === 0) ctx.moveTo(x, y);
@@ -212,10 +297,10 @@ class SailingCharts {
         ctx.lineJoin = 'round';
         ctx.stroke();
 
-        const lastIdx = shifts.length - 1;
-        const lastX = padX + (lastIdx / (shifts.length - 1)) * (w - padX * 2);
+        const lastX = xFor(history[history.length - 1].t);
+        const firstX = xFor(history[0].t);
         ctx.lineTo(lastX, cy);
-        ctx.lineTo(padX, cy);
+        ctx.lineTo(firstX, cy);
         ctx.closePath();
         ctx.fillStyle = 'rgba(255, 68, 68, 0.08)';
         ctx.fill();

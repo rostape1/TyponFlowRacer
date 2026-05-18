@@ -65,13 +65,23 @@ if [ -s /tmp/om_direct.json ] && [ -s /tmp/om_proxy.json ]; then
     if diff -q /tmp/om_direct.json /tmp/om_proxy.json >/dev/null; then
         ok "Open-Meteo proxy == direct (1 point, 49h)"
     else
-        # Open-Meteo includes a per-call generationtime_ms — strip it and re-compare.
-        sed -E 's/"generationtime_ms":[0-9.]+,?//g' /tmp/om_direct.json > /tmp/om_direct.norm
-        sed -E 's/"generationtime_ms":[0-9.]+,?//g' /tmp/om_proxy.json  > /tmp/om_proxy.norm
+        # Two fields legitimately differ between a direct call and a cached
+        # proxy hit: `generationtime_ms` (per-call timing) and `current` (the
+        # 15-min nowcast block, which Open-Meteo updates faster than our
+        # 30-min proxy TTL). The hourly[] arrays are deterministic for the
+        # same model run, so strip the volatile fields and compare those.
+        sed -E -e 's/"generationtime_ms":[0-9.]+,?//g' \
+               -e 's/"current_units":\{[^}]*\},?//g' \
+               -e 's/"current":\{[^}]*\},?//g' \
+               /tmp/om_direct.json > /tmp/om_direct.norm
+        sed -E -e 's/"generationtime_ms":[0-9.]+,?//g' \
+               -e 's/"current_units":\{[^}]*\},?//g' \
+               -e 's/"current":\{[^}]*\},?//g' \
+               /tmp/om_proxy.json  > /tmp/om_proxy.norm
         if diff -q /tmp/om_direct.norm /tmp/om_proxy.norm >/dev/null; then
-            ok "Open-Meteo proxy == direct (only generationtime_ms differs)"
+            ok "Open-Meteo hourly proxy == direct (timing + current nowcast diverge as expected)"
         else
-            fail "Open-Meteo proxy DIFFERS beyond generationtime_ms"
+            fail "Open-Meteo hourly arrays DIFFER between proxy and direct"
             diff /tmp/om_direct.norm /tmp/om_proxy.norm | head -10
         fi
     fi
