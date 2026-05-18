@@ -1447,18 +1447,14 @@ async function loadCurrentField() {
         if (source) {
             const src = data.source || 'NOAA Stations';
             const run = data.model_run ? ` ${data.model_run}` : '';
+            const age = formatDataAge(data.fetched_at);
+            const ageStr = age ? ` · ${age.dot}fetched ${age.ageText}` : '';
             if (forecastMinutes > 0) {
                 const target = new Date(Date.now() + forecastMinutes * 60000);
                 const timeStr = target.toLocaleString('en-US', { weekday: 'short', hour: 'numeric', minute: '2-digit', timeZone: 'America/Los_Angeles' });
-                source.textContent = `${src}${run} · Forecast: ${timeStr}`;
+                source.innerHTML = `${src}${run} · forecast: ${timeStr}${ageStr}`;
             } else {
-                const age = formatDataAge(data.fetched_at);
-                if (age) {
-                    source.innerHTML = `${src}${run} · ${age.dot}${age.ageText}`;
-                } else {
-                    const time = data.fetched_at ? new Date(data.fetched_at.replace(' UTC', 'Z')).toLocaleString('en-US', { hour: '2-digit', minute: '2-digit', timeZoneName: 'short', timeZone: 'America/Los_Angeles' }) : '';
-                    source.textContent = `${src} · ${time}`;
-                }
+                source.innerHTML = `${src}${run}${ageStr}`;
             }
         }
     } catch (e) {
@@ -1509,7 +1505,12 @@ function formatDataAge(fetchedAtStr) {
     if (isNaN(fetched)) return null;
     const ageMs = Date.now() - fetched.getTime();
     const ageMins = Math.floor(ageMs / 60000);
-    const fresh = ageMins < 45; // green if < 45 min old
+    // green < 45 min, yellow < 6 h, red ≥ 6 h. >6h is the "you may be looking
+    // at last night's wind" case the sailor needs to spot at a glance.
+    let dotColor;
+    if (ageMins < 45) dotColor = '#27ae60';
+    else if (ageMins < 360) dotColor = '#f1c40f';
+    else dotColor = '#e74c3c';
     let ageText;
     if (ageMins < 1) ageText = 'just now';
     else if (ageMins < 60) ageText = `${ageMins}m ago`;
@@ -1518,9 +1519,19 @@ function formatDataAge(fetchedAtStr) {
         const m = ageMins % 60;
         ageText = m > 0 ? `${h}h ${m}m ago` : `${h}h ago`;
     }
-    const dotColor = fresh ? '#27ae60' : '#f1c40f';
     const dot = `<span style="display:inline-block;width:6px;height:6px;border-radius:50%;background:${dotColor};box-shadow:0 0 4px ${dotColor};margin-right:3px;vertical-align:middle;"></span>`;
-    return { dot, ageText, fresh };
+    return { dot, ageText, fresh: ageMins < 45, ageMins };
+}
+
+/** Pretty-format a UTC ISO timestamp ("2026-05-18T02:00") as local HH:mm (PT). */
+function formatModelTime(iso) {
+    if (!iso) return '';
+    const d = new Date(iso.endsWith('Z') ? iso : iso + 'Z');
+    if (isNaN(d)) return '';
+    return d.toLocaleString('en-US', {
+        hour: '2-digit', minute: '2-digit', month: 'short', day: 'numeric',
+        timeZone: 'America/Los_Angeles',
+    });
 }
 
 // --- Wind Overlay ---
@@ -1610,19 +1621,19 @@ async function loadWindField() {
         const source = document.getElementById('wind-legend-source');
         if (source && data.grid) {
             const src = data.grid.source || 'HRRR';
+            const stationCount = data.stations ? data.stations.length : 0;
+            const stationStr = stationCount ? ` · ${stationCount} stations` : '';
+            const obs = data.grid.model_obs_time
+                ? ` · model: ${formatModelTime(data.grid.model_obs_time)}`
+                : '';
+            const age = formatDataAge(data.grid.fetched_at);
+            const ageStr = age ? ` · ${age.dot}fetched ${age.ageText}` : '';
             if (forecastMinutes > 0) {
                 const target = new Date(Date.now() + forecastMinutes * 60000);
                 const timeStr = target.toLocaleString('en-US', { weekday: 'short', hour: 'numeric', minute: '2-digit', timeZone: 'America/Los_Angeles' });
-                source.textContent = `${src} · Forecast: ${timeStr}`;
+                source.innerHTML = `${src}${obs} · forecast: ${timeStr}${ageStr}${stationStr}`;
             } else {
-                const stationCount = data.stations ? data.stations.length : 0;
-                const age = formatDataAge(data.grid.fetched_at);
-                if (age) {
-                    source.innerHTML = `${src} · ${age.dot}${age.ageText} · ${stationCount} stations`;
-                } else {
-                    const time = data.grid.fetched_at ? new Date(data.grid.fetched_at.replace(' UTC', 'Z')).toLocaleString('en-US', { hour: '2-digit', minute: '2-digit', timeZoneName: 'short', timeZone: 'America/Los_Angeles' }) : '';
-                    source.textContent = `${src} · ${time} · ${stationCount} stations`;
-                }
+                source.innerHTML = `${src}${obs}${ageStr}${stationStr}`;
             }
         }
     } catch (e) {

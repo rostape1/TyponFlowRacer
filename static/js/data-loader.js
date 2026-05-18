@@ -176,6 +176,11 @@ async function _fetchWindGridFromAPI() {
     if (!Array.isArray(data) || data.length !== lats.length) return null;
 
     const nowStr = new Date().toISOString().slice(0, 16).replace('T', ' ') + ' UTC';
+    // Open-Meteo's `current.time` is the most recent assimilation/observation
+    // time the model has — use it as the "model run" indicator so the user
+    // sees which forecast snapshot they're looking at, not just when the
+    // browser fetched the bytes.
+    const obsTime = (data[0] && data[0].current && data[0].current.time) || null;
     const grids = new Map();
 
     for (let hour = 0; hour < 49; hour++) {
@@ -214,6 +219,7 @@ async function _fetchWindGridFromAPI() {
             model: 'GFS Seamless',
             source: 'Open-Meteo',
             fetched_at: nowStr,
+            model_obs_time: obsTime,
             forecast_hour: hour,
             u,
             v,

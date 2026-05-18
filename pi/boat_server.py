@@ -58,7 +58,15 @@ TTL_SFBOFS_S = 60 * 60                  # 1 h, also pre-warmed hourly
 TTL_NDBC_S = 10 * 60
 TTL_META_S = 60
 
-UPSTREAM_TIMEOUT_S = 5.0
+UPSTREAM_TIMEOUT_S = 10.0
+# Refuse to serve cache older than this on upstream error: stale data is fine,
+# day-old data masquerading as current is dangerous on the water.
+MAX_STALE_S = 24 * 3600
+
+# Pre-warm pacing
+PREWARM_OK_INTERVAL_S = 3600            # next cycle when last cycle succeeded
+PREWARM_FAIL_BACKOFF_S = (60, 120, 240, 300, 300)  # exponential, capped
+PREWARM_REQUEST_GAP_S = 0.2             # be polite to GH Pages
 
 
 # ---- Disk cache ---------------------------------------------------------
@@ -143,13 +151,21 @@ async def proxy_with_cache(
         log.warning("upstream failed for %s: %s", upstream_url, e)
         if cached:
             meta, body = cached
-            return web.Response(
-                body=body,
-                status=meta.get("status", 200),
-                content_type=meta.get("content_type", "application/json"),
-                headers={"X-Cache": "STALE", "X-Cache-Reason": "upstream-error"},
-            )
-        return web.Response(status=504, text="upstream unreachable, no cache")
+            stale_age = now - meta["ts"]
+            if stale_age <= MAX_STALE_S:
+                return web.Response(
+                    body=body,
+                    status=meta.get("status", 200),
+                    content_type=meta.get("content_type", "application/json"),
+                    headers={
+                        "X-Cache": "STALE",
+                        "X-Cache-Age": f"{int(stale_age)}",
+                        "X-Cache-Reason": "upstream-error",
+                    },
+                )
+            log.warning("cache for %s exceeds MAX_STALE (%.0fh), refusing",
+                        upstream_url, stale_age / 3600)
+        return web.Response(status=504, text="upstream unreachable, no fresh cache")
 
 
 def _ttl_for_noaa(query: str) -> float:
@@ -263,39 +279,69 @@ async def handle_nmea_ws(request: web.Request) -> web.WebSocketResponse:
 # ---- SFBOFS pre-warm -----------------------------------------------------
 
 async def sfbofs_prewarm_loop(app: web.Application):
-    """Fetch SFBOFS hours and NDBC stations into the cache on startup, hourly."""
+    """Pre-warm cache with SFBOFS forecast hours + one-shot data files.
+
+    Adaptive interval: when a cycle succeeds we sleep PREWARM_OK_INTERVAL_S
+    (1 h). When any fetch in a cycle fails (most likely cause: satcom is
+    down), we sleep PREWARM_FAIL_BACKOFF_S[backoff] (60s, 2m, 4m, 5m, 5m)
+    so that within ~60 s of internet returning we re-attempt and start
+    catching up — without hammering NOAA/GH Pages while the link is flaky.
+    """
     cache: DiskCache = app["cache"]
     base = app["gh_pages_base"].rstrip("/")
     session: aiohttp.ClientSession = app["http"]
+    backoff_idx = 0
     try:
         while True:
             log.info("SFBOFS pre-warm starting")
             ok = 0
-            for h in range(0, 49):
-                url = f"{base}/data/sfbofs/hour_{h:02d}.json"
-                try:
-                    async with session.get(url, timeout=aiohttp.ClientTimeout(total=UPSTREAM_TIMEOUT_S)) as r:
-                        if r.status == 404:
-                            log.info("SFBOFS hour_%02d missing (404), stopping", h)
-                            break
-                        body = await r.read()
-                        if r.status == 200:
-                            cache.put(url, body, r.headers.get("Content-Type", "application/json"), 200)
-                            ok += 1
-                except (aiohttp.ClientError, asyncio.TimeoutError) as e:
-                    log.warning("pre-warm sfbofs %02d failed: %s", h, e)
-                await asyncio.sleep(0.2)
-            # NDBC + miscellaneous /data/* one-shots.
-            for relpath in ("data/wind/stations.json", "data/land_mask.json", "data/meta.json"):
-                url = f"{base}/{relpath}"
-                try:
-                    async with session.get(url, timeout=aiohttp.ClientTimeout(total=UPSTREAM_TIMEOUT_S)) as r:
-                        if r.status == 200:
-                            cache.put(url, await r.read(), r.headers.get("Content-Type", "application/json"), 200)
-                except (aiohttp.ClientError, asyncio.TimeoutError) as e:
-                    log.warning("pre-warm %s failed: %s", relpath, e)
-            log.info("SFBOFS pre-warm complete: %d hours cached", ok)
-            await asyncio.sleep(3600)
+            cycle_failed = False
+            try:
+                for h in range(0, 49):
+                    url = f"{base}/data/sfbofs/hour_{h:02d}.json"
+                    try:
+                        async with session.get(url, timeout=aiohttp.ClientTimeout(total=UPSTREAM_TIMEOUT_S)) as r:
+                            if r.status == 404:
+                                log.info("SFBOFS hour_%02d missing (404), stopping", h)
+                                break
+                            body = await r.read()
+                            if r.status == 200:
+                                cache.put(url, body, r.headers.get("Content-Type", "application/json"), 200)
+                                ok += 1
+                            else:
+                                cycle_failed = True
+                    except (aiohttp.ClientError, asyncio.TimeoutError) as e:
+                        log.warning("pre-warm sfbofs %02d failed: %s", h, e)
+                        cycle_failed = True
+                    await asyncio.sleep(PREWARM_REQUEST_GAP_S)
+                # NDBC + miscellaneous /data/* one-shots.
+                for relpath in ("data/wind/stations.json", "data/land_mask.json", "data/meta.json"):
+                    url = f"{base}/{relpath}"
+                    try:
+                        async with session.get(url, timeout=aiohttp.ClientTimeout(total=UPSTREAM_TIMEOUT_S)) as r:
+                            if r.status == 200:
+                                cache.put(url, await r.read(), r.headers.get("Content-Type", "application/json"), 200)
+                            else:
+                                cycle_failed = True
+                    except (aiohttp.ClientError, asyncio.TimeoutError) as e:
+                        log.warning("pre-warm %s failed: %s", relpath, e)
+                        cycle_failed = True
+            except Exception:
+                # Don't let an unexpected error kill the loop forever — log
+                # and treat the whole cycle as a failure so we back off then
+                # retry instead of going silent for an hour.
+                log.exception("pre-warm cycle crashed; will retry after backoff")
+                cycle_failed = True
+
+            if cycle_failed:
+                sleep_s = PREWARM_FAIL_BACKOFF_S[min(backoff_idx, len(PREWARM_FAIL_BACKOFF_S) - 1)]
+                backoff_idx += 1
+                log.info("pre-warm cycle had failures (%d hours ok); retry in %ds", ok, sleep_s)
+            else:
+                backoff_idx = 0
+                sleep_s = PREWARM_OK_INTERVAL_S
+                log.info("pre-warm complete: %d hours cached; next cycle in %dm", ok, sleep_s // 60)
+            await asyncio.sleep(sleep_s)
     except asyncio.CancelledError:
         return
 
