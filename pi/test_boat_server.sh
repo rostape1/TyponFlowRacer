@@ -65,12 +65,14 @@ if [ -s /tmp/om_direct.json ] && [ -s /tmp/om_proxy.json ]; then
     if diff -q /tmp/om_direct.json /tmp/om_proxy.json >/dev/null; then
         ok "Open-Meteo proxy == direct (1 point, 49h)"
     else
-        # Open-Meteo may include a generation_time_ms field that varies per call
-        if diff /tmp/om_direct.json /tmp/om_proxy.json | grep -qv "generation_time_ms"; then
-            fail "Open-Meteo proxy DIFFERS beyond generation_time_ms"
-            diff /tmp/om_direct.json /tmp/om_proxy.json | head -10
+        # Open-Meteo includes a per-call generationtime_ms — strip it and re-compare.
+        sed -E 's/"generationtime_ms":[0-9.]+,?//g' /tmp/om_direct.json > /tmp/om_direct.norm
+        sed -E 's/"generationtime_ms":[0-9.]+,?//g' /tmp/om_proxy.json  > /tmp/om_proxy.norm
+        if diff -q /tmp/om_direct.norm /tmp/om_proxy.norm >/dev/null; then
+            ok "Open-Meteo proxy == direct (only generationtime_ms differs)"
         else
-            ok "Open-Meteo proxy == direct (only generation_time_ms differs)"
+            fail "Open-Meteo proxy DIFFERS beyond generationtime_ms"
+            diff /tmp/om_direct.norm /tmp/om_proxy.norm | head -10
         fi
     fi
 else
@@ -107,14 +109,17 @@ else
 fi
 
 # ---- 8. SSRF allowlist (negative tests) ----
+# curl normalizes `..` in URL paths client-side by default; --path-as-is sends
+# the literal path so the server actually sees the traversal attempt.
 echo "[8] SSRF / path-traversal rejection"
 for bad in \
     "/api/noaa/foo" \
     "/api/noaa/api/prod/datagetter/extra" \
     "/api/open-meteo/v2/forecast" \
     "/data/sfbofs/../land_mask.json" \
-    "/data/sfbofs/hour_00.json/../wind/stations.json"; do
-    status=$($CURL -o /dev/null -w "%{http_code}" "$BASE$bad")
+    "/data/sfbofs/hour_00.json/../wind/stations.json" \
+    "/data/sfbofs/..%2Fland_mask.json"; do
+    status=$($CURL --path-as-is -o /dev/null -w "%{http_code}" "$BASE$bad")
     if [ "$status" = "404" ] || [ "$status" = "400" ]; then
         ok "rejected: $bad ($status)"
     else
