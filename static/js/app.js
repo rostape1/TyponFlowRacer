@@ -2372,6 +2372,30 @@ function _notifySwCacheReady() {
     }
 }
 
+// Re-render layers as soon as the SW finishes a stale-while-revalidate
+// background fetch — without this, the user sees yesterday's cached SFBOFS /
+// wind grid until the next 5-min refresh tick. Coalesce bursts so we don't
+// thrash the chart when many files land in the same second.
+let _refreshPending = { flow: false, wind: false };
+function _scheduleRefresh(layer) {
+    if (_refreshPending[layer]) return;
+    _refreshPending[layer] = true;
+    setTimeout(() => {
+        _refreshPending[layer] = false;
+        if (layer === 'flow') loadCurrentField();
+        else if (layer === 'wind') loadWindField();
+    }, 250);
+}
+
+if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.addEventListener('message', (e) => {
+        if (!e.data || e.data.type !== 'DATA_REFRESHED') return;
+        const url = e.data.url || '';
+        if (url.includes('/data/sfbofs') || url.includes('/data/hycom')) _scheduleRefresh('flow');
+        else if (url.includes('/data/wind') || url.includes('open-meteo')) _scheduleRefresh('wind');
+    });
+}
+
 function _getLastDlTime() {
     return localStorage.getItem('ais_offline_dl_time');
 }

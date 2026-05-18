@@ -80,6 +80,16 @@ async function safeCachePut(cacheName, request, response) {
   }
 }
 
+// Tell every open client that a stale-while-revalidate background fetch
+// produced fresh bytes. Clients can re-render the affected layer instead of
+// waiting up to 5 minutes for the next periodic refresh tick.
+async function notifyClientsRefreshed(url) {
+  try {
+    const clients = await self.clients.matchAll({ type: 'window' });
+    for (const c of clients) c.postMessage({ type: 'DATA_REFRESHED', url });
+  } catch (e) { /* best-effort */ }
+}
+
 self.addEventListener('message', (event) => {
   if (event.data && event.data.type === 'CLEAR_ENV_CACHE') {
     _dataCacheFirst = false;
@@ -108,7 +118,10 @@ self.addEventListener('fetch', (event) => {
           cache.match(event.request).then((cached) => {
             // Background refresh
             const networkFetch = fetch(event.request).then((response) => {
-              if (response.ok) safeCachePut(DATA_CACHE, event.request, response.clone());
+              if (response.ok) {
+                safeCachePut(DATA_CACHE, event.request, response.clone());
+                if (cached) notifyClientsRefreshed(event.request.url);
+              }
               return response;
             }).catch(() => null);
 
@@ -157,7 +170,10 @@ self.addEventListener('fetch', (event) => {
         caches.open(DATA_CACHE).then((cache) =>
           cache.match(event.request).then((cached) => {
             const networkFetch = fetch(event.request).then((response) => {
-              if (response.ok) safeCachePut(DATA_CACHE, event.request, response.clone());
+              if (response.ok) {
+                safeCachePut(DATA_CACHE, event.request, response.clone());
+                if (cached) notifyClientsRefreshed(event.request.url);
+              }
               return response;
             }).catch(() => null);
 
