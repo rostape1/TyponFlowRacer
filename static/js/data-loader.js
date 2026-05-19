@@ -54,9 +54,9 @@ const _waterLevelCache = new Map(); // stationId → { value, time, fetchedAt }
 // API endpoints — read from window.APP_CONFIG at call time so the boat-mode
 // /config.json bootstrap can redirect them to the Pi reverse-proxy. In web
 // mode (no /config.json) these return today's absolute URLs unchanged.
-function dataBase()     { return (typeof window !== 'undefined' && window.APP_CONFIG?.dataBase)         || 'data'; }
-function noaaApi()      { return (typeof window !== 'undefined' && window.APP_CONFIG?.apiBase?.noaa)      || 'https://api.tidesandcurrents.noaa.gov/api/prod/datagetter'; }
-function openMeteoApi() { return (typeof window !== 'undefined' && window.APP_CONFIG?.apiBase?.openMeteo) || 'https://api.open-meteo.com/v1/forecast'; }
+function dataBase()     { return (typeof window !== 'undefined' && window.APP_CONFIG && window.APP_CONFIG.dataBase)                                          || 'data'; }
+function noaaApi()      { return (typeof window !== 'undefined' && window.APP_CONFIG && window.APP_CONFIG.apiBase && window.APP_CONFIG.apiBase.noaa)      || 'https://api.tidesandcurrents.noaa.gov/api/prod/datagetter'; }
+function openMeteoApi() { return (typeof window !== 'undefined' && window.APP_CONFIG && window.APP_CONFIG.apiBase && window.APP_CONFIG.apiBase.openMeteo) || 'https://api.open-meteo.com/v1/forecast'; }
 
 // --- Helpers ---
 
@@ -199,9 +199,9 @@ async function _fetchWindGridFromAPI() {
                 dir = point.current.wind_direction_10m || 0;
                 gst = point.current.wind_gusts_10m || 0;
             } else if (point.hourly) {
-                spd = point.hourly.wind_speed_10m?.[hour] || 0;
-                dir = point.hourly.wind_direction_10m?.[hour] || 0;
-                gst = point.hourly.wind_gusts_10m?.[hour] || 0;
+                spd = (point.hourly.wind_speed_10m && point.hourly.wind_speed_10m[hour]) || 0;
+                dir = (point.hourly.wind_direction_10m && point.hourly.wind_direction_10m[hour]) || 0;
+                gst = (point.hourly.wind_gusts_10m && point.hourly.wind_gusts_10m[hour]) || 0;
             } else {
                 continue;
             }
@@ -502,7 +502,7 @@ async function fetchCurrents(minutesOffset = 0) {
                 const res = await fetch(url);
                 if (!res.ok) return null;
                 const json = await res.json();
-                const preds = json.current_predictions?.cp || json.predictions || [];
+                const preds = (json.current_predictions && json.current_predictions.cp) || json.predictions || [];
                 data = { predictions: preds, fetchedAt: Date.now() };
                 _currentCache.set(stationId, data);
             }

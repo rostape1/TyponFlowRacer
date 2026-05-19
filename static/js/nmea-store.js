@@ -1,9 +1,27 @@
 /**
  * Central NMEA state manager with time-series history.
- * Extends EventTarget: dispatches 'update', 'position', 'ais' events.
+ * Dispatches 'update', 'position', 'ais' events via a minimal EventEmitter
+ * compatible with the EventTarget interface (addEventListener/dispatchEvent).
  */
 
-class NmeaStore extends EventTarget {
+class _EventEmitter {
+    constructor() { this._listeners = {}; }
+    addEventListener(type, fn) {
+        if (!this._listeners[type]) this._listeners[type] = [];
+        this._listeners[type].push(fn);
+    }
+    removeEventListener(type, fn) {
+        if (!this._listeners[type]) return;
+        this._listeners[type] = this._listeners[type].filter(function(f) { return f !== fn; });
+    }
+    dispatchEvent(event) {
+        var fns = this._listeners[event.type] || [];
+        for (var i = 0; i < fns.length; i++) fns[i](event);
+        return true;
+    }
+}
+
+class NmeaStore extends _EventEmitter {
     constructor() {
         super();
         this.state = {

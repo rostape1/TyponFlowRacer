@@ -2667,7 +2667,7 @@ if (nmeaStore && nmeaClient) {
             if (!file) return;
             nmeaClient.loadFile(file, (lineCount) => {
                 if (replayControls) replayControls.classList.remove('hidden');
-                nmeaClient.startReplay(parseInt(replaySpeedSel?.value) || 1);
+                nmeaClient.startReplay(parseInt(replaySpeedSel && replaySpeedSel.value) || 1);
                 // Update progress
                 const progressTimer = setInterval(() => {
                     const p = nmeaClient.getReplayProgress();
