@@ -399,9 +399,8 @@ const noaaChartLayer = new noaaChart({
 // Current arrows layer group
 currentLayer = L.layerGroup().addTo(map);
 
-// Default: dark base + sea marks overlay
-darkLayer.addTo(map);
-seaLayer.addTo(map);
+// Default: NOAA chart base only
+noaaChartLayer.addTo(map);
 
 L.control.layers({
     'Dark': darkLayer,
