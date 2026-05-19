@@ -1,0 +1,17 @@
+[Unit]
+Description=AIS Tracker Boat Server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=pi
+WorkingDirectory=/home/pi/AIS Tracker
+ExecStart=/home/pi/AIS Tracker/pi/startup.sh
+Restart=on-failure
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

@@ -98,7 +98,7 @@ class SailingCharts {
         for (const [id, field] of Object.entries(sparkFields)) {
             const canvas = this._sparkCanvases[id];
             if (!canvas) continue;
-            const history = this.store.getHistory(field, 5 * 60 * 1000);
+            const history = this.store.getHistory(field, 10 * 60 * 1000);
             this._drawSparkline(canvas, history, sparkColors[id]);
         }
 
@@ -122,7 +122,7 @@ class SailingCharts {
         ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
         ctx.clearRect(0, 0, w, h);
 
-        const windowMs = 5 * 60 * 1000;
+        const windowMs = 10 * 60 * 1000;
         const axisH = 10;          // reserved for tick labels
         const plotBottom = h - axisH;
 
@@ -222,7 +222,7 @@ class SailingCharts {
         const canvas = this._sparkCanvases['twd-shift'];
         if (!canvas) return;
 
-        const windowMs = 5 * 60 * 1000;
+        const windowMs = 10 * 60 * 1000;
         const history = this.store.getHistory('twd', windowMs);
 
         const dpr = window.devicePixelRatio || 1;
