@@ -1243,7 +1243,14 @@ async function _runRoute() {
         _routeStatus.innerHTML = '<span style="color:#2ecc71">Route computed</span>';
         _lastRouteResult = result;
 
-        if (_routeEta) _routeEta.innerHTML = `<span style="color:#a0b0c0">ETA</span><span style="color:#f39c12;font-weight:600">${result.elapsedMin} min</span>`;
+        if (_routeEta) {
+            const etaH = Math.floor(result.elapsedMin / 60);
+            const etaM = result.elapsedMin % 60;
+            const etaDur = etaH > 0 ? `${etaH}h ${etaM}m` : `${etaM}m`;
+            const arrivalMs = Date.now() + result.elapsedMin * 60000;
+            const arrivalTime = new Date(arrivalMs).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+            _routeEta.innerHTML = `<span style="color:#a0b0c0">ETA</span><span style="color:#f39c12;font-weight:600">${etaDur}</span><span style="color:#a0b0c0;margin-left:6px">→</span><span style="color:#f39c12;font-weight:600;margin-left:4px">${arrivalTime}</span>`;
+        }
         if (_routeDistance) _routeDistance.innerHTML = `<span style="color:#a0b0c0">Distance</span><span>${result.distanceNm} nm</span>`;
         const _routeEfficiency = document.getElementById('route-efficiency');
         if (_routeEfficiency && _routeStart && _routeEnd) {
