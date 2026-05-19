@@ -30,26 +30,30 @@ function apparentWind(twaDeg, tws, bsp) {
     };
 }
 
-function getBoatSpeed(twaDeg, tws, perfFactor) {
+function getBoatSpeed(twaDeg, tws, perfFactor, polarFalloff = false) {
     if (twaDeg > 180) twaDeg = 360 - twaDeg; // Polar is symmetric port/starboard
     if (twaDeg < POLAR_TWA[0]) return 0;
     if (tws < 1) return 0;
     let lightAirScale = 1.0;
     if (tws < POLAR_TWS[0]) { lightAirScale = tws / POLAR_TWS[0]; tws = POLAR_TWS[0]; } // Linear fade to zero below 6kn (polar undefined in light air)
-    const twaClamped = Math.min(twaDeg, POLAR_TWA[POLAR_TWA.length - 1]);
+    const twaForLookup = Math.min(twaDeg, POLAR_TWA[POLAR_TWA.length - 1]);
     const twsClamped = Math.min(tws, POLAR_TWS[POLAR_TWS.length - 1]);
     let ti = 0;
     for (let i = 0; i < POLAR_TWA.length - 1; i++) {
-        if (twaClamped >= POLAR_TWA[i] && twaClamped <= POLAR_TWA[i + 1]) { ti = i; break; }
+        if (twaForLookup >= POLAR_TWA[i] && twaForLookup <= POLAR_TWA[i + 1]) { ti = i; break; }
     }
     let si = 0;
     for (let i = 0; i < POLAR_TWS.length - 1; i++) {
         if (twsClamped >= POLAR_TWS[i] && twsClamped <= POLAR_TWS[i + 1]) { si = i; break; }
     }
-    const tFrac = (twaClamped - POLAR_TWA[ti]) / (POLAR_TWA[ti + 1] - POLAR_TWA[ti]);
+    const tFrac = (twaForLookup - POLAR_TWA[ti]) / (POLAR_TWA[ti + 1] - POLAR_TWA[ti]);
     const sFrac = (twsClamped - POLAR_TWS[si]) / (POLAR_TWS[si + 1] - POLAR_TWS[si]);
-    const bsp = _lerp(_lerp(POLAR_BSP[ti][si], POLAR_BSP[ti][si + 1], sFrac),
+    let bsp = _lerp(_lerp(POLAR_BSP[ti][si], POLAR_BSP[ti][si + 1], sFrac),
                        _lerp(POLAR_BSP[ti + 1][si], POLAR_BSP[ti + 1][si + 1], sFrac), tFrac);
+    // Falloff variant: linear degrade 1.0 @ TWA 150° → 0.85 @ TWA 180° (~17% loss dead-downwind)
+    if (polarFalloff && twaDeg > 150) {
+        bsp *= 1 - 0.15 * (twaDeg - 150) / 30;
+    }
     return bsp * lightAirScale * perfFactor;
 }
 
@@ -252,14 +256,19 @@ const MAX_DIVERSION_DEG = 180;
 // High-resolution zone: Golden Gate + approaches (within ~1nm of narrows)
 const HR_ZONE = { south: 37.78, north: 37.86, west: -122.53, east: -122.42 };
 
-function _pruneIsochrone(points, startLat, startLon, destLat, destLon) {
+function _pruneIsochrone(points, startLat, startLon, destLat, destLon, useVMC) {
     const sectors = new Array(PRUNE_SECTORS).fill(null);
     let bestToDest = null, bestDistToDest = Infinity;
+    const destBrgRad = _bearingDeg(startLat, startLon, destLat, destLon) * DEG2RAD;
     for (const pt of points) {
         const brg = _bearingDeg(startLat, startLon, pt.lat, pt.lon);
         const sector = Math.floor(brg / (360 / PRUNE_SECTORS)) % PRUNE_SECTORS;
-        const dist = _haversineNm(startLat, startLon, pt.lat, pt.lon);
-        if (!sectors[sector] || dist > sectors[sector].dist) sectors[sector] = { pt, dist };
+        const distFromStart = _haversineNm(startLat, startLon, pt.lat, pt.lon);
+        // VMC variant: project displacement onto bearing-to-destination axis (rewards progress, not raw distance)
+        const score = useVMC
+            ? distFromStart * Math.cos(brg * DEG2RAD - destBrgRad)
+            : distFromStart;
+        if (!sectors[sector] || score > sectors[sector].score) sectors[sector] = { pt, score };
         const dDest = _haversineNm(pt.lat, pt.lon, destLat, destLon);
         if (dDest < bestDistToDest) { bestDistToDest = dDest; bestToDest = pt; }
     }
@@ -312,7 +321,9 @@ self.onmessage = function(e) {
     const hycomGrids = new Map(hyRaw);
     const windGrids = new Map(wRaw);
 
-    const { startLat, startLon, endLat, endLon, startTimeMs, perfFactor } = params;
+    const { startLat, startLon, endLat, endLon, startTimeMs, perfFactor, variant } = params;
+    const useVMC = variant === 'vmc' || variant === 'both';
+    const polarFalloff = variant === 'falloff' || variant === 'both';
 
     let wavefront = [{ lat: startLat, lon: startLon, timeMs: startTimeMs, parent: null, heading: -1 }];
     const isochrones = [];
@@ -345,7 +356,7 @@ self.onmessage = function(e) {
                 const headingRad = headingDeg * DEG2RAD;
                 let twa = Math.abs(headingDeg - windFromDeg);
                 if (twa > 180) twa = 360 - twa;
-                const bsp = getBoatSpeed(twa, wind.speed, perfFactor);
+                const bsp = getBoatSpeed(twa, wind.speed, perfFactor, polarFalloff);
                 if (bsp < 0.5) continue;
 
                 // Tack/gybe penalty: adds dead time (boat stalls during maneuver)
@@ -403,7 +414,7 @@ self.onmessage = function(e) {
             return;
         }
 
-        wavefront = _pruneIsochrone(newPoints, startLat, startLon, endLat, endLon);
+        wavefront = _pruneIsochrone(newPoints, startLat, startLon, endLat, endLon, useVMC);
 
         if (step % 5 === 0) {
             isochrones.push(wavefront.map(p => [p.lat, p.lon]));

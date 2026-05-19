@@ -175,7 +175,7 @@ class RouterDataStore {
 // --- Route Computation (Web Worker orchestrator) ---
 let _routeWorker = null;
 
-function computeRoute(startLat, startLon, endLat, endLon, startTimeMs, perfFactor, onProgress) {
+function computeRoute(startLat, startLon, endLat, endLon, startTimeMs, perfFactor, onProgress, variant = 'baseline') {
     const store = new RouterDataStore();
     const hoursNeeded = Math.ceil(MAX_TIME_S / 3600) + 1;
 
@@ -205,7 +205,7 @@ function computeRoute(startLat, startLon, endLat, endLon, startTimeMs, perfFacto
             };
 
             _routeWorker.postMessage({
-                params: { startLat, startLon, endLat, endLon, startTimeMs, perfFactor },
+                params: { startLat, startLon, endLat, endLon, startTimeMs, perfFactor, variant },
                 sfbofsGrids: [...store.sfbofsGrids],
                 sfbofsGridsHR: [...store.sfbofsGridsHR],
                 hycomGrids: [...store.hycomGrids],

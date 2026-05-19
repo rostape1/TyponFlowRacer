@@ -123,6 +123,14 @@
         <div class="route-settings">
             <label class="route-perf-label">Performance: <input type="range" id="route-perf" min="50" max="100" value="85" step="5">
             <span id="route-perf-val">85%</span></label>
+            <label class="route-perf-label" style="margin-top:6px;display:flex;align-items:center;gap:6px">Variant:
+                <select id="route-variant" style="background:#0a1628;color:#c8d6e5;border:1px solid #2c4a6b;border-radius:3px;padding:2px 4px;font-size:11px">
+                    <option value="baseline">Baseline (dist-from-start)</option>
+                    <option value="vmc">VMC pruning</option>
+                    <option value="falloff">Polar falloff &gt;150°</option>
+                    <option value="both">VMC + falloff</option>
+                </select>
+            </label>
         </div>
         <div id="route-result" class="route-result hidden">
             <div id="route-eta"></div>

@@ -5,34 +5,68 @@ Real-time maritime vessel tracking platform for San Francisco Bay. Combines AIS 
 ## Tech Stack
 
 - **Frontend:** Vanilla JS (ES6+), Leaflet 1.9.4, Canvas particle animations, no build step
-- **Data Pipeline:** GitHub Actions (SFBOFS + NDBC only); tides, currents, and wind fetched directly from APIs in browser
-- **Hosting:** GitHub Pages (static site + SFBOFS/NDBC data)
-- **AIS:** Direct browser WebSocket to AISstream.io (no backend proxy)
-- **PWA:** Service Worker (`sw.js`) + manifest for offline/installable on iPhone
+- **Data Pipeline:** GitHub Actions (SFBOFS + NDBC only); tides, currents, and wind fetched directly from APIs in browser (or via Pi reverse proxy on the boat)
+- **Hosting:** Two deployment targets, both serve the same `static/` directory:
+  - **GitHub Pages** — public URL, used at the dock / from anywhere with internet
+  - **Raspberry Pi (`pi/boat_server.py`)** — on the boat WiFi, full server, port 8080 HTTP, serves the UI itself, reverse-proxies and disk-caches NOAA/Open-Meteo/SFBOFS, bridges NMEA→WebSocket. Auto-pulls `boat-mode` branch on boot.
+- **AIS:** Direct browser WebSocket to AISstream.io when on internet (no backend proxy); local AIS via NMEA on the boat
+- **PWA:** Service Worker (`sw.js`) registers only over HTTPS — i.e. only on GitHub Pages. The Pi serves HTTP, so the SW does **not** activate on the boat (deliberate: HTTP origin, no SW caching, fresh files each load).
+
+## Deployment
+
+| Where you push | What happens | Where it shows up |
+|---|---|---|
+| `main` branch | GitHub Actions runs `.github/workflows/deploy.yml` → tests → deploys `static/` + assembled `data/` to GitHub Pages | Public GH Pages URL (`https://rostape1.github.io/TyponFlowRacer`) |
+| `boat-mode` branch | Nothing automatic. Next time the Pi boots OR you `sudo systemctl restart ais-tracker`, `pi/startup.sh` runs `git fetch && git reset --hard origin/boat-mode` before launching the server | `http://typonrpi4.local:8080/` on boat WiFi |
+
+**Static-only changes** (HTML/JS/CSS) on the Pi: `git pull` is sufficient — aiohttp's `add_static` reads from disk per-request, no restart needed. **Python changes** to `pi/boat_server.py` require `sudo systemctl restart ais-tracker`.
+
+SSH to Pi: `ssh rostape1@TyponRpi4.local` (see memory).
 
 ## Architecture
 
 ```
-GitHub Actions (scheduled)          GitHub Pages (static hosting)
-├── SFBOFS: 4x/day (NetCDF→JSON)   ├── index.html + JS/CSS
-└── NDBC buoys: every 10min        ├── data/sfbofs/hour_00..48.json
-                                   └── data/wind/stations.json (NDBC)
+                                  ┌─────────────────────────────────┐
+GitHub Actions (scheduled)        │  GitHub Pages                   │
+├── SFBOFS: 4x/day (NetCDF→JSON)  │  ├── index.html + JS/CSS        │
+└── NDBC buoys: every 10min       │  ├── data/sfbofs/hour_00..48    │
+                                  │  └── data/wind/stations.json    │
+                                  └────────────┬────────────────────┘
+                                               │ Pi pre-warms cache from here
+                                               ▼
+                          ┌────────────────────────────────────────┐
+                          │  Raspberry Pi — pi/boat_server.py      │
+                          │  (systemd: pi/ais-tracker.service)     │
+                          │  HTTP :8080  (HTTPS optional via cert) │
+                          │                                        │
+                          │  GET /             → static/index.html │
+                          │  GET /js/...       → static/js/...     │
+                          │  GET /config.json  → boat-mode config  │
+                          │  GET /api/noaa/*   → reverse-proxy +   │
+                          │  GET /api/open-meteo/* disk cache      │
+                          │  GET /data/*       → GH Pages + cache  │
+                          │                      + local fallback  │
+                          │  GET /logs         → NMEA log browser  │
+                          │  WS  /nmea         → TCP 192.168.47.10 │
+                          │                      :10110 bridge     │
+                          │                                        │
+                          │  Background: SFBOFS pre-warm loop      │
+                          │  (1h cycle, exp backoff on failure)    │
+                          └────────────────────────────────────────┘
 
-Browser (PWA) — direct API fetches
-├── AISstream.io WebSocket → aisstream.js (parse) → vessel-store.js (in-memory DB)
-├── NOAA CO-OPS API → data-loader.js (tides: 14 stations, currents: 6 stations)
-├── Open-Meteo API → data-loader.js (wind grid: 9×8, batched in 1 request)
-├── Static JSON → data-loader.js (SFBOFS current field, NDBC buoy obs)
-├── tidal-flow.js (SFBOFS current field particle animation)
-├── wind-overlay.js (wind particle animation)
-└── Service Worker caches API responses + tiles for offline
+Browser (one URL, two contexts):
+- At the dock / shore: load GH Pages URL directly. Service Worker caches everything.
+- On the boat: load http://typonrpi4.local:8080/. No SW (HTTP). Pi serves UI + proxies env data + bridges NMEA. /config.json tells the browser to use local AIS, not AISstream.io.
 
-Boat (Raspberry Pi) — NMEA instruments
-├── nmea_ws_proxy.py (TCP 192.168.47.10:10110 → WebSocket ws://0.0.0.0:8765)
-├── Browser WebSocket → nmea-client.js → nmea-parser.js → nmea-store.js
-├── nmea-store.js → sailing-charts.js (instruments + Chart.js time-series)
-├── nmea-store.js → ais-decoder.js → vessel-store.js (local AIS, no internet needed)
-└── nmea-store.js → competitor-labels.js (distance/speed/bearing from Typon)
+Browser-side modules (same code in both contexts, behavior switches on /config.json):
+├── aisstream.js     (cloud AIS via WebSocket — only when useCloudAIS=true)
+├── ais-decoder.js   (boat-mode: local AIS from NMEA VHF receiver)
+├── nmea-client.js   (WebSocket to /nmea on Pi, or replay)
+├── nmea-parser.js → nmea-store.js → sailing-charts.js, competitor-labels.js, radar-view.js
+├── data-loader.js   (NOAA tides/currents/water-levels, Open-Meteo wind)
+├── router.js + route-worker.js  (isochrone route optimizer)
+├── tidal-flow.js    (SFBOFS particle animation)
+└── wind-overlay.js  (wind particle animation)
 ```
 
 Environmental data sources:
@@ -92,9 +126,12 @@ Environmental data sources:
 
 | File | Purpose |
 |------|---------|
-| `nmea_ws_proxy.py` | Standalone TCP-to-WebSocket proxy for boat NMEA instruments. Connects to boat TCP (192.168.47.10:10110), serves ws://0.0.0.0:8765. |
-| `nmea_capture.py` | NMEA sentence logger to hourly-rotated files in `logs/` directory |
-| `start_boat.sh` | Combined Raspberry Pi launcher: starts NMEA WS proxy. Browse to GitHub Pages URL — auto-connects when on boat WiFi. |
+| `nmea_ws_proxy.py` | Legacy standalone TCP-to-WebSocket proxy (port 8765). Superseded by `pi/boat_server.py`. Its `nmea_tcp_broadcast()` function is still imported by `boat_server.py`. |
+| `pi/boat_server.py` | **Current Pi server.** aiohttp app that serves `static/`, reverse-proxies + disk-caches NOAA/Open-Meteo/GH-Pages, bridges NMEA TCP→WebSocket at `/nmea`, synthesizes `/config.json`, runs SFBOFS pre-warm loop. HTTP :8080 by default; HTTPS optional with `--ssl-cert/--ssl-key`. |
+| `pi/startup.sh` | systemd entrypoint. `git fetch && git reset --hard origin/boat-mode`, starts `nmea_capture.py` for log files, then execs `start_boat.sh`. |
+| `pi/ais-tracker.service` | systemd unit running as `rostape1`. `Restart=on-failure`. |
+| `start_boat.sh` | Foreground launcher for `pi/boat_server.py`. Used by systemd (via `startup.sh`) and for manual runs. |
+| `nmea_capture.py` | NMEA sentence logger writing hourly-rotated files into `logs/`. Started by `startup.sh` alongside the Pi server; logs are also browsable via `/logs` on the Pi. |
 
 ## Database Schema
 
@@ -199,35 +236,42 @@ python main.py --aisstream         # Cloud AIS (needs API key in .env)
 
 ### Raspberry Pi (on the boat)
 
+The Pi auto-starts on boot via systemd. Manual control:
+
 ```bash
-pip install websockets
-./start_boat.sh
+sudo systemctl status ais-tracker          # is it running?
+sudo systemctl restart ais-tracker         # picks up Python changes
+sudo journalctl -u ais-tracker -f          # live logs
 ```
 
-Starts the NMEA WebSocket proxy (port 8765) which connects to the boat's instruments at `192.168.47.10:10110`. Browse to the **GitHub Pages URL** on your phone — when connected to the boat's WiFi, the app auto-connects to `ws://raspberrypi.local:8765` for live NMEA instruments and local AIS. Environmental data loads from the internet and is cached for offline use. One URL for everything.
+`pi/startup.sh` does `git fetch && git reset --hard origin/boat-mode` on each (re)start, so committing+pushing to `boat-mode` is the deploy path. For static-only changes you can also `cd ~/AIS-Tracker && git pull` without restarting — aiohttp serves files from disk per-request.
+
+Browse to **http://typonrpi4.local:8080/** on the boat WiFi. The Pi serves the UI itself (no internet needed once SFBOFS/wind data has been pre-warmed at the dock), bridges NMEA at `/nmea`, and reverse-proxies NOAA/Open-Meteo when there's connectivity.
+
+SSH: `ssh rostape1@TyponRpi4.local`
 
 ## Notable Behaviors
 
 - **Three-view tab system** — Map tab (vessel tracking + environmental overlays), Charts tab (NMEA sailing instruments + time-series), and Radar tab (polar plot of nearby vessels). Tab bar at top, all views stay in DOM for instant switching.
 - **Strategic Radar** — `radar-view.js` draws range rings + crosshairs on canvas, positions vessel labels as DOM overlays. Manual zoom via scroll wheel or +/- buttons (0.25–32nm range steps). Track trails show recent vessel movement (15min history, clamped to radar range). Falls back to map center when no own position. Speed-colored vessel icons (blue/green/yellow/red).
-- **Single URL deployment** — Always use the GitHub Pages URL. On the boat's WiFi, the app auto-connects to the Pi's NMEA WebSocket (silently fails when not on boat network). Environmental data is fetched from the internet and cached by the service worker for offline use.
-- **NMEA data pipeline** — `nmea-parser.js` → `nmea-store.js` → `sailing-charts.js` (Charts view) and `competitor-labels.js` (Map view). Data from live WebSocket (via `nmea_ws_proxy.py`) or file replay.
+- **Two URLs, one codebase** — At the dock or on shore use the GitHub Pages URL (`https://rostape1.github.io/TyponFlowRacer`). On the boat WiFi use `http://typonrpi4.local:8080/`. The Pi-served `/config.json` flips the browser to boat mode (local NMEA AIS, env data via Pi proxy) without a separate build.
+- **NMEA data pipeline** — `nmea-parser.js` → `nmea-store.js` → `sailing-charts.js` (Charts view) and `competitor-labels.js` (Map view). Data from live WebSocket (`/nmea` on the Pi) or file replay.
 - **NMEA AIS decoding** — `ais-decoder.js` decodes raw !AIVDM/!AIVDO sentences from the boat's VHF receiver. Works offline at sea. Falls back to AISstream.io cloud when internet available.
 - **Competitor labels** — Toggleable via Labels button. Shows distance (nm), speed (kn), and relative bearing next to each vessel marker. Click a label to open vessel detail popup. Falls back to map center when Typon's position is unknown.
 - **Instrument gauges** — 8 gauges: SOG, BSP, HDG, Depth, AWA, TWA, TWD, TWS. TWA color-coded: green (optimal VMG 30-50°), yellow (close-hauled 15-30°), red (in irons <15°).
 - **True wind computation** — When only apparent wind (AWA/AWS from $IIMWV-R) is available, computes TWS/TWA/TWD from vector math using BSP and heading. $IIMWD values override when present.
-- **NMEA auto-connect** — On page load, silently tries `ws://raspberrypi.local:8765` (or saved URL from localStorage). Connects if reachable, fails silently if not.
+- **NMEA auto-connect** — `nmea-client.js` opens a WebSocket on page load. Source priority: (1) `nmeaWsUrl` from `/config.json` if served by the Pi (resolves `/nmea` against the page origin), (2) saved URL in localStorage, (3) default `ws://raspberrypi.local:8765` (legacy fallback for the old standalone proxy). Connects if reachable, fails silently if not.
 - **50 vessel cap** — cloud AIS mode limits to 50 closest vessels to keep the map clean
 - **AIS API key embedded** — `DEFAULT_AISSTREAM_KEY` in `app.js` so the app auto-connects on any device. Users can override via `localStorage.setItem('aisstream_api_key', ...)`.
 - **Tide forecasts are unlimited range** — harmonic math, no model dependency. Wind limited to 49h (Open-Meteo forecast_hours), current field limited to 48h (SFBOFS)
-- **Browser-side data fetching** — Tides (14 NOAA CO-OPS stations), currents (6 stations), and wind (72-point Open-Meteo grid) are fetched directly in the browser. In-memory caches: tides/currents 6h TTL, wind 30min TTL. Service Worker caches API responses for offline use.
+- **Browser-side data fetching** — Tides (14 NOAA CO-OPS stations), currents (6 stations), and wind (72-point Open-Meteo grid) are fetched directly in the browser. In-memory caches: tides/currents 6h TTL, wind 30min TTL. On the Pi these requests are reverse-proxied through `boat_server.py` and disk-cached so all clients on the boat WiFi share one upstream fetch. On GitHub Pages the Service Worker caches API responses for offline use.
 - **Wind grid batched in 1 request** — All 72 grid points × 49 forecast hours fetched via single Open-Meteo API call with comma-separated coordinates. Direction→u/v conversion done in browser JS.
 - **Auto-download on load** — `_autoDownload()` fires 8s after page load, silently pre-fetches all data (SFBOFS, NDBC, tides, currents, wind). Retries with exponential backoff (30s→60s→…→5min) if any category fails. Retries immediately (3s grace) when network comes back online. Manual download button still works with progress panel.
 - **Per-category download badges** — Status bar shows Flow/Wind/Tide/Curr chips. Turn green when that category downloads successfully (checks actual HTTP response, not just loop completion). Persists in localStorage, resets after 6h. `_getDlStatus()` / `_setDlCategory()` in `app.js`.
 - **SFBOFS 404 handling** — download loop breaks on first 404 (model runs don't always produce all 49 hours; later hours missing is normal).
 - **SFBOFS file convention** — NOAA publishes nowcast files (n000-n006, hindcast/analysis) and forecast files (f000-f048, actual forecasts). We fetch only the `f` files: f000 = cycle time, f048 = +48h.
-- **Offline mode** — Service Worker automatically caches all external map tiles (CartoDB, OSM, NOAA charts, OpenSeaMap) on first view via `ais-tiles-v1` cache.
-- **PWA offline pre-fetch** — After download, SW switches to **stale-while-revalidate** — serves cached data instantly, refreshes in background if online. Tracks last download time in localStorage, shown in status bar ("DL: 2h ago").
+- **Offline behavior on GitHub Pages** — Service Worker (`sw.js`) caches external map tiles (CartoDB, OSM, NOAA charts, OpenSeaMap) on first view via `ais-tiles-v1` cache, plus API responses via `ais-data-v2`. Only active over HTTPS — does **not** run when accessed via the Pi (`http://typonrpi4.local:8080/`).
+- **Offline behavior on the Pi** — No service worker (HTTP origin). Instead, `pi/boat_server.py` does the caching server-side: a disk cache keyed by SHA1(url) under `cache/`, fresh-on-TTL, stale-on-error (up to `MAX_STALE_S = 24h`), with a startup pre-warm loop that fetches all 49 SFBOFS hours + NDBC + land mask from GitHub Pages every hour while internet is available. So the boat keeps working through satcom outages.
 - **Data freshness indicators** — Wind and current field legends show green/yellow dot with relative age (e.g. "3m ago" / "2h 30m ago"). Green = data < 45 min old, yellow = stale. Wind source shows "Open-Meteo". Both legends are same width (210px).
 - **Real-time water levels** — 6 of 14 tide stations have NOAA gauges (SF, Alameda, Redwood City, Richmond, Martinez, Port Chicago). `fetchWaterLevels()` in data-loader.js fetches `product=water_level&date=latest`, 10-min cache. Popups show Predicted/Observed/Difference. Dashed green ring on gauge station markers. Only in real-time mode (forecastMinutes === 0).
 - **SFBOFS confidence indicator** — `updateFlowConfidence()` in app.js computes avg observed-vs-predicted delta across gauge stations. Shows in flow legend: green (≤0.3ft, reliable), yellow (≤0.5ft, moderate), red (>0.5ft, low). Detail text indicates direction: higher water → stronger currents & earlier slack; lower water → weaker currents & later slack.
