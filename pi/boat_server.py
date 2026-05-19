@@ -19,6 +19,7 @@ Usage:
 
 import argparse
 import asyncio
+import glob
 import hashlib
 import json
 import logging
@@ -260,6 +261,74 @@ async def handle_meta(request: web.Request) -> web.Response:
     return await proxy_with_cache(request, upstream, request.app["cache"], TTL_META_S)
 
 
+# ---- NMEA log download ---------------------------------------------------
+
+_LOG_FILE = re.compile(r"^nmea_[\d_-]+\.txt$")
+
+
+async def handle_logs_index(request: web.Request) -> web.Response:
+    log_dir: Path = request.app["log_dir"]
+    files = sorted(log_dir.glob("nmea_*.txt"), reverse=True)
+
+    def fmt_size(b):
+        return f"{b/1024:.0f} KB" if b < 1024 * 1024 else f"{b/1024/1024:.1f} MB"
+
+    rows = ""
+    for f in files:
+        stat = f.stat()
+        size = fmt_size(stat.st_size)
+        mtime = time.strftime("%Y-%m-%d %H:%M", time.localtime(stat.st_mtime))
+        rows += (
+            f"<tr><td><a href='/logs/{f.name}'>{f.name}</a></td>"
+            f"<td>{mtime}</td><td>{size}</td></tr>\n"
+        )
+    if not rows:
+        rows = "<tr><td colspan='3' style='color:#8395a7'>No log files yet</td></tr>"
+
+    html = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>NMEA Logs</title>
+<style>
+*{{margin:0;padding:0;box-sizing:border-box}}
+body{{font-family:-apple-system,system-ui,sans-serif;background:#0a1628;color:#c8d6e5;padding:20px}}
+h1{{font-size:1.4em;margin-bottom:16px;color:#f5f6fa}}
+table{{width:100%;border-collapse:collapse;background:rgba(255,255,255,0.05);border-radius:10px;overflow:hidden}}
+th{{text-align:left;padding:10px 14px;font-size:0.8em;color:#8395a7;border-bottom:1px solid rgba(255,255,255,0.1)}}
+td{{padding:10px 14px;font-size:0.9em;border-bottom:1px solid rgba(255,255,255,0.05)}}
+td:nth-child(2),td:nth-child(3){{color:#8395a7;white-space:nowrap}}
+a{{color:#3498db;text-decoration:none}}
+a:hover{{text-decoration:underline}}
+tr:last-child td{{border-bottom:none}}
+</style>
+</head>
+<body>
+<h1>NMEA Logs</h1>
+<table>
+<thead><tr><th>File</th><th>Modified</th><th>Size</th></tr></thead>
+<tbody>{rows}</tbody>
+</table>
+</body>
+</html>"""
+    return web.Response(text=html, content_type="text/html")
+
+
+async def handle_log_file(request: web.Request) -> web.Response:
+    filename = request.match_info["filename"]
+    if not _LOG_FILE.match(filename):
+        return web.Response(status=404, text="not found")
+    log_dir: Path = request.app["log_dir"]
+    path = log_dir / filename
+    if not path.exists():
+        return web.Response(status=404, text="not found")
+    return web.FileResponse(
+        path,
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
 # ---- NMEA WebSocket bridge -----------------------------------------------
 
 async def handle_nmea_ws(request: web.Request) -> web.WebSocketResponse:
@@ -384,6 +453,7 @@ def build_app(args) -> web.Application:
     app["tcp_host"] = args.tcp_host
     app["tcp_port"] = args.tcp_port
     app["static_dir"] = static_dir
+    app["log_dir"] = Path(args.log_dir).resolve()
     app["config_payload"] = {
         "mode": "boat",
         "useCloudAIS": False,
@@ -398,6 +468,8 @@ def build_app(args) -> web.Application:
     }
 
     app.router.add_get("/config.json", handle_config)
+    app.router.add_get("/logs", handle_logs_index)
+    app.router.add_get("/logs/{filename}", handle_log_file)
     app.router.add_get("/api/noaa/{tail:.*}", handle_proxy_noaa)
     app.router.add_get("/api/open-meteo/{tail:.*}", handle_proxy_open_meteo)
     app.router.add_get("/data/meta.json", handle_meta)
@@ -431,6 +503,7 @@ def main():
     p.add_argument("--tcp-port", type=int, default=10110)
     p.add_argument("--mmsi", type=int, default=338361814)
     p.add_argument("--cache-dir", default="cache")
+    p.add_argument("--log-dir", default=str(Path(__file__).resolve().parent.parent / "logs"))
     p.add_argument(
         "--gh-pages-base",
         default="https://rostape1.github.io/TyponFlowRacer",
