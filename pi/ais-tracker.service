@@ -5,9 +5,9 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-User=pi
-WorkingDirectory=/home/pi/AIS Tracker
-ExecStart=/home/pi/AIS Tracker/pi/startup.sh
+User=rostape1
+WorkingDirectory=/home/rostape1/AIS-Tracker
+ExecStart=/home/rostape1/AIS-Tracker/pi/startup.sh
 Restart=on-failure
 RestartSec=10
 StandardOutput=journal
