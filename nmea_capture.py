@@ -1,19 +1,23 @@
 #!/usr/bin/env python3
 """
-NMEA capture with web status page — connects to a TCP source, logs all
-sentences to hourly-rotated files, and serves a mobile-friendly status page.
+NMEA capture — taps the boat server's WebSocket (/nmea) and logs all
+sentences to hourly-rotated files. Serves a mobile-friendly status page.
+
+Reads from the boat server WebSocket so it doesn't compete with the
+server for the single TCP connection from the instruments.
 
 Usage:
-    python nmea_capture.py                             # default host:port
-    python nmea_capture.py --host 192.168.47.10 --port 10110
-    python nmea_capture.py --web-port 8080             # status page port
+    python nmea_capture.py                        # default ws url
+    python nmea_capture.py --ws-url wss://localhost:8443/nmea
+    python nmea_capture.py --web-port 8080
 """
 
 import argparse
+import asyncio
 import glob
 import html
 import os
-import socket
+import ssl
 import threading
 import time
 from collections import deque
@@ -21,10 +25,9 @@ from datetime import datetime, timezone
 from http.server import HTTPServer, BaseHTTPRequestHandler
 
 try:
-    from config import AIS_HOST, AIS_PORT
+    import websockets
 except ImportError:
-    AIS_HOST = "192.168.47.10"
-    AIS_PORT = 10110
+    raise SystemExit("Install websockets: pip install websockets")
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 LOG_DIR = os.path.join(SCRIPT_DIR, "logs")
@@ -66,7 +69,7 @@ def cleanup_old_logs():
 def cleanup_loop():
     while True:
         cleanup_old_logs()
-        time.sleep(3600)  # check every hour
+        time.sleep(3600)
 
 
 def format_uptime(seconds):
@@ -155,66 +158,63 @@ def start_web_server(bind, port):
     server.serve_forever()
 
 
-def capture(host, port):
-    stats["source"] = f"{host}:{port}"
-    current_hour = None
-    outfile = None
+def log_sentence(sentence, source_url):
+    global _current_hour, _outfile
+    now = datetime.now()
+    hour = now.strftime("%Y-%m-%d_%H")
+    if hour != _current_hour:
+        if _outfile:
+            _outfile.close()
+        filename = make_filename()
+        _outfile = open(filename, "a", encoding="utf-8")
+        _outfile.write(f"# NMEA capture started {ts()} UTC\n")
+        _outfile.write(f"# Source: {source_url}\n#\n")
+        _outfile.flush()
+        stats["current_file"] = filename
+        _current_hour = hour
+        print(f"Logging to {filename}")
+
+    timestamp = ts()
+    entry = f"{timestamp}  {sentence}\n"
+    _outfile.write(entry)
+    _outfile.flush()
+    stats["sentences"] += 1
+    stats["recent"].append((timestamp, sentence))
+
+
+_current_hour = None
+_outfile = None
+
+
+async def capture_ws(ws_url):
+    stats["source"] = ws_url
+    ssl_ctx = ssl.create_default_context()
+    ssl_ctx.check_hostname = False
+    ssl_ctx.verify_mode = ssl.CERT_NONE
 
     while True:
-        print(f"Connecting to {host}:{port}...")
+        print(f"Connecting to {ws_url}...")
         stats["connected"] = False
         try:
-            sock = socket.create_connection((host, port), timeout=10)
-            stats["connected"] = True
-            print("Connected.")
-            buf = b""
-            with sock:
-                while True:
-                    chunk = sock.recv(4096)
-                    if not chunk:
-                        print("Connection closed by remote.")
-                        break
-                    buf += chunk
-                    while b"\n" in buf:
-                        line, buf = buf.split(b"\n", 1)
-                        sentence = line.decode("ascii", errors="replace").strip()
-                        if not sentence:
-                            continue
-
-                        now = datetime.now()
-                        hour = now.strftime("%Y-%m-%d_%H")
-                        if hour != current_hour:
-                            if outfile:
-                                outfile.close()
-                            filename = make_filename()
-                            outfile = open(filename, "a", encoding="utf-8")
-                            outfile.write(f"# NMEA capture started {ts()} UTC\n")
-                            outfile.write(f"# Source: tcp:{host}:{port}\n#\n")
-                            outfile.flush()
-                            stats["current_file"] = filename
-                            current_hour = hour
-                            print(f"Logging to {filename}")
-
-                        timestamp = ts()
-                        entry = f"{timestamp}  {sentence}\n"
-                        print(entry, end="")
-                        outfile.write(entry)
-                        outfile.flush()
-                        stats["sentences"] += 1
-                        stats["recent"].append((timestamp, sentence))
-
-        except (OSError, socket.timeout) as e:
-            print(f"Error: {e}")
+            async with websockets.connect(ws_url, ssl=ssl_ctx) as ws:
+                stats["connected"] = True
+                print("Connected.")
+                async for message in ws:
+                    sentence = message.strip()
+                    if sentence:
+                        log_sentence(sentence, ws_url)
+        except Exception as e:
+            print(f"WebSocket error: {e}")
 
         stats["connected"] = False
         print("Reconnecting in 5s...")
-        time.sleep(5)
+        await asyncio.sleep(5)
 
 
 def main():
-    parser = argparse.ArgumentParser(description="NMEA capture with web status page")
-    parser.add_argument("--host", default=AIS_HOST, help=f"TCP host (default: {AIS_HOST})")
-    parser.add_argument("--port", type=int, default=AIS_PORT, help=f"TCP port (default: {AIS_PORT})")
+    parser = argparse.ArgumentParser(description="NMEA capture via boat server WebSocket")
+    parser.add_argument("--ws-url", default="wss://localhost:8443/nmea",
+                        help="Boat server NMEA WebSocket URL (default: wss://localhost:8443/nmea)")
     parser.add_argument("--web-port", type=int, default=8080, help="Status page HTTP port (default: 8080)")
     parser.add_argument("--bind", default="0.0.0.0", help="Status page bind address (default: 0.0.0.0)")
     args = parser.parse_args()
@@ -222,7 +222,7 @@ def main():
     os.makedirs(LOG_DIR, exist_ok=True)
     stats["start_time"] = time.time()
 
-    print(f"NMEA Capture — source {args.host}:{args.port}")
+    print(f"NMEA Capture — source {args.ws_url}")
     print(f"Status page  — http://{args.bind}:{args.web_port}")
     print("Press Ctrl+C to stop.\n")
 
@@ -233,7 +233,7 @@ def main():
     cleanup_thread.start()
 
     try:
-        capture(args.host, args.port)
+        asyncio.run(capture_ws(args.ws_url))
     except KeyboardInterrupt:
         print("\nDone.")
 
