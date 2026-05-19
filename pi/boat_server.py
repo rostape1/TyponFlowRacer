@@ -190,6 +190,16 @@ def _reject_invalid_tail() -> web.Response:
 
 # ---- Route handlers ------------------------------------------------------
 
+async def handle_cert(request: web.Request) -> web.Response:
+    cert_path = Path(request.app["ssl_cert"])
+    if not cert_path.exists():
+        return web.Response(status=404, text="cert not found")
+    return web.FileResponse(
+        cert_path,
+        headers={"Content-Disposition": 'attachment; filename="ais-tracker.crt"'},
+    )
+
+
 async def handle_config(request: web.Request) -> web.Response:
     cfg = request.app["config_payload"]
     return web.json_response(cfg, headers={"Cache-Control": "no-store"})
@@ -454,6 +464,7 @@ def build_app(args) -> web.Application:
     app["tcp_port"] = args.tcp_port
     app["static_dir"] = static_dir
     app["log_dir"] = Path(args.log_dir).resolve()
+    app["ssl_cert"] = args.ssl_cert or ""
     app["config_payload"] = {
         "mode": "boat",
         "useCloudAIS": False,
@@ -468,6 +479,7 @@ def build_app(args) -> web.Application:
     }
 
     app.router.add_get("/config.json", handle_config)
+    app.router.add_get("/certs/server.crt", handle_cert)
     app.router.add_get("/logs", handle_logs_index)
     app.router.add_get("/logs/{filename}", handle_log_file)
     app.router.add_get("/api/noaa/{tail:.*}", handle_proxy_noaa)
