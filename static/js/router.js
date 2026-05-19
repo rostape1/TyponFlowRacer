@@ -248,9 +248,12 @@ class RouteRenderer {
         }
 
         const startMs = path[0].timeMs;
+        const totalMin = Math.round((path[path.length - 1].timeMs - startMs) / 60000);
+        const intervalMin = totalMin <= 60 ? 15 : totalMin <= 180 ? 30 : totalMin <= 480 ? 60 : 120;
+
         for (const pt of path) {
             const elapsedMin = Math.round((pt.timeMs - startMs) / 60000);
-            if (elapsedMin > 0 && elapsedMin % 30 === 0) {
+            if (elapsedMin > 0 && elapsedMin % intervalMin === 0) {
                 const arrivalTime = new Date(Date.now() + elapsedMin * 60000)
                     .toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
                 const h = Math.floor(elapsedMin / 60);
