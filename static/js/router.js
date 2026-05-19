@@ -238,7 +238,7 @@ class RouteRenderer {
             const p0 = path[i - 1];
             const p1 = path[i];
 
-            let color = '#ffffff';
+            let color = '#f39c12';
             if (p1.cBenefit > 0.3) color = '#2ecc71';
             else if (p1.cBenefit < -0.3) color = '#e74c3c';
 
