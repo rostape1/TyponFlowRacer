@@ -26,7 +26,9 @@ except ImportError:
     AIS_HOST = "192.168.47.10"
     AIS_PORT = 10110
 
-LOG_DIR = "logs"
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+LOG_DIR = os.path.join(SCRIPT_DIR, "logs")
+KEEP_DAYS = 28
 
 stats = {
     "start_time": None,
@@ -48,6 +50,23 @@ def make_filename():
 
 def count_log_files():
     return len(glob.glob(os.path.join(LOG_DIR, "nmea_*.txt")))
+
+
+def cleanup_old_logs():
+    cutoff = time.time() - KEEP_DAYS * 86400
+    for path in glob.glob(os.path.join(LOG_DIR, "nmea_*.txt")):
+        if os.path.getmtime(path) < cutoff:
+            try:
+                os.remove(path)
+                print(f"Deleted old log: {path}")
+            except OSError:
+                pass
+
+
+def cleanup_loop():
+    while True:
+        cleanup_old_logs()
+        time.sleep(3600)  # check every hour
 
 
 def format_uptime(seconds):
@@ -209,6 +228,9 @@ def main():
 
     web_thread = threading.Thread(target=start_web_server, args=(args.bind, args.web_port), daemon=True)
     web_thread.start()
+
+    cleanup_thread = threading.Thread(target=cleanup_loop, daemon=True)
+    cleanup_thread.start()
 
     try:
         capture(args.host, args.port)
