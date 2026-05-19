@@ -1191,6 +1191,8 @@ async function _handleRouteClick(e) {
 
 async function _runRoute() {
     const perf = (_routePerf ? parseInt(_routePerf.value) : 85) / 100;
+    const variantEl = document.getElementById('route-variant');
+    const variant = variantEl ? variantEl.value : 'baseline';
     _routeStatus.innerHTML = '<span style="color:#f39c12">Computing route...</span>';
 
     const startTime = Date.now() + forecastMinutes * 60000;
@@ -1202,7 +1204,8 @@ async function _runRoute() {
             startTime, perf,
             (step, total) => {
                 _routeStatus.innerHTML = `<span style="color:#f39c12">Computing... ${Math.round(step / total * 100)}%</span>`;
-            }
+            },
+            variant
         );
 
         if (result.error) {
