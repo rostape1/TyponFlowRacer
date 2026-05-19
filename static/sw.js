@@ -244,6 +244,9 @@ self.addEventListener('fetch', (event) => {
         safeCachePut(CACHE_NAME, event.request, response.clone());
       }
       return response;
-    }).catch(() => caches.match(event.request, { ignoreSearch: true }))
+    }).catch(() =>
+      caches.match(event.request, { ignoreSearch: true })
+        .then((cached) => cached || new Response('', { status: 503 }))
+    )
   );
 });
