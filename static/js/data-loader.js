@@ -73,6 +73,20 @@ async function _fetchWithTimeout(url, timeoutMs = 15000, options = {}) {
     }
 }
 
+// Read Pi proxy cache headers from a Response so the UI can flag stale data.
+// Returns null when the Pi didn't add headers (e.g. direct CDN fetch on web mode).
+function _readCacheMeta(res) {
+    if (!res || !res.headers) return null;
+    const state = res.headers.get('X-Cache');  // HIT|MISS|STALE|LOCAL
+    if (!state) return null;
+    const ageSecRaw = res.headers.get('X-Cache-Age');
+    return {
+        state,
+        ageSec: ageSecRaw ? parseInt(ageSecRaw, 10) : null,
+        reason: res.headers.get('X-Cache-Reason') || null,
+    };
+}
+
 // --- Helpers ---
 
 function _ymd(d) {
@@ -137,6 +151,7 @@ async function fetchCurrentField(minutesOffset = 0) {
     if (data.model_run) {
         _sfbofsRunTime = _parseSfbofsRunTime(data.model_run);
     }
+    data._cacheMeta = _readCacheMeta(res);
     return data;
 }
 
@@ -186,6 +201,7 @@ async function _fetchWindGridFromAPI() {
     }
     if (!res.ok) return null;
     const data = await res.json();
+    const cacheMeta = _readCacheMeta(res);
 
     // Response is an array of objects (one per coordinate pair)
     if (!Array.isArray(data) || data.length !== lats.length) return null;
@@ -239,6 +255,7 @@ async function _fetchWindGridFromAPI() {
             u,
             v,
             gusts,
+            _cacheMeta: cacheMeta,
         });
     }
 

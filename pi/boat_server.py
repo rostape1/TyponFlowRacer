@@ -63,7 +63,24 @@ TTL_META_S = 60
 UPSTREAM_TIMEOUT_S = 10.0
 # Refuse to serve cache older than this on upstream error: stale data is fine,
 # day-old data masquerading as current is dangerous on the water.
-MAX_STALE_S = 24 * 3600
+# Split per-source — coastal cruising can run a week without internet, but the
+# usefulness of stale data depends on what kind of data it is.
+MAX_STALE_DEFAULT_S = 24 * 3600
+MAX_STALE_TIDES_S = 30 * 24 * 3600   # harmonic predictions, stable for weeks
+MAX_STALE_CURRENTS_S = 30 * 24 * 3600  # same
+MAX_STALE_WATER_LEVEL_S = 24 * 3600    # real-time gauge — stale = misleading
+MAX_STALE_OPEN_METEO_S = 7 * 24 * 3600
+MAX_STALE_SFBOFS_S = 7 * 24 * 3600     # SFBOFS only forecasts 48h anyway
+MAX_STALE_NDBC_S = 7 * 24 * 3600
+MAX_STALE_META_S = 24 * 3600
+
+
+def _max_stale_for_noaa(query: str) -> float:
+    if "product=water_level" in query:
+        return MAX_STALE_WATER_LEVEL_S
+    if "product=currents_predictions" in query:
+        return MAX_STALE_CURRENTS_S
+    return MAX_STALE_TIDES_S
 
 # Pre-warm pacing
 PREWARM_OK_INTERVAL_S = 3600            # next cycle when last cycle succeeded
@@ -121,6 +138,7 @@ async def proxy_with_cache(
     upstream_url: str,
     cache: DiskCache,
     ttl_s: float,
+    max_stale_s: float = MAX_STALE_DEFAULT_S,
 ) -> web.Response:
     """Fetch `upstream_url`, serving from disk cache when fresh or on failure."""
     cached = cache.get(upstream_url)
@@ -154,7 +172,7 @@ async def proxy_with_cache(
         if cached:
             meta, body = cached
             stale_age = now - meta["ts"]
-            if stale_age <= MAX_STALE_S:
+            if stale_age <= max_stale_s:
                 return web.Response(
                     body=body,
                     status=meta.get("status", 200),
@@ -215,7 +233,9 @@ async def handle_proxy_noaa(request: web.Request) -> web.Response:
     if qs:
         upstream = f"{upstream}?{qs}"
     return await proxy_with_cache(
-        request, upstream, request.app["cache"], _ttl_for_noaa(qs)
+        request, upstream, request.app["cache"],
+        ttl_s=_ttl_for_noaa(qs),
+        max_stale_s=_max_stale_for_noaa(qs),
     )
 
 
@@ -228,18 +248,23 @@ async def handle_proxy_open_meteo(request: web.Request) -> web.Response:
     if qs:
         upstream = f"{upstream}?{qs}"
     return await proxy_with_cache(
-        request, upstream, request.app["cache"], TTL_OPEN_METEO_S
+        request, upstream, request.app["cache"],
+        ttl_s=TTL_OPEN_METEO_S,
+        max_stale_s=MAX_STALE_OPEN_METEO_S,
     )
 
 
-def _make_gh_pages_handler(subpath: str, ttl_s: float):
+def _make_gh_pages_handler(subpath: str, ttl_s: float, max_stale_s: float = MAX_STALE_DEFAULT_S):
     async def handler(request: web.Request) -> web.Response:
         tail = request.match_info["tail"]
         if not _DATA_FILE.match(tail):
             return _reject_invalid_tail()
         base = request.app["gh_pages_base"].rstrip("/")
         upstream = f"{base}/{subpath}/{tail}"
-        return await proxy_with_cache(request, upstream, request.app["cache"], ttl_s)
+        return await proxy_with_cache(
+            request, upstream, request.app["cache"],
+            ttl_s=ttl_s, max_stale_s=max_stale_s,
+        )
     return handler
 
 
@@ -255,7 +280,10 @@ async def handle_data_catchall(request: web.Request) -> web.Response:
         return _reject_invalid_tail()
     base = request.app["gh_pages_base"].rstrip("/")
     upstream = f"{base}/data/{tail}"
-    resp = await proxy_with_cache(request, upstream, request.app["cache"], TTL_SFBOFS_S)
+    resp = await proxy_with_cache(
+        request, upstream, request.app["cache"],
+        ttl_s=TTL_SFBOFS_S, max_stale_s=MAX_STALE_SFBOFS_S,
+    )
     if resp.status != 504:
         return resp
     # Last resort: serve the copy committed under static/data/.
@@ -269,7 +297,10 @@ async def handle_data_catchall(request: web.Request) -> web.Response:
 async def handle_meta(request: web.Request) -> web.Response:
     base = request.app["gh_pages_base"].rstrip("/")
     upstream = f"{base}/data/meta.json"
-    return await proxy_with_cache(request, upstream, request.app["cache"], TTL_META_S)
+    return await proxy_with_cache(
+        request, upstream, request.app["cache"],
+        ttl_s=TTL_META_S, max_stale_s=MAX_STALE_META_S,
+    )
 
 
 # ---- NMEA log download ---------------------------------------------------
@@ -654,10 +685,10 @@ def build_app(args) -> web.Application:
     app.router.add_get("/api/noaa/{tail:.*}", handle_proxy_noaa)
     app.router.add_get("/api/open-meteo/{tail:.*}", handle_proxy_open_meteo)
     app.router.add_get("/data/meta.json", handle_meta)
-    app.router.add_get("/data/sfbofs/{tail:.*}", _make_gh_pages_handler("data/sfbofs", TTL_SFBOFS_S))
-    app.router.add_get("/data/sfbofs_gg/{tail:.*}", _make_gh_pages_handler("data/sfbofs_gg", TTL_SFBOFS_S))
-    app.router.add_get("/data/wind/{tail:.*}", _make_gh_pages_handler("data/wind", TTL_NDBC_S))
-    app.router.add_get("/data/hycom/{tail:.*}", _make_gh_pages_handler("data/hycom", TTL_SFBOFS_S))
+    app.router.add_get("/data/sfbofs/{tail:.*}", _make_gh_pages_handler("data/sfbofs", TTL_SFBOFS_S, MAX_STALE_SFBOFS_S))
+    app.router.add_get("/data/sfbofs_gg/{tail:.*}", _make_gh_pages_handler("data/sfbofs_gg", TTL_SFBOFS_S, MAX_STALE_SFBOFS_S))
+    app.router.add_get("/data/wind/{tail:.*}", _make_gh_pages_handler("data/wind", TTL_NDBC_S, MAX_STALE_NDBC_S))
+    app.router.add_get("/data/hycom/{tail:.*}", _make_gh_pages_handler("data/hycom", TTL_SFBOFS_S, MAX_STALE_SFBOFS_S))
     # Catch-all for any other /data/<file>.json (land_mask.json, etc.) —
     # cache + GH Pages + local-static fallback so the router never breaks.
     app.router.add_get("/data/{tail:.*}", handle_data_catchall)

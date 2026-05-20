@@ -1467,12 +1467,14 @@ async function loadCurrentField() {
             const run = data.model_run ? ` ${data.model_run}` : '';
             const age = formatDataAge(data.fetched_at);
             const ageStr = age ? ` · ${age.dot}fetched ${age.ageText}` : '';
+            const stalePrefix = (data._cacheMeta && data._cacheMeta.state === 'STALE')
+                ? '<span style="color:#e74c3c">⚠ Pi offline</span> · ' : '';
             if (forecastMinutes > 0) {
                 const target = new Date(Date.now() + forecastMinutes * 60000);
                 const timeStr = target.toLocaleString('en-US', { weekday: 'short', hour: 'numeric', minute: '2-digit', timeZone: 'America/Los_Angeles' });
-                source.innerHTML = `${src}${run} · forecast: ${timeStr}${ageStr}`;
+                source.innerHTML = `${stalePrefix}${src}${run} · forecast: ${timeStr}${ageStr}`;
             } else {
-                source.innerHTML = `${src}${run}${ageStr}`;
+                source.innerHTML = `${stalePrefix}${src}${run}${ageStr}`;
             }
         }
     } catch (e) {
@@ -1652,12 +1654,14 @@ async function loadWindField() {
                 : '';
             const age = formatDataAge(data.grid.fetched_at);
             const ageStr = age ? ` · ${age.dot}fetched ${age.ageText}` : '';
+            const stalePrefix = (data.grid._cacheMeta && data.grid._cacheMeta.state === 'STALE')
+                ? '<span style="color:#e74c3c">⚠ Pi offline</span> · ' : '';
             if (forecastMinutes > 0) {
                 const target = new Date(Date.now() + forecastMinutes * 60000);
                 const timeStr = target.toLocaleString('en-US', { weekday: 'short', hour: 'numeric', minute: '2-digit', timeZone: 'America/Los_Angeles' });
-                source.innerHTML = `${src}${obs} · forecast: ${timeStr}${ageStr}${stationStr}`;
+                source.innerHTML = `${stalePrefix}${src}${obs} · forecast: ${timeStr}${ageStr}${stationStr}`;
             } else {
-                source.innerHTML = `${src}${obs}${ageStr}${stationStr}`;
+                source.innerHTML = `${stalePrefix}${src}${obs}${ageStr}${stationStr}`;
             }
         }
     } catch (e) {
