@@ -14,20 +14,26 @@ Usage:
 """
 
 import argparse
+import concurrent.futures
 import json
 import math
 import os
+import threading
 import time
 import urllib.request
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 STATIC_DIR = os.path.join(SCRIPT_DIR, "static")
 
-# SF Bay default bounds
-DEFAULT_BOUNDS = (37.44, -122.52, 37.95, -122.15)
+# Default bounds: SF Bay through Monterey (the Typon's typical cruising range).
+# Bounds order: (lat_min, lon_min, lat_max, lon_max)
+DEFAULT_BOUNDS = (36.45, -123.05, 38.20, -121.75)
 DEFAULT_ZOOM_RANGE = (10, 15)
 
-# Tile sources
+# Tile sources. NOAA charts use ArcGIS REST format with `lod = zoom - 2` and
+# `{lod}/{y}/{x}` ordering, so it can't share the format-string loop — handled
+# specially in `download_tiles()` below. Saved locally as `tiles/noaa/{z}/{x}/{y}.png`
+# to match what static/js/app.js requests when _useLocalTiles is true.
 TILE_SOURCES = {
     "osm": {
         "url": "https://tile.openstreetmap.org/{z}/{x}/{y}.png",
@@ -42,10 +48,15 @@ TILE_SOURCES = {
         "dir": "tiles/sea",
     },
     "noaa": {
-        "url": "https://tileservice.charts.noaa.gov/tiles/50000_1/{z}/{x}/{y}.png",
+        # URL built per-tile in download_tiles() — see special case.
+        "url": None,
         "dir": "tiles/noaa",
     },
 }
+
+# Concurrency. Browsers do 6 parallel connections per origin; 8 workers across
+# 4 tile origins is well-behaved (~2 connections per origin amortized).
+DOWNLOAD_WORKERS = 8
 
 LEAFLET_FILES = {
     "lib/leaflet.js": "https://unpkg.com/leaflet@1.9.4/dist/leaflet.js",
@@ -95,46 +106,94 @@ def download_leaflet():
             print(f"  - {dest_rel} (already exists)")
 
 
+def _build_tile_url(source_name, source, zoom, x, y):
+    """Construct the upstream URL for one tile.
+
+    NOAA uses ArcGIS REST format (`{lod}/{y}/{x}`, lod = z - 2) which doesn't
+    fit the simple format-string convention used by the other sources. Returns
+    None to skip a tile (e.g. NOAA below its minimum lod).
+    """
+    if source_name == "noaa":
+        lod = zoom - 2
+        if lod < 0:
+            return None
+        return (
+            "https://gis.charttools.noaa.gov/arcgis/rest/services/"
+            f"MarineChart_Services/NOAACharts/MapServer/tile/{lod}/{y}/{x}"
+        )
+    return source["url"].format(z=zoom, x=x, y=y)
+
+
 def download_tiles(bounds, zoom_min, zoom_max):
-    """Download map tiles for the given bounds and zoom range."""
+    """Download map tiles for the given bounds and zoom range, in parallel."""
     lat_min, lon_min, lat_max, lon_max = bounds
 
-    total_tiles = estimate_tiles(bounds, zoom_min, zoom_max)
-    downloaded = 0
-    skipped = 0
-    processed = 0
-
+    # Build the full work list first so we can show accurate progress.
+    jobs = []  # (source_name, source, zoom, x, y, dest)
     for source_name, source in TILE_SOURCES.items():
-        print(f"\nDownloading {source_name} tiles (zoom {zoom_min}-{zoom_max})...")
-
         for zoom in range(zoom_min, zoom_max + 1):
             x_min, y_max = lat_lon_to_tile(lat_min, lon_min, zoom)
             x_max, y_min = lat_lon_to_tile(lat_max, lon_max, zoom)
-
-            tile_count = (x_max - x_min + 1) * (y_max - y_min + 1)
-
             for x in range(x_min, x_max + 1):
                 for y in range(y_min, y_max + 1):
-                    processed += 1
-                    url = source["url"].format(z=zoom, x=x, y=y)
                     dest = os.path.join(STATIC_DIR, source["dir"], str(zoom), str(x), f"{y}.png")
+                    jobs.append((source_name, source, zoom, x, y, dest))
 
-                    if os.path.exists(dest) and os.path.getsize(dest) > 0:
-                        skipped += 1
-                    elif download_file(url, dest):
-                        downloaded += 1
+    total = len(jobs)
+    counter = {"processed": 0, "downloaded": 0, "skipped": 0, "errors": 0}
+    lock = threading.Lock()
+    start_ts = time.time()
 
-                    # Progress indicator
-                    pct = processed * 100 // total_tiles
-                    print(f"\r  [{pct:3d}%] {processed}/{total_tiles} tiles  ({downloaded} new, {skipped} cached)", end="", flush=True)
+    def _worker(job):
+        source_name, source, zoom, x, y, dest = job
+        if os.path.exists(dest) and os.path.getsize(dest) > 0:
+            with lock:
+                counter["skipped"] += 1
+                counter["processed"] += 1
+            return
+        url = _build_tile_url(source_name, source, zoom, x, y)
+        if url is None:
+            with lock:
+                counter["processed"] += 1
+            return
+        ok = download_file(url, dest)
+        with lock:
+            if ok:
+                counter["downloaded"] += 1
+            else:
+                counter["errors"] += 1
+            counter["processed"] += 1
 
-                    # Rate limiting — skip delay for cached tiles
-                    if not (os.path.exists(dest) and os.path.getsize(dest) > 0):
-                        time.sleep(0.05)
+    print(f"Downloading {total} tiles with {DOWNLOAD_WORKERS} parallel workers...")
+    with concurrent.futures.ThreadPoolExecutor(max_workers=DOWNLOAD_WORKERS) as ex:
+        futures = [ex.submit(_worker, j) for j in jobs]
+        last_print = 0.0
+        for _ in concurrent.futures.as_completed(futures):
+            now = time.time()
+            if now - last_print > 0.5 or counter["processed"] == total:
+                with lock:
+                    p = counter["processed"]
+                    d = counter["downloaded"]
+                    s = counter["skipped"]
+                    e = counter["errors"]
+                pct = p * 100 // total if total else 100
+                elapsed = now - start_ts
+                rate = d / elapsed if elapsed > 0 and d > 0 else 0
+                eta = (total - p) / rate if rate > 0 else 0
+                print(
+                    f"\r  [{pct:3d}%] {p}/{total}  "
+                    f"({d} new, {s} cached, {e} err)  "
+                    f"{rate:.1f}/s  ETA {eta:.0f}s",
+                    end="", flush=True,
+                )
+                last_print = now
 
-            print(f"\n  zoom {zoom}: {tile_count} tiles ({x_max - x_min + 1}x{y_max - y_min + 1})")
-
-    print(f"\nDone! {downloaded} new + {skipped} cached = {processed} total tiles")
+    elapsed = time.time() - start_ts
+    print(
+        f"\nDone in {elapsed:.0f}s: "
+        f"{counter['downloaded']} new, {counter['skipped']} cached, "
+        f"{counter['errors']} errors, {counter['processed']} processed"
+    )
 
 
 def estimate_tiles(bounds, zoom_min, zoom_max):
@@ -167,11 +226,16 @@ def main():
         zoom_min, zoom_max = DEFAULT_ZOOM_RANGE
 
     total_est = estimate_tiles(bounds, zoom_min, zoom_max)
+    per_layer = total_est // len(TILE_SOURCES)
+    # Rough estimate: ~5-15 tiles/sec sustained across DOWNLOAD_WORKERS workers.
+    # Already-cached tiles are essentially free.
     print(f"AIS Tracker Offline Downloader")
     print(f"Bounds: {bounds}")
     print(f"Zoom: {zoom_min}-{zoom_max}")
-    print(f"Estimated tiles: {total_est} (across {len(TILE_SOURCES)} tile sources)")
-    print(f"Estimated size: ~{total_est * 15 // 1024} MB\n")
+    print(f"Estimated tiles: {total_est} total ({per_layer} per layer × {len(TILE_SOURCES)} sources)")
+    print(f"Estimated size: ~{total_est * 15 // 1024} MB (already-cached tiles will be skipped)")
+    print(f"Concurrent workers: {DOWNLOAD_WORKERS}")
+    print()
 
     download_leaflet()
     download_tiles(bounds, zoom_min, zoom_max)
@@ -230,10 +294,6 @@ def download_currents():
 
         except Exception as e:
             print(f"  ✗ {name} ({station_id}): {e}")
-
-
-if __name__ == "__main__":
-    main()
 
 
 # --- Wind data offline cache ---
@@ -352,3 +412,7 @@ def download_wind():
         with open(dest, "w") as f:
             json.dump(stations, f, indent=2)
         print(f"  {len(stations)} stations saved")
+
+
+if __name__ == "__main__":
+    main()

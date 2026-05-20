@@ -76,6 +76,55 @@ Environmental data sources:
 - `data/sfbofs/hour_XX.json` → GitHub Actions pre-computed → `tidal-flow.js` particles
 - `data/wind/stations.json` → GitHub Actions NDBC fetch → `wind-overlay.js` station markers
 
+## Data Source & Offline Coverage Matrix
+
+This is the ground-truth table of every external data source the browser uses, what proxies it, what pre-caches it, and where the user sees its freshness. **Audit before changing offline behavior.**
+
+| Layer | Pi proxy route | Pre-warmed at startup | Age shown in UI | Notes |
+|---|---|---|---|---|
+| SFBOFS currents | `/data/sfbofs/{hour}.json` | ✓ hours 0-48 | ✓ flow legend | GH Pages → Pi cache |
+| SFBOFS GG hi-res | `/data/sfbofs_gg/{hour}.json` | ✓ same loop | ✓ | |
+| HYCOM currents | `/data/hycom/*` | ✗ | ✗ | optional, outside SF Bay |
+| Wind grid (Open-Meteo) | `/api/open-meteo/v1/forecast` | ✗ ← **gap** | ✓ wind legend | batched lat/lon array |
+| Wind stations (NDBC) | `/data/wind/stations.json` | ✓ | ✗ | static JSON |
+| Tide predictions | `/api/noaa/api/prod/datagetter` | ✗ ← **gap** | ✗ ← **gap** | 14 stations |
+| Currents predictions | `/api/noaa/api/prod/datagetter` | ✗ ← **gap** | ✗ ← **gap** | 6 stations |
+| Water levels (real-time) | `/api/noaa/api/prod/datagetter` | ✗ (intentional, 10-min TTL) | partial | 6 stations |
+| Land mask | `/data/land_mask.json` | ✓ | n/a | |
+| Meta JSON | `/data/meta.json` | ✓ | n/a | 60s TTL |
+| **NOAA chart tiles** | filesystem `/tiles/noaa/{z}/{x}/{y}.png` | run `download_offline.py` | n/a | **default layer**; ArcGIS REST upstream |
+| CartoDB Dark tiles | filesystem `/tiles/dark/{z}/{x}/{y}.png` | run `download_offline.py` | n/a | |
+| OpenStreetMap tiles | filesystem `/tiles/osm/{z}/{x}/{y}.png` | run `download_offline.py` | n/a | |
+| OpenSeaMap tiles | filesystem `/tiles/sea/{z}/{x}/{y}.png` | run `download_offline.py` | n/a | |
+| Local NMEA stream | `/nmea` (WebSocket) | n/a | n/a | TCP→WS bridge to 192.168.47.10:10110 |
+| AISstream.io | n/a | n/a | n/a | disabled in boat mode (`useCloudAIS:false` from `/config.json`) |
+
+### Offline behavior
+
+Two distinct caching layers, neither overlapping with the other:
+
+**1. Filesystem-served map tiles** (`static/tiles/`, served by aiohttp `add_static`).
+- Populated by `download_offline.py` (run manually with internet, idempotent — `download_file` skips files that already exist with size>0).
+- Default bbox is SF Bay through Monterey (set in `download_offline.py:DEFAULT_BOUNDS`).
+- Served as plain static files by the Pi; never refreshed by the running server.
+- When the browser is on `github.io` (`_useLocalTiles=false` at `static/js/app.js:361`), tile URLs go direct to the CDN and these files are unused.
+
+**2. Reverse-proxy disk cache** (`pi/boat_server.py` `DiskCache`, default dir `cache/`).
+- Populated two ways: by `sfbofs_prewarm_loop` (every hour while online), and on-demand when a browser request misses cache.
+- Per-source TTLs (`pi/boat_server.py:52-65`): SFBOFS 1h, NOAA tides/currents 6h, water levels 10min, Open-Meteo wind 30min, NDBC 10min, meta 1min.
+- **Stale-on-error**: when upstream fetch fails and the cached entry exists, `proxy_with_cache` serves the cached body with `X-Cache: STALE` + `X-Cache-Age` headers — up to `MAX_STALE_S` (currently 24h, planned to extend per source).
+
+**The Pi serves HTTP, not HTTPS** (default `--port 8080` in `start_boat.sh`). Browsers refuse to register Service Workers on HTTP origins, so `static/sw.js` does **not** activate when the page is loaded from the Pi. All caching at sea is server-side. `sw.js` is only relevant on the GitHub Pages URL.
+
+### Two URLs, one codebase
+
+| URL | Hosting | When | What's different |
+|---|---|---|---|
+| `https://rostape1.github.io/TyponFlowRacer` | GitHub Pages (HTTPS) | Dock, shore, anywhere with internet | `/config.json` 404s → app falls back to web mode (cloud AIS, direct CDN tiles, direct API fetches). Service Worker active. |
+| `http://typonrpi4.local:8080/` | Raspberry Pi (HTTP) | On boat WiFi | `/config.json` flips `mode:'boat'`, `useCloudAIS:false`, points API base at `/api/noaa` and `/api/open-meteo`, NMEA at `/nmea`. No Service Worker. |
+
+Same `static/` directory deployed to both. `boat-mode` branch is what the Pi runs (`pi/startup.sh` does `git reset --hard origin/boat-mode` on every (re)boot). `main` branch is what GitHub Pages deploys.
+
 ## File Map
 
 ### Data Pipeline (`.github/`)

@@ -380,9 +380,13 @@ const seaLayer = L.tileLayer(_seaTpl, {
 });
 
 // NOAA Nautical Charts — ENC display with traditional paper chart symbols
-// Uses ArcGIS MapServer tile cache; LOD 0 = standard zoom 2 (resolution offset)
+// Online: ArcGIS MapServer tile cache (lod = Leaflet z - 2, y-then-x ordering).
+// Offline: local tiles saved as /tiles/noaa/{z}/{x}/{y}.png by download_offline.py.
 const noaaChart = L.TileLayer.extend({
     getTileUrl: function(coords) {
+        if (_useLocalTiles) {
+            return `tiles/noaa/${coords.z}/${coords.x}/${coords.y}.png`;
+        }
         const lod = coords.z - 2;
         if (lod < 0) return '';
         return `https://gis.charttools.noaa.gov/arcgis/rest/services/MarineChart_Services/NOAACharts/MapServer/tile/${lod}/${coords.y}/${coords.x}`;
