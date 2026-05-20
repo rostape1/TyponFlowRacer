@@ -277,6 +277,20 @@ function _segmentCrossesLand(lat1, lon1, lat2, lon2) {
     return false;
 }
 
+function _segmentCrossesLandStrict(lat1, lon1, lat2, lon2) {
+    const steps = Math.max(3, Math.ceil(_haversineNm(lat1, lon1, lat2, lon2) / 0.05));
+    for (let i = 1; i < steps; i++) {
+        const t = i / steps;
+        if (_isLand(lat1 + (lat2 - lat1) * t, lon1 + (lon2 - lon1) * t)) return true;
+    }
+    return false;
+}
+
+// Within this radius of the destination, the safety buffer is dropped so the
+// router can reach harbors, anchorages, and shoreline waypoints. Actual land
+// is still avoided.
+const DEST_APPROACH_NM = 1.0;
+
 function _backtrack(point) {
     const path = [];
     let p = point;
@@ -373,9 +387,17 @@ self.onmessage = function(e) {
                     awa: aw.awa,
                 };
 
-                if (_haversineNm(newLat, newLon, endLat, endLon) < DEST_RADIUS_NM &&
-                    !_isTooCloseToLand(newLat, newLon) &&
-                    !_segmentCrossesLand(pt.lat, pt.lon, newLat, newLon)) {
+                const distToDest = _haversineNm(newLat, newLon, endLat, endLon);
+                // Drop the safety buffer near the destination — users intentionally
+                // pick shoreline waypoints (harbors, anchorages) and the buffer would
+                // otherwise stall the wavefront 200m offshore.
+                const nearDest = distToDest < DEST_APPROACH_NM;
+                const landCheck = nearDest ? _isLand : _isTooCloseToLand;
+                const segCheck  = nearDest ? _segmentCrossesLandStrict : _segmentCrossesLand;
+
+                if (distToDest < DEST_RADIUS_NM &&
+                    !_isLand(newLat, newLon) &&
+                    !_segmentCrossesLandStrict(pt.lat, pt.lon, newLat, newLon)) {
                     const path = _backtrack(newPt);
                     self.postMessage({ type: 'result', data: {
                         path, isochrones,
@@ -385,8 +407,8 @@ self.onmessage = function(e) {
                     return;
                 }
 
-                if (!_isTooCloseToLand(newLat, newLon) &&
-                    !_segmentCrossesLand(pt.lat, pt.lon, newLat, newLon)) {
+                if (!landCheck(newLat, newLon) &&
+                    !segCheck(pt.lat, pt.lon, newLat, newLon)) {
                     const ptBrg = _bearingDeg(startLat, startLon, newLat, newLon);
                     let brgDiff = Math.abs(ptBrg - destBrg);
                     if (brgDiff > 180) brgDiff = 360 - brgDiff;
