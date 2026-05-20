@@ -19,6 +19,7 @@ Usage:
 
 import argparse
 import asyncio
+import datetime as _dt
 import glob
 import hashlib
 import json
@@ -355,6 +356,169 @@ async def handle_nmea_ws(request: web.Request) -> web.WebSocketResponse:
     return ws
 
 
+# ---- Environmental pre-warm (wind, tides, currents) ---------------------
+# Mirrors the URL conventions in static/js/data-loader.js so the cache keys
+# match what the browser will request through the reverse-proxy. If you change
+# the JS station list or wind grid here, mirror it there (and vice-versa).
+
+# 14 NOAA tide stations (mirror of TIDE_STATIONS in data-loader.js).
+TIDE_STATIONS = [
+    "9414290", "9414750", "9414764", "9414816", "9414874", "9414688",
+    "9414523", "9414458", "9414509", "9414131", "9413663", "9413450",
+    "9414863", "9415056", "9415102", "9415144",
+]
+
+# 6 NOAA current-prediction stations (mirror of CURRENT_STATIONS).
+CURRENT_STATIONS = [
+    "SFB1201", "SFB1203", "SFB1204", "SFB1205", "SFB1206", "SFB1211",
+]
+
+# Open-Meteo wind grid (mirror of WIND_BOUNDS / WIND_NX / WIND_NY).
+WIND_BOUNDS_S = 36.40
+WIND_BOUNDS_N = 38.10
+WIND_BOUNDS_W = -122.95
+WIND_BOUNDS_E = -121.80
+WIND_NX = 11
+WIND_NY = 16
+
+NOAA_BASE = "https://api.tidesandcurrents.noaa.gov/api/prod/datagetter"
+OPEN_METEO_BASE = "https://api.open-meteo.com/v1/forecast"
+
+
+def _noaa_date_range_utc():
+    """Same begin/end as static/js/data-loader.js _noaaDateRange (3-day window)."""
+    today = _dt.datetime.utcnow()
+    begin = today.strftime("%Y%m%d")
+    end = (today + _dt.timedelta(days=3)).strftime("%Y%m%d")
+    return begin, end
+
+
+def _tide_url(station_id: str, begin: str, end: str) -> str:
+    return (
+        f"{NOAA_BASE}?begin_date={begin}&end_date={end}&station={station_id}"
+        "&product=predictions&datum=MLLW&units=english&time_zone=gmt"
+        "&format=json&interval=6"
+    )
+
+
+def _current_url(station_id: str, begin: str, end: str) -> str:
+    return (
+        f"{NOAA_BASE}?begin_date={begin}&end_date={end}&station={station_id}"
+        "&product=currents_predictions&units=english&time_zone=gmt"
+        "&format=json&interval=6"
+    )
+
+
+def _wind_url() -> str:
+    """Build the same batched Open-Meteo URL the browser builds.
+
+    Cache key matches exactly so a browser request hits this entry. The browser
+    formats lat/lon to 4 decimals (`.toFixed(4)`); we replicate that here.
+    """
+    lats: list[str] = []
+    lons: list[str] = []
+    for iy in range(WIND_NY):
+        lat = WIND_BOUNDS_S + iy * (WIND_BOUNDS_N - WIND_BOUNDS_S) / (WIND_NY - 1)
+        for ix in range(WIND_NX):
+            lon = WIND_BOUNDS_W + ix * (WIND_BOUNDS_E - WIND_BOUNDS_W) / (WIND_NX - 1)
+            lats.append(f"{lat:.4f}")
+            lons.append(f"{lon:.4f}")
+    return (
+        f"{OPEN_METEO_BASE}"
+        f"?latitude={','.join(lats)}&longitude={','.join(lons)}"
+        "&current=wind_speed_10m,wind_direction_10m,wind_gusts_10m"
+        "&hourly=wind_speed_10m,wind_direction_10m,wind_gusts_10m"
+        "&models=gfs_seamless&wind_speed_unit=kn&forecast_hours=49"
+    )
+
+
+async def _prewarm_url(app: web.Application, url: str, label: str) -> bool:
+    """Fetch one URL into the disk cache. Returns True on 200, False otherwise.
+
+    Wrapped so a single failure (timeout, 5xx, network error) doesn't propagate.
+    """
+    cache: DiskCache = app["cache"]
+    session: aiohttp.ClientSession = app["http"]
+    try:
+        async with session.get(
+            url, timeout=aiohttp.ClientTimeout(total=UPSTREAM_TIMEOUT_S)
+        ) as r:
+            body = await r.read()
+            if r.status == 200:
+                cache.put(
+                    url, body,
+                    r.headers.get("Content-Type", "application/json"),
+                    200,
+                )
+                return True
+            log.info("pre-warm %s: status %d", label, r.status)
+    except (aiohttp.ClientError, asyncio.TimeoutError) as e:
+        log.warning("pre-warm %s failed: %s", label, e)
+    return False
+
+
+async def env_prewarm_loop(app: web.Application):
+    """Pre-warm Open-Meteo wind grid + NOAA tide/current predictions.
+
+    Runs alongside `sfbofs_prewarm_loop`. Each category is wrapped in its own
+    try/except so a single failure can't kill the loop. Sleeps the same hourly
+    interval; backs off on failure.
+    """
+    backoff_idx = 0
+    try:
+        while True:
+            log.info("env pre-warm starting")
+            ok = 0
+            cycle_failed = False
+
+            # 1. Wind grid (single batched request, 176 points × 49 hours)
+            if await _prewarm_url(app, _wind_url(), "wind"):
+                ok += 1
+            else:
+                cycle_failed = True
+            await asyncio.sleep(PREWARM_REQUEST_GAP_S)
+
+            # 2. Tide stations
+            begin, end = _noaa_date_range_utc()
+            for station_id in TIDE_STATIONS:
+                if await _prewarm_url(
+                    app, _tide_url(station_id, begin, end), f"tide:{station_id}"
+                ):
+                    ok += 1
+                else:
+                    cycle_failed = True
+                await asyncio.sleep(PREWARM_REQUEST_GAP_S)
+
+            # 3. Current-prediction stations
+            for station_id in CURRENT_STATIONS:
+                if await _prewarm_url(
+                    app, _current_url(station_id, begin, end), f"current:{station_id}"
+                ):
+                    ok += 1
+                else:
+                    cycle_failed = True
+                await asyncio.sleep(PREWARM_REQUEST_GAP_S)
+
+            if cycle_failed:
+                sleep_s = PREWARM_FAIL_BACKOFF_S[
+                    min(backoff_idx, len(PREWARM_FAIL_BACKOFF_S) - 1)
+                ]
+                backoff_idx += 1
+                log.info(
+                    "env pre-warm had failures (%d ok); retry in %ds", ok, sleep_s
+                )
+            else:
+                backoff_idx = 0
+                sleep_s = PREWARM_OK_INTERVAL_S
+                log.info(
+                    "env pre-warm complete: %d urls cached; next cycle in %dm",
+                    ok, sleep_s // 60,
+                )
+            await asyncio.sleep(sleep_s)
+    except asyncio.CancelledError:
+        return
+
+
 # ---- SFBOFS pre-warm -----------------------------------------------------
 
 async def sfbofs_prewarm_loop(app: web.Application):
@@ -442,10 +606,15 @@ async def on_startup(app: web.Application):
         nmea_tcp_broadcast(app["tcp_host"], app["tcp_port"], clients_snapshot, send_to_ws)
     )
     app["prewarm_task"] = asyncio.create_task(sfbofs_prewarm_loop(app))
+    app["env_prewarm_task"] = asyncio.create_task(env_prewarm_loop(app))
 
 
 async def on_cleanup(app: web.Application):
-    for t in (app.get("nmea_task"), app.get("prewarm_task")):
+    for t in (
+        app.get("nmea_task"),
+        app.get("prewarm_task"),
+        app.get("env_prewarm_task"),
+    ):
         if t:
             t.cancel()
     if "http" in app:
