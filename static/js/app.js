@@ -1425,16 +1425,21 @@ function initFlowLegend() {
 initFlowLegend();
 
 async function loadCurrentField() {
+    const flowSourceEl = document.getElementById('flow-legend-source');
+    const _showErr = (msg) => { if (flowSourceEl) flowSourceEl.innerHTML = `<span style="color:#e74c3c">\u26a0 ${msg}</span>`; };
     try {
         // Show loading state in legend immediately
-        const flowSourceEl = document.getElementById('flow-legend-source');
         if (flowSourceEl && !flowSourceEl.textContent) {
             flowSourceEl.innerHTML = '<span style="opacity:0.6">Loading current data\u2026</span>';
         }
         const data = await fetchCurrentField(forecastMinutes);
-        if (!data) return;
+        if (!data) {
+            _showErr('Currents unavailable \u2014 Pi offline?');
+            return;
+        }
         if (data.error) {
             console.log('SFBOFS not available:', data.error);
+            _showErr('Currents unavailable');
             return;
         }
 
@@ -1472,6 +1477,7 @@ async function loadCurrentField() {
         }
     } catch (e) {
         console.log('Current field fetch failed (optional)');
+        _showErr('Currents fetch failed — retrying when online');
     }
 }
 
@@ -1600,23 +1606,28 @@ if (windColorToggle) {
 }
 
 async function loadWindField() {
+    const _windSourceEl = document.getElementById('wind-legend-source');
+    const _showWindErr = (msg) => { if (_windSourceEl) _windSourceEl.innerHTML = `<span style="color:#e74c3c">⚠ ${msg}</span>`; };
     try {
         // Wind forecasts limited to 48h (HRRR model limit)
         if (forecastMinutes > 48 * 60) {
             // Beyond wind forecast range — show note in legend
-            const wsource = document.getElementById('wind-legend-source');
-            if (wsource) wsource.textContent = 'Wind forecast unavailable beyond 48h';
+            if (_windSourceEl) _windSourceEl.textContent = 'Wind forecast unavailable beyond 48h';
             return;
         }
         // Show loading state in legend immediately
-        const sourceEl = document.getElementById('wind-legend-source');
+        const sourceEl = _windSourceEl;
         if (sourceEl && !sourceEl.textContent) {
             sourceEl.innerHTML = '<span style="opacity:0.6">Loading wind data\u2026</span>';
         }
         const data = await fetchWindField(forecastMinutes);
-        if (!data) return;
+        if (!data) {
+            _showWindErr('Wind unavailable — Pi offline?');
+            return;
+        }
         if (data.error) {
             console.log('Wind data not available:', data.error);
+            _showWindErr('Wind unavailable');
             return;
         }
 
@@ -1651,6 +1662,7 @@ async function loadWindField() {
         }
     } catch (e) {
         console.log('Wind field fetch failed (optional)');
+        _showWindErr('Wind fetch failed — retrying when online');
     }
 }
 

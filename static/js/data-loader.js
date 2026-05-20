@@ -58,6 +58,21 @@ function dataBase()     { return (typeof window !== 'undefined' && window.APP_CO
 function noaaApi()      { return (typeof window !== 'undefined' && window.APP_CONFIG && window.APP_CONFIG.apiBase && window.APP_CONFIG.apiBase.noaa)      || 'https://api.tidesandcurrents.noaa.gov/api/prod/datagetter'; }
 function openMeteoApi() { return (typeof window !== 'undefined' && window.APP_CONFIG && window.APP_CONFIG.apiBase && window.APP_CONFIG.apiBase.openMeteo) || 'https://api.open-meteo.com/v1/forecast'; }
 
+// --- Fetch helper with timeout ---
+// Default timeouts tuned for the boat-mode case where the Pi reverse-proxies
+// upstream APIs over a flaky satcom link. Without a timeout, fetch() can hang
+// for minutes if the Pi's upstream connection stalls — UI shows "Loading…"
+// forever. With AbortController, we fail fast and surface an error.
+async function _fetchWithTimeout(url, timeoutMs = 15000, options = {}) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+        return await fetch(url, { ...options, signal: controller.signal });
+    } finally {
+        clearTimeout(timer);
+    }
+}
+
 // --- Helpers ---
 
 function _ymd(d) {
@@ -116,7 +131,7 @@ async function fetchCurrentField(minutesOffset = 0) {
 
     const fileIndex = Math.min(48, elapsedHours + offsetHours);
     const url = `${dataBase()}/sfbofs/hour_${String(fileIndex).padStart(2, '0')}.json`;
-    const res = await fetch(url);
+    const res = await _fetchWithTimeout(url, 30000);
     if (!res.ok) return { unavailable: true, requestedHour: fileIndex };
     const data = await res.json();
     if (data.model_run) {
@@ -133,7 +148,7 @@ async function fetchCurrentFieldHighRes(minutesOffset = 0) {
     }
     const fileIndex = Math.min(48, elapsedHours + offsetHours);
     const url = `${dataBase()}/sfbofs_gg/hour_${String(fileIndex).padStart(2, '0')}.json`;
-    const res = await fetch(url);
+    const res = await _fetchWithTimeout(url, 30000);
     if (!res.ok) return null;
     return await res.json();
 }
@@ -163,7 +178,7 @@ async function _fetchWindGridFromAPI() {
         + '&hourly=wind_speed_10m,wind_direction_10m,wind_gusts_10m'
         + '&models=gfs_seamless&wind_speed_unit=kn&forecast_hours=49';
 
-    const res = await fetch(url);
+    const res = await _fetchWithTimeout(url, 15000);
     if (res.status === 429) {
         _windRateLimitedUntil = Date.now() + 5 * 60000;
         console.warn('Open-Meteo rate limited — backing off 5 min');
@@ -257,7 +272,7 @@ async function fetchWindField(minutesOffset = 0) {
     let stations = [];
     if (minutesOffset === 0) {
         try {
-            const stationsRes = await fetch(`${dataBase()}/wind/stations.json`);
+            const stationsRes = await _fetchWithTimeout(`${dataBase()}/wind/stations.json`, 10000);
             if (stationsRes.ok) stations = await stationsRes.json();
         } catch (e) { /* optional */ }
     }
@@ -345,7 +360,7 @@ async function fetchTideHeights(minutesOffset = 0) {
             let data = _tideCache.get(stationId);
             if (!data || Date.now() - data.fetchedAt > 6 * 3600000) {
                 const url = `${noaaApi()}?begin_date=${begin}&end_date=${end}&station=${stationId}&product=predictions&datum=MLLW&units=english&time_zone=gmt&format=json&interval=6`;
-                const res = await fetch(url);
+                const res = await _fetchWithTimeout(url, 12000);
                 if (!res.ok) return null;
                 const json = await res.json();
                 data = { predictions: json.predictions || [], fetchedAt: Date.now() };
@@ -383,7 +398,7 @@ async function fetchWaterLevels() {
             }
 
             const url = `${noaaApi()}?date=latest&station=${stationId}&product=water_level&datum=MLLW&units=english&time_zone=gmt&format=json`;
-            const res = await fetch(url);
+            const res = await _fetchWithTimeout(url, 10000);
             if (!res.ok) return null;
             const json = await res.json();
             if (json.error || !json.data || !json.data.length) return null;
@@ -499,7 +514,7 @@ async function fetchCurrents(minutesOffset = 0) {
             let data = _currentCache.get(stationId);
             if (!data || Date.now() - data.fetchedAt > 6 * 3600000) {
                 const url = `${noaaApi()}?begin_date=${begin}&end_date=${end}&station=${stationId}&product=currents_predictions&units=english&time_zone=gmt&format=json&interval=6`;
-                const res = await fetch(url);
+                const res = await _fetchWithTimeout(url, 12000);
                 if (!res.ok) return null;
                 const json = await res.json();
                 const preds = (json.current_predictions && json.current_predictions.cp) || json.predictions || [];
