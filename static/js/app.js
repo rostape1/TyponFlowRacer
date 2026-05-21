@@ -1116,6 +1116,13 @@ const _routeDetailsBody = document.getElementById('route-details-body');
 const _routeDetailsClose = document.getElementById('route-details-close');
 let _lastRouteResult = null;
 
+const _routeVariant = document.getElementById('route-variant');
+if (_routeVariant) {
+    _routeVariant.addEventListener('change', () => {
+        if (_routeStart && _routeEnd) _runRoute();
+    });
+}
+
 if (_routePerf) {
     _routePerf.addEventListener('input', () => {
         if (_routePerfVal) _routePerfVal.textContent = _routePerf.value + '%';
