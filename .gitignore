@@ -28,3 +28,14 @@ static.tgz
 # Claude Code
 .claude/
 .gstack/
+
+# Local dev junk that should never be committed (was accidentally swept in by `git add -A`)
+logs/
+logs.zip
+*.txt
+vendor/
+boat_test.sh
+build_static_bundle.sh
+debug_pi.sh
+nmea_loggerOLD.py
+wind_radar.html
