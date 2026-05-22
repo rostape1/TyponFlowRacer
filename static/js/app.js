@@ -1210,6 +1210,11 @@ async function _runRoute() {
 
         if (result.error) {
             _routeStatus.innerHTML = `<span style="color:#e74c3c">${result.error}</span>`;
+            // Clear the previous variant's result so the panel doesn't show stale
+            // ETA / Distance numbers from the last successful run alongside the
+            // error message.
+            if (_routeResult) _routeResult.classList.add('hidden');
+            if (_routeRenderer) _routeRenderer.routeLayer.clearLayers();
             if (_routeClear) _routeClear.classList.remove('hidden');
             return;
         }
