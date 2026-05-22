@@ -184,6 +184,12 @@ function computeRoute(startLat, startLon, endLat, endLon, startTimeMs, perfFacto
             return { error: 'No wind data available' };
         }
 
+        // Grids are indexed by hours-from-now floored to whole hours, but the
+        // route start can be at any minute. Pass the sub-hour fraction to the
+        // worker so its grid lookups align to the actual forecast clock.
+        const forecastOffsetMin = Math.max(0, Math.floor((startTimeMs - Date.now()) / 60000));
+        const gridOffsetH = (forecastOffsetMin % 60) / 60;
+
         return new Promise((resolve, reject) => {
             if (_routeWorker) _routeWorker.terminate();
             _routeWorker = new Worker('js/route-worker.js?v=' + (typeof APP_BUILD !== 'undefined' ? APP_BUILD : 'dev'));
@@ -205,7 +211,7 @@ function computeRoute(startLat, startLon, endLat, endLon, startTimeMs, perfFacto
             };
 
             _routeWorker.postMessage({
-                params: { startLat, startLon, endLat, endLon, startTimeMs, perfFactor, variant },
+                params: { startLat, startLon, endLat, endLon, startTimeMs, perfFactor, variant, gridOffsetH },
                 sfbofsGrids: [...store.sfbofsGrids],
                 sfbofsGridsHR: [...store.sfbofsGridsHR],
                 hycomGrids: [...store.hycomGrids],
