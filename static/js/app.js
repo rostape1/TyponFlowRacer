@@ -1203,7 +1203,14 @@ async function _runRoute() {
             _routeEnd.lat, _routeEnd.lon,
             startTime, perf,
             (step, total) => {
-                _routeStatus.innerHTML = `<span style="color:#f39c12">Computing... ${Math.round(step / total * 100)}%</span>`;
+                // Show elapsed sailing time (the time the simulated boat has
+                // accumulated), not raw search progress — h/m is more useful
+                // to a user than "25%" when they're waiting on a long route.
+                const elapsedH = Math.floor(step / 3600);
+                const elapsedM = Math.floor((step % 3600) / 60);
+                const totalH = Math.round(total / 3600);
+                const elapsedStr = elapsedH > 0 ? `${elapsedH}h ${elapsedM}m` : `${elapsedM}m`;
+                _routeStatus.innerHTML = `<span style="color:#f39c12">Computing... ${elapsedStr} of ${totalH}h budget</span>`;
             },
             variant
         );
