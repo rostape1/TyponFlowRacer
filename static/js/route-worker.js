@@ -167,8 +167,11 @@ function _interpolateWindSample(grid, lat, lon) {
 }
 
 // --- Current Interpolation ---
-function interpolateCurrent(sfbofsGrids, sfbofsGridsHR, hycomGrids, startTimeMs, lat, lon, timeMs) {
-    const hoursFromStart = (timeMs - startTimeMs) / 3600000;
+// gridOffsetH is the sub-hour fraction between startTimeMs and the absolute hour
+// the first preloaded grid (index 0) actually represents. Without it, any
+// non-hour-aligned forecast start would silently use grids up to 59 min off.
+function interpolateCurrent(sfbofsGrids, sfbofsGridsHR, hycomGrids, startTimeMs, lat, lon, timeMs, gridOffsetH = 0) {
+    const hoursFromStart = (timeMs - startTimeMs) / 3600000 + gridOffsetH;
     const h0 = Math.floor(hoursFromStart);
     const h1 = h0 + 1;
     const frac = hoursFromStart - h0;
@@ -220,8 +223,8 @@ function _interpolateHycom(hycomGrids, hoursFromStart, lat, lon) {
     return { vx: _lerp(v0.vx, v1.vx, frac), vy: _lerp(v0.vy, v1.vy, frac) };
 }
 
-function interpolateWind(windGrids, startTimeMs, lat, lon, timeMs) {
-    const hoursFromStart = (timeMs - startTimeMs) / 3600000;
+function interpolateWind(windGrids, startTimeMs, lat, lon, timeMs, gridOffsetH = 0) {
+    const hoursFromStart = (timeMs - startTimeMs) / 3600000 + gridOffsetH;
     const h0 = Math.floor(hoursFromStart);
     const h1 = h0 + 1;
     const frac = hoursFromStart - h0;
@@ -340,7 +343,7 @@ self.onmessage = function(e) {
     const hycomGrids = new Map(hyRaw);
     const windGrids = new Map(wRaw);
 
-    const { startLat, startLon, endLat, endLon, startTimeMs, perfFactor, variant } = params;
+    const { startLat, startLon, endLat, endLon, startTimeMs, perfFactor, variant, gridOffsetH = 0 } = params;
     const useVMC = variant === 'vmc' || variant === 'both';
     const polarFalloff = variant === 'falloff' || variant === 'both';
 
@@ -364,18 +367,26 @@ self.onmessage = function(e) {
         const newPoints = [];
 
         for (const pt of wavefront) {
-            const current = interpolateCurrent(sfbofsGrids, sfbofsGridsHR, hycomGrids, startTimeMs, pt.lat, pt.lon, pt.timeMs);
-            const wind = interpolateWind(windGrids, startTimeMs, pt.lat, pt.lon, pt.timeMs);
-            if (!wind || wind.speed < 0.5) continue;
-            if (wind.speed > maxWindSeen) maxWindSeen = wind.speed;
-            const windFromDeg = (Math.atan2(-wind.u, -wind.v) * RAD2DEG + 360) % 360;
+            const current = interpolateCurrent(sfbofsGrids, sfbofsGridsHR, hycomGrids, startTimeMs, pt.lat, pt.lon, pt.timeMs, gridOffsetH);
+            const windG = interpolateWind(windGrids, startTimeMs, pt.lat, pt.lon, pt.timeMs, gridOffsetH);
+            if (!windG) continue;
+            // Polar takes TWA against wind-over-water (the wind the sails feel).
+            // Subtract the current vector from the ground-frame wind. With 2-3 kn
+            // currents this shifts effective TWA by 15-30°; using wind-over-ground
+            // here was driving spurious detours.
+            const windU = windG.u - (current ? current.vx : 0);
+            const windV = windG.v - (current ? current.vy : 0);
+            const tws = Math.sqrt(windU * windU + windV * windV);
+            if (tws < 0.5) continue;
+            if (tws > maxWindSeen) maxWindSeen = tws;
+            const windFromDeg = (Math.atan2(-windU, -windV) * RAD2DEG + 360) % 360;
 
             for (let hi = 0; hi < numH; hi++) {
                 const headingDeg = hi * hStep;
                 const headingRad = headingDeg * DEG2RAD;
                 let twa = Math.abs(headingDeg - windFromDeg);
                 if (twa > 180) twa = 360 - twa;
-                const bsp = getBoatSpeed(twa, wind.speed, perfFactor, polarFalloff);
+                const bsp = getBoatSpeed(twa, tws, perfFactor, polarFalloff);
                 if (bsp < 0.5) continue;
 
                 // Tack/gybe penalty: adds dead time (boat stalls during maneuver)
@@ -393,12 +404,12 @@ self.onmessage = function(e) {
                 const newLon = pt.lon + (gvx / (NM_PER_DEG_LAT * Math.cos(pt.lat * DEG2RAD))) * dtHours;
 
                 const cBenefit = current ? current.vx * Math.sin(headingRad) + current.vy * Math.cos(headingRad) : 0;
-                const aw = apparentWind(twa, wind.speed, bsp);
+                const aw = apparentWind(twa, tws, bsp);
 
                 const newPt = {
                     lat: newLat, lon: newLon, timeMs: pt.timeMs + (stepS + tackTimePenaltyS) * 1000,
                     parent: pt, heading: headingDeg, cBenefit,
-                    tws: wind.speed, twa, bsp,
+                    tws, twa, bsp,
                     aws: aw.aws,
                     awa: aw.awa,
                 };
