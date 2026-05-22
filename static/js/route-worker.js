@@ -251,7 +251,7 @@ const HEADING_STEP_HR = 360 / NUM_HEADINGS_HR;
 const TIME_STEP_S = 120;
 const TIME_STEP_HR_S = 60;
 const TIME_STEP_OPEN_S = 300;
-const MAX_TIME_S = 86400;
+const MAX_TIME_S = 172800;
 const DEST_RADIUS_NM = 0.15;
 const PRUNE_SECTORS = 180;
 const MAX_DIVERSION_DEG = 180;
@@ -355,7 +355,7 @@ self.onmessage = function(e) {
     let maxWindSeen = 0;
     let elapsedS = 0;
     let step = 0;
-    const maxSteps = 1500;
+    const maxSteps = 2500;
 
     while (elapsedS < MAX_TIME_S && step < maxSteps) {
         const nearLand = wavefront.some(pt => _isTooCloseToLand(pt.lat, pt.lon));
@@ -396,17 +396,27 @@ self.onmessage = function(e) {
                     const bsp = getBoatSpeed(twa, tws, perfFactor, polarFalloff);
                     if (bsp < 0.5) continue;
 
-                    // Tack/gybe penalty: adds dead time (boat stalls during maneuver)
-                    let tackTimePenaltyS = 0;
+                    // Tack/gybe penalty as a speed reduction during the step,
+                    // not as extra time on this point. Previously we added
+                    // tackTimePenaltyS to newPt.timeMs, which let wavefront
+                    // points drift to different absolute times — breaking the
+                    // equal-time isochrone invariant that pruning assumes.
+                    // Now: the boat stalls for tackTimePenaltyS of the step
+                    // and sails the remainder, so the *position* reflects the
+                    // penalty but the *time* stays uniform across the wavefront.
+                    let tackPenaltyS = 0;
                     if (pt.heading >= 0) {
                         let hdgChange = Math.abs(headingDeg - pt.heading);
                         if (hdgChange > 180) hdgChange = 360 - hdgChange;
-                        if (hdgChange > 60) tackTimePenaltyS = 60;
-                        else if (hdgChange > 30) tackTimePenaltyS = 20;
+                        if (hdgChange > 60) tackPenaltyS = 60;
+                        else if (hdgChange > 30) tackPenaltyS = 20;
                     }
+                    const sailFraction = Math.max(0, 1 - tackPenaltyS / stepS);
+                    const effBsp = bsp * sailFraction;
+                    if (effBsp < 0.5) continue;
 
-                    const gvx = bsp * Math.sin(headingRad) + (current ? current.vx : 0);
-                    const gvy = bsp * Math.cos(headingRad) + (current ? current.vy : 0);
+                    const gvx = effBsp * Math.sin(headingRad) + (current ? current.vx : 0);
+                    const gvy = effBsp * Math.cos(headingRad) + (current ? current.vy : 0);
                     const newLat = pt.lat + (gvy / NM_PER_DEG_LAT) * dtHours;
                     const newLon = pt.lon + (gvx / (NM_PER_DEG_LAT * Math.cos(pt.lat * DEG2RAD))) * dtHours;
 
@@ -414,7 +424,7 @@ self.onmessage = function(e) {
                     const aw = apparentWind(twa, tws, bsp);
 
                     const newPt = {
-                        lat: newLat, lon: newLon, timeMs: pt.timeMs + (stepS + tackTimePenaltyS) * 1000,
+                        lat: newLat, lon: newLon, timeMs: pt.timeMs + stepS * 1000,
                         parent: pt, heading: headingDeg, cBenefit,
                         tws, twa, bsp,
                         aws: aw.aws,

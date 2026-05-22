@@ -144,12 +144,14 @@ function makeWorker() {
     const src = readFileSync(join(ROOT, 'static/js/route-worker.js'), 'utf8');
     let messageHandler = null;
     let result = null;
+    let progressCount = 0;
+    let lastProgress = null;
     const fakeSelf = {
         set onmessage(fn) { messageHandler = fn; },
         get onmessage() { return messageHandler; },
         postMessage(msg) {
             if (msg.type === 'result') result = msg.data;
-            // progress messages ignored in tests
+            else if (msg.type === 'progress') { progressCount++; lastProgress = msg; }
         },
     };
     // eslint-disable-next-line no-new-func
@@ -157,8 +159,10 @@ function makeWorker() {
     return {
         run(message) {
             result = null;
+            progressCount = 0;
+            lastProgress = null;
             messageHandler({ data: message });
-            return result;
+            return { result, progressCount, lastProgress };
         },
     };
 }
@@ -166,7 +170,7 @@ function makeWorker() {
 // --- Main ---
 async function main() {
     const startTimeMs = Date.now();
-    const hoursNeeded = 25;
+    const hoursNeeded = 49;
     const rhumbNm = haversineNm(START_LAT, START_LON, END_LAT, END_LON);
 
     console.log(`Route: (${START_LAT}, ${START_LON}) → (${END_LAT}, ${END_LON})`);
@@ -206,7 +210,7 @@ async function main() {
     const worker = makeWorker();
     for (const variant of VARIANTS) {
         const t0 = Date.now();
-        const result = worker.run({
+        const { result, progressCount, lastProgress } = worker.run({
             ...baseMessage,
             params: {
                 startLat: START_LAT, startLon: START_LON,
@@ -215,13 +219,16 @@ async function main() {
             },
         });
         const wallMs = Date.now() - t0;
+        const progStr = lastProgress
+            ? `prog ${progressCount}x last=${(lastProgress.elapsedS/3600).toFixed(1)}h`
+            : 'no progress';
 
         if (result?.error) {
-            console.log(`${variant.padEnd(16)} —         —           —       —       ${result.error}  (${wallMs}ms)`);
+            console.log(`${variant.padEnd(16)} —         —           —       —       ${result.error}  [${progStr}, ${wallMs}ms]`);
             continue;
         }
         if (!result) {
-            console.log(`${variant.padEnd(16)} no result returned  (${wallMs}ms)`);
+            console.log(`${variant.padEnd(16)} no result returned  [${progStr}, ${wallMs}ms]`);
             continue;
         }
         const eta = result.elapsedMin;
@@ -230,7 +237,7 @@ async function main() {
         const ratio = dist / rhumbNm;
         console.log(
             `${variant.padEnd(16)} ${String(eta).padStart(4)} min  ${dist.toFixed(1).padStart(6)} nm  `
-            + `${avg.toFixed(1).padStart(4)} kn  ${ratio.toFixed(2).padStart(5)}×  ok  (${wallMs}ms)`
+            + `${avg.toFixed(1).padStart(4)} kn  ${ratio.toFixed(2).padStart(5)}×  ok  [${progStr}, ${wallMs}ms]`
         );
     }
 }

@@ -101,7 +101,7 @@ const DEG2RAD = Math.PI / 180;
 const RAD2DEG = 180 / Math.PI;
 const NM_PER_DEG_LAT = 60;
 
-const MAX_TIME_S = 86400;
+const MAX_TIME_S = 172800;
 
 // --- Router Data Store (data loading only) ---
 class RouterDataStore {
