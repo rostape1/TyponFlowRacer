@@ -371,77 +371,117 @@ self.onmessage = function(e) {
         for (const pt of wavefront) {
             const current = interpolateCurrent(sfbofsGrids, sfbofsGridsHR, hycomGrids, startTimeMs, pt.lat, pt.lon, pt.timeMs, gridOffsetH);
             const windG = interpolateWind(windGrids, startTimeMs, pt.lat, pt.lon, pt.timeMs, gridOffsetH);
-            if (!windG) continue;
+
             // Polar takes TWA against wind-over-water (the wind the sails feel).
             // Subtract the current vector from the ground-frame wind. With 2-3 kn
             // currents this shifts effective TWA by 15-30°; using wind-over-ground
             // here was driving spurious detours.
-            const windU = windG.u - (current ? current.vx : 0);
-            const windV = windG.v - (current ? current.vy : 0);
-            const tws = Math.sqrt(windU * windU + windV * windV);
-            if (tws < 0.5) continue;
-            if (tws > maxWindSeen) maxWindSeen = tws;
-            const windFromDeg = (Math.atan2(-windU, -windV) * RAD2DEG + 360) % 360;
+            let tws = 0, windFromDeg = 0;
+            if (windG) {
+                const windU = windG.u - (current ? current.vx : 0);
+                const windV = windG.v - (current ? current.vy : 0);
+                tws = Math.sqrt(windU * windU + windV * windV);
+                if (tws > maxWindSeen) maxWindSeen = tws;
+                windFromDeg = (Math.atan2(-windU, -windV) * RAD2DEG + 360) % 360;
+            }
 
-            for (let hi = 0; hi < numH; hi++) {
-                const headingDeg = hi * hStep;
-                const headingRad = headingDeg * DEG2RAD;
-                let twa = Math.abs(headingDeg - windFromDeg);
-                if (twa > 180) twa = 360 - twa;
-                const bsp = getBoatSpeed(twa, tws, perfFactor, polarFalloff);
-                if (bsp < 0.5) continue;
+            let anyExpanded = false;
 
-                // Tack/gybe penalty: adds dead time (boat stalls during maneuver)
-                let tackTimePenaltyS = 0;
-                if (pt.heading >= 0) {
-                    let hdgChange = Math.abs(headingDeg - pt.heading);
-                    if (hdgChange > 180) hdgChange = 360 - hdgChange;
-                    if (hdgChange > 60) tackTimePenaltyS = 60;
-                    else if (hdgChange > 30) tackTimePenaltyS = 20;
+            if (tws >= 0.5) {
+                for (let hi = 0; hi < numH; hi++) {
+                    const headingDeg = hi * hStep;
+                    const headingRad = headingDeg * DEG2RAD;
+                    let twa = Math.abs(headingDeg - windFromDeg);
+                    if (twa > 180) twa = 360 - twa;
+                    const bsp = getBoatSpeed(twa, tws, perfFactor, polarFalloff);
+                    if (bsp < 0.5) continue;
+
+                    // Tack/gybe penalty: adds dead time (boat stalls during maneuver)
+                    let tackTimePenaltyS = 0;
+                    if (pt.heading >= 0) {
+                        let hdgChange = Math.abs(headingDeg - pt.heading);
+                        if (hdgChange > 180) hdgChange = 360 - hdgChange;
+                        if (hdgChange > 60) tackTimePenaltyS = 60;
+                        else if (hdgChange > 30) tackTimePenaltyS = 20;
+                    }
+
+                    const gvx = bsp * Math.sin(headingRad) + (current ? current.vx : 0);
+                    const gvy = bsp * Math.cos(headingRad) + (current ? current.vy : 0);
+                    const newLat = pt.lat + (gvy / NM_PER_DEG_LAT) * dtHours;
+                    const newLon = pt.lon + (gvx / (NM_PER_DEG_LAT * Math.cos(pt.lat * DEG2RAD))) * dtHours;
+
+                    const cBenefit = current ? current.vx * Math.sin(headingRad) + current.vy * Math.cos(headingRad) : 0;
+                    const aw = apparentWind(twa, tws, bsp);
+
+                    const newPt = {
+                        lat: newLat, lon: newLon, timeMs: pt.timeMs + (stepS + tackTimePenaltyS) * 1000,
+                        parent: pt, heading: headingDeg, cBenefit,
+                        tws, twa, bsp,
+                        aws: aw.aws,
+                        awa: aw.awa,
+                    };
+
+                    const distToDest = _haversineNm(newLat, newLon, endLat, endLon);
+                    // Drop the safety buffer near the destination — users intentionally
+                    // pick shoreline waypoints (harbors, anchorages) and the buffer would
+                    // otherwise stall the wavefront 200m offshore.
+                    const nearDest = distToDest < DEST_APPROACH_NM;
+                    const landCheck = nearDest ? _isLand : _isTooCloseToLand;
+                    const segCheck  = nearDest ? _segmentCrossesLandStrict : _segmentCrossesLand;
+
+                    if (distToDest < DEST_RADIUS_NM &&
+                        !_isLand(newLat, newLon) &&
+                        !_segmentCrossesLandStrict(pt.lat, pt.lon, newLat, newLon)) {
+                        const path = _backtrack(newPt);
+                        self.postMessage({ type: 'result', data: {
+                            path, isochrones,
+                            elapsedMin: Math.round((newPt.timeMs - startTimeMs) / 60000),
+                            distanceNm: _pathDistance(path),
+                        }});
+                        return;
+                    }
+
+                    if (!landCheck(newLat, newLon) &&
+                        !segCheck(pt.lat, pt.lon, newLat, newLon)) {
+                        const ptBrg = _bearingDeg(startLat, startLon, newLat, newLon);
+                        let brgDiff = Math.abs(ptBrg - destBrg);
+                        if (brgDiff > 180) brgDiff = 360 - brgDiff;
+                        if (brgDiff <= MAX_DIVERSION_DEG) {
+                            newPoints.push(newPt);
+                            anyExpanded = true;
+                        }
+                    }
                 }
+            }
 
-                const gvx = bsp * Math.sin(headingRad) + (current ? current.vx : 0);
-                const gvy = bsp * Math.cos(headingRad) + (current ? current.vy : 0);
-                const newLat = pt.lat + (gvy / NM_PER_DEG_LAT) * dtHours;
-                const newLon = pt.lon + (gvx / (NM_PER_DEG_LAT * Math.cos(pt.lat * DEG2RAD))) * dtHours;
-
-                const cBenefit = current ? current.vx * Math.sin(headingRad) + current.vy * Math.cos(headingRad) : 0;
-                const aw = apparentWind(twa, tws, bsp);
-
-                const newPt = {
-                    lat: newLat, lon: newLon, timeMs: pt.timeMs + (stepS + tackTimePenaltyS) * 1000,
-                    parent: pt, heading: headingDeg, cBenefit,
-                    tws, twa, bsp,
-                    aws: aw.aws,
-                    awa: aw.awa,
-                };
-
-                const distToDest = _haversineNm(newLat, newLon, endLat, endLon);
-                // Drop the safety buffer near the destination — users intentionally
-                // pick shoreline waypoints (harbors, anchorages) and the buffer would
-                // otherwise stall the wavefront 200m offshore.
+            // Drift fallback for dead-air points: if no heading produced a viable
+            // expansion (either wind below the polar threshold or every heading
+            // hit land), advance this point by the current vector alone so it
+            // can wait out the wind hole. Without this, calm patches silently
+            // drop points from the wavefront and the engine raises a false
+            // "no reachable path" error when the route just needs to drift for
+            // a step or two.
+            if (!anyExpanded) {
+                const cvx = current ? current.vx : 0;
+                const cvy = current ? current.vy : 0;
+                const driftLat = pt.lat + (cvy / NM_PER_DEG_LAT) * dtHours;
+                const driftLon = pt.lon + (cvx / (NM_PER_DEG_LAT * Math.cos(pt.lat * DEG2RAD))) * dtHours;
+                const distToDest = _haversineNm(driftLat, driftLon, endLat, endLon);
                 const nearDest = distToDest < DEST_APPROACH_NM;
                 const landCheck = nearDest ? _isLand : _isTooCloseToLand;
                 const segCheck  = nearDest ? _segmentCrossesLandStrict : _segmentCrossesLand;
-
-                if (distToDest < DEST_RADIUS_NM &&
-                    !_isLand(newLat, newLon) &&
-                    !_segmentCrossesLandStrict(pt.lat, pt.lon, newLat, newLon)) {
-                    const path = _backtrack(newPt);
-                    self.postMessage({ type: 'result', data: {
-                        path, isochrones,
-                        elapsedMin: Math.round((newPt.timeMs - startTimeMs) / 60000),
-                        distanceNm: _pathDistance(path),
-                    }});
-                    return;
-                }
-
-                if (!landCheck(newLat, newLon) &&
-                    !segCheck(pt.lat, pt.lon, newLat, newLon)) {
-                    const ptBrg = _bearingDeg(startLat, startLon, newLat, newLon);
-                    let brgDiff = Math.abs(ptBrg - destBrg);
-                    if (brgDiff > 180) brgDiff = 360 - brgDiff;
-                    if (brgDiff <= MAX_DIVERSION_DEG) newPoints.push(newPt);
+                if (!landCheck(driftLat, driftLon) &&
+                    !segCheck(pt.lat, pt.lon, driftLat, driftLon)) {
+                    newPoints.push({
+                        lat: driftLat, lon: driftLon,
+                        timeMs: pt.timeMs + stepS * 1000,
+                        parent: pt,
+                        // Preserve the previous heading so a subsequent sailing
+                        // step into wind doesn't get charged a phantom tack
+                        // penalty just for coming out of drift.
+                        heading: pt.heading,
+                        cBenefit: 0, tws, twa: 0, bsp: 0, aws: 0, awa: 0,
+                    });
                 }
             }
         }
