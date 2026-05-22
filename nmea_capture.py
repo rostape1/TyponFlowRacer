@@ -188,15 +188,19 @@ _outfile = None
 
 async def capture_ws(ws_url):
     stats["source"] = ws_url
-    ssl_ctx = ssl.create_default_context()
-    ssl_ctx.check_hostname = False
-    ssl_ctx.verify_mode = ssl.CERT_NONE
+    if ws_url.startswith("wss://"):
+        ssl_ctx = ssl.create_default_context()
+        ssl_ctx.check_hostname = False
+        ssl_ctx.verify_mode = ssl.CERT_NONE
+    else:
+        ssl_ctx = None
 
     while True:
         print(f"Connecting to {ws_url}...")
         stats["connected"] = False
         try:
-            async with websockets.connect(ws_url, ssl=ssl_ctx) as ws:
+            connect_kwargs = {"ssl": ssl_ctx} if ssl_ctx is not None else {}
+            async with websockets.connect(ws_url, **connect_kwargs) as ws:
                 stats["connected"] = True
                 print("Connected.")
                 async for message in ws:
