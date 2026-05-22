@@ -264,9 +264,14 @@ function _pruneIsochrone(points, startLat, startLon, destLat, destLon, useVMC) {
         const brg = _bearingDeg(startLat, startLon, pt.lat, pt.lon);
         const sector = Math.floor(brg / (360 / PRUNE_SECTORS)) % PRUNE_SECTORS;
         const distFromStart = _haversineNm(startLat, startLon, pt.lat, pt.lon);
-        // VMC variant: project displacement onto bearing-to-destination axis (rewards progress, not raw distance)
+        // VMC variant biases sector priority toward the destination bearing while
+        // staying monotonic in distFromStart, so within any sector the farthest
+        // point still wins — even on the back side of the wavefront. Using a raw
+        // cos projection here let "going-backward" sectors keep their *closest*
+        // point (least-negative score), which collapsed the wavefront into the
+        // coast and produced spurious "no reachable path" errors.
         const score = useVMC
-            ? distFromStart * Math.cos(brg * DEG2RAD - destBrgRad)
+            ? distFromStart * (1 + Math.cos(brg * DEG2RAD - destBrgRad)) / 2
             : distFromStart;
         if (!sectors[sector] || score > sectors[sector].score) sectors[sector] = { pt, score };
         const dDest = _haversineNm(pt.lat, pt.lon, destLat, destLon);
