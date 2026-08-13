@@ -139,44 +139,55 @@ try {
 // silently presenting a dead forecast as current data. Refuse it instead.
 const SFBOFS_RUN_STALE_HOURS = 12;
 
+// Memoized discovery of the true run time. The router fires up to 49
+// fetchCurrentField() calls concurrently (router.js), so this must NOT be a
+// per-call read-modify-write on shared state: without memoizing, every caller
+// independently discovers the run time and then refetches its corrected hour,
+// doubling the request count on every cold load — worst on the satcom link
+// this guard exists to protect.
+let _sfbofsRunPromise = null;
+let _sfbofsRunCheckedAt = 0;  // when the server last confirmed a run time
+
+async function _resolveSfbofsRunTime() {
+    const cachedIsFresh = _sfbofsRunTime &&
+        (Date.now() - _sfbofsRunTime.getTime()) / 3600000 <= SFBOFS_RUN_STALE_HOURS;
+    // A server-confirmed answer is trusted for 60 s even when the run itself is
+    // old, so a genuinely stalled pipeline doesn't re-probe hour_00 every call.
+    if (cachedIsFresh || (Date.now() - _sfbofsRunCheckedAt) < 60000) return _sfbofsRunTime;
+
+    if (!_sfbofsRunPromise) {
+        // hour_00 is the cheapest file that carries model_run metadata.
+        _sfbofsRunPromise = _fetchSfbofsHour(0)
+            .catch(() => null)
+            .then(() => {
+                _sfbofsRunCheckedAt = Date.now();
+                _sfbofsRunPromise = null;
+                return _sfbofsRunTime;
+            });
+    }
+    return _sfbofsRunPromise;
+}
+
+// Age of the live run in hours, or null if unknown. Single source of truth for
+// both the standard and high-res paths so they can never disagree about
+// whether the pipeline is stalled.
+async function _sfbofsRunAgeHours() {
+    const runTime = await _resolveSfbofsRunTime();
+    if (!runTime) return null;
+    return Math.max(0, Math.floor((Date.now() - runTime.getTime()) / 3600000));
+}
+
 async function fetchCurrentField(minutesOffset = 0) {
     const offsetHours = Math.max(0, Math.floor(minutesOffset / 60));
 
-    // Compute how many hours into the run we currently are
-    let elapsedHours = 0;
-    if (_sfbofsRunTime) {
-        elapsedHours = Math.max(0, Math.floor((Date.now() - _sfbofsRunTime.getTime()) / 3600000));
+    const elapsedHours = await _sfbofsRunAgeHours();
+    if (elapsedHours !== null && elapsedHours > SFBOFS_RUN_STALE_HOURS) {
+        return { unavailable: true, stale: true, runAgeHours: elapsedHours };
     }
 
-    // A stale *cached* run time is not evidence the pipeline is stalled — it's
-    // usually a leftover localStorage seed from a previous session while the
-    // server already has a fresh run. Never refuse on the cached value alone:
-    // that deadlocks (we'd never fetch, so never learn the real run time, so
-    // the stale seed sticks forever). Distrust the seed, reset to hour_00, and
-    // let the fetched file establish ground truth.
-    if (elapsedHours > SFBOFS_RUN_STALE_HOURS) {
-        _sfbofsRunTime = null;
-        elapsedHours = 0;
-    }
-
-    let fileIndex = Math.min(48, elapsedHours + offsetHours);
-    let data = await _fetchSfbofsHour(fileIndex);
+    const fileIndex = Math.min(48, (elapsedHours || 0) + offsetHours);
+    const data = await _fetchSfbofsHour(fileIndex);
     if (!data) return { unavailable: true, requestedHour: fileIndex };
-
-    // Now that the file has told us the true run time, the index we guessed
-    // may be wrong (we may have reset to hour_00 above). Recompute once and
-    // refetch if it moved, so the displayed field matches the wall clock.
-    if (_sfbofsRunTime) {
-        const trueElapsed = Math.max(0, Math.floor((Date.now() - _sfbofsRunTime.getTime()) / 3600000));
-        if (trueElapsed > SFBOFS_RUN_STALE_HOURS) {
-            return { unavailable: true, stale: true, runAgeHours: trueElapsed };
-        }
-        const correctIndex = Math.min(48, trueElapsed + offsetHours);
-        if (correctIndex !== fileIndex) {
-            const better = await _fetchSfbofsHour(correctIndex);
-            if (better) { data = better; fileIndex = correctIndex; }
-        }
-    }
     return data;
 }
 
@@ -196,11 +207,13 @@ async function _fetchSfbofsHour(fileIndex) {
 
 async function fetchCurrentFieldHighRes(minutesOffset = 0) {
     const offsetHours = Math.max(0, Math.floor(minutesOffset / 60));
-    let elapsedHours = 0;
-    if (_sfbofsRunTime) {
-        elapsedHours = Math.max(0, Math.floor((Date.now() - _sfbofsRunTime.getTime()) / 3600000));
-    }
-    const fileIndex = Math.min(48, elapsedHours + offsetHours);
+
+    // Same staleness rule as the standard path: a stale run would alias every
+    // requested hour to hour_48 and quietly serve a dead forecast.
+    const elapsedHours = await _sfbofsRunAgeHours();
+    if (elapsedHours !== null && elapsedHours > SFBOFS_RUN_STALE_HOURS) return null;
+
+    const fileIndex = Math.min(48, (elapsedHours || 0) + offsetHours);
     const url = `${dataBase()}/sfbofs_gg/hour_${String(fileIndex).padStart(2, '0')}.json`;
     const res = await _fetchWithTimeout(url, 30000);
     if (!res.ok) return null;
