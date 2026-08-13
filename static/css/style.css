@@ -138,6 +138,13 @@ body {
     color: #27ae60;
 }
 
+/* Downloaded, but with missing forecast hours — must read as "attention",
+   never as the green all-clear. */
+.dl-badge.partial {
+    background: rgba(230, 126, 34, 0.22);
+    color: #e67e22;
+}
+
 @keyframes dl-pulse {
     0%, 100% { opacity: 1; }
     50% { opacity: 0.4; }

@@ -1,5 +1,10 @@
 /**
- * Regression tests for the SFBOFS staleness gate in data-loader.js.
+ * Regression tests for SFBOFS data honesty in data-loader.js / app.js.
+ *
+ * Two related invariants, both about never showing the user stale or wrong
+ * data: the staleness gate (don't serve a dead model run) and the download
+ * sweep (don't silently truncate coverage, and don't report a reach number
+ * that gaps would make wrong).
  *
  * Guards a bug class that has now recurred twice:
  *   1. A stale model run made every forecast offset alias to hour_48, so NOW
@@ -108,6 +113,76 @@ for (const [label, seed] of [['cold', null], ['stale seed', STALE]]) {
     // memoization broke and every caller is re-discovering independently.
     check(`${label}: 49 concurrent calls stay within 50 requests`,
         fetched.length <= 50, `${fetched.length} requests`);
+}
+
+// --- Download sweep: transient faults must not truncate coverage ---
+
+// behave: (hour, attemptIndex) -> 200 | 404 | 500 | 'throw'
+function buildDl(behave) {
+    const attempts = {};
+    const sb = {
+        localStorage: { getItem: () => '{}', setItem: () => {} },
+        console: { log() {}, warn() {} },
+        Date, Math, JSON, Map, Set, Array, Number, String, Object,
+        parseInt, parseFloat, isNaN, AbortController, setTimeout, clearTimeout, Promise,
+        window: undefined,
+        fetch: async (url) => {
+            const m = url.match(/hour_(\d+)\.json/);
+            if (!m) return { ok: true, status: 200, headers: { get: () => null }, json: async () => ({}) };
+            const h = Number(m[1]);
+            attempts[h] = (attempts[h] || 0) + 1;
+            const v = behave(h, attempts[h]);
+            if (v === 'throw') throw new Error('network');
+            if (v === 404) return { ok: false, status: 404, headers: { get: () => null } };
+            if (v === 500) return { ok: false, status: 500, headers: { get: () => null } };
+            return { ok: true, status: 200, headers: { get: () => null },
+                     json: async () => ({ model_run: 't21z 08/12', forecast_hour: h }) };
+        },
+    };
+    const keys = Object.keys(sb);
+    const api = new Function(...keys, src + '\n; return { downloadAllForOffline };')(...keys.map(k => sb[k]));
+    return { api, attempts };
+}
+async function sweep(behave) {
+    const { api, attempts } = buildDl(behave);
+    let flow = null;
+    await api.downloadAllForOffline(null, (cat, v) => { if (cat === 'flow') flow = v; });
+    return { flow, attempts };
+}
+
+console.log('Download sweep:');
+{
+    const { flow } = await sweep(() => 200);
+    check('gapless run caches all 49 hours',
+        flow.count === 49 && flow.maxHour === 48 && flow.gaps.length === 0);
+}
+{
+    // A 404 means the run genuinely produced fewer hours — stop, don't call it a gap.
+    const { flow, attempts } = await sweep((h) => h >= 20 ? 404 : 200);
+    check('404 breaks cleanly and is not a gap',
+        flow.count === 20 && flow.maxHour === 19 && flow.gaps.length === 0);
+    check('404 is not retried', attempts[20] === 1);
+}
+{
+    const { flow, attempts } = await sweep((h, a) => (h === 20 && a === 1) ? 'throw' : 200);
+    check('transient fault is retried once and recovers',
+        flow.count === 49 && flow.gaps.length === 0);
+    check('the retry actually happened', attempts[20] === 2);
+}
+{
+    // The original bug: one blip used to cap coverage at that hour.
+    const { flow } = await sweep((h) => h === 20 ? 500 : 200);
+    check('persistent fault records a gap and keeps going',
+        flow.maxHour === 48 && flow.count === 48 && flow.gaps.join() === '20',
+        JSON.stringify({ max: flow.maxHour, gaps: flow.gaps }));
+}
+{
+    const { flow } = await sweep((h) => (h === 5 || h === 30) ? 500 : 200);
+    check('every gap is recorded', flow.gaps.join() === '5,30', flow.gaps.join());
+}
+{
+    const { flow } = await sweep(() => 'throw');
+    check('total failure reports false, not success-with-gaps', flow === false);
 }
 
 console.log(`\n${pass + fail} tests: ${pass} passed, ${fail} failed`);
