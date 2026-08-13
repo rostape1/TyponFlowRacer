@@ -2241,15 +2241,18 @@ function _getDlStatus() {
 }
 
 // Compute hours of forward forecast remaining from stored model_run + file count
-function _flowHoursAhead(modelRun, count) {
-    if (!modelRun || !count) return null;
+// How far ahead of now the cached flow data reaches, in hours.
+// Keyed off the highest hour actually cached — NOT the count. With gaps the two
+// diverge, and using the count would understate reach (reporting wrong info).
+function _flowHoursAhead(modelRun, maxHour) {
+    if (!modelRun || maxHour == null || maxHour < 0) return null;
     const m = modelRun.match(/t(\d{2})z (\d{2})\/(\d{2})/);
     if (!m) return null;
     const now = new Date();
     let runTime = new Date(Date.UTC(now.getUTCFullYear(), +m[2] - 1, +m[3], +m[1], 0, 0));
     // Guard against Dec/Jan year boundary: if runTime is >12h in future, it's last year
     if (runTime - now > 12 * 3600000) runTime.setUTCFullYear(runTime.getUTCFullYear() - 1);
-    const lastHour = new Date(runTime.getTime() + (count - 1) * 3600000);
+    const lastHour = new Date(runTime.getTime() + maxHour * 3600000);
     return Math.max(0, Math.floor((lastHour - now) / 3600000));
 }
 
@@ -2261,23 +2264,41 @@ function _setDlCategory(cat, success) {
     const s = _getDlStatus();
     s[cat] = new Date().toISOString();
     let hoursAhead = null;
+    let gaps = null;
     if (cat === 'flow' && typeof success === 'object') {
         s['flow_count'] = success.count;
+        s['flow_max_hour'] = success.maxHour;
+        s['flow_gaps'] = success.gaps || [];
         s['flow_model_run'] = success.modelRun || null;
-        hoursAhead = _flowHoursAhead(success.modelRun, success.count);
+        gaps = s['flow_gaps'];
+        hoursAhead = _flowHoursAhead(success.modelRun, success.maxHour);
         // If we can't compute hours (broken model_run), treat as failed download
         if (hoursAhead === null) { _updateDlBadge(cat, null); return; }
     }
     localStorage.setItem('ais_dl_status', JSON.stringify(s));
-    _updateDlBadge(cat, 'done', hoursAhead);
+    _updateDlBadge(cat, 'done', hoursAhead, gaps);
 }
 
-function _updateDlBadge(cat, state, hours) {
+function _updateDlBadge(cat, state, hours, gaps) {
     const el = document.getElementById(DL_BADGE_IDS[cat]);
     if (!el) return;
-    el.classList.remove('done', 'loading');
-    if (state) el.classList.add(state);
-    if (cat === 'flow') el.textContent = (hours != null) ? `Flow +${hours}h` : 'Flow';
+    el.classList.remove('done', 'loading', 'partial');
+    const nGaps = (gaps && gaps.length) || 0;
+    // An incomplete sweep must never look like a clean one. A smaller "+Nh" on
+    // its own is indistinguishable from a shorter model run, so flag the holes
+    // explicitly instead of letting the number quietly imply completeness.
+    if (state === 'done' && nGaps > 0) {
+        el.classList.add('partial');
+        el.title = `${nGaps} forecast hour${nGaps > 1 ? 's' : ''} missing (${gaps.join(', ')}) `
+            + '— network errors during download. Tap download to retry.';
+    } else {
+        if (state) el.classList.add(state);
+        el.removeAttribute('title');
+    }
+    if (cat === 'flow') {
+        if (hours == null) el.textContent = 'Flow';
+        else el.textContent = nGaps > 0 ? `Flow +${hours}h ⚠${nGaps}` : `Flow +${hours}h`;
+    }
 }
 
 function _initDlBadges() {
@@ -2290,10 +2311,16 @@ function _initDlBadges() {
         if (cat === 'wind' && isDone && typeof getWindGridForHour === 'function' && !getWindGridForHour(0)) {
             isDone = false;
         }
+        // Older entries predate flow_max_hour; fall back to count-1, which is
+        // correct for the gapless sweeps that were the only kind then possible.
+        const maxHour = (s['flow_max_hour'] != null)
+            ? s['flow_max_hour']
+            : (s['flow_count'] ? s['flow_count'] - 1 : null);
         const hoursAhead = (cat === 'flow' && isDone)
-            ? _flowHoursAhead(s['flow_model_run'], s['flow_count'])
+            ? _flowHoursAhead(s['flow_model_run'], maxHour)
             : null;
-        _updateDlBadge(cat, isDone ? 'done' : null, hoursAhead);
+        _updateDlBadge(cat, isDone ? 'done' : null, hoursAhead,
+            cat === 'flow' ? s['flow_gaps'] : null);
     }
 }
 

@@ -614,25 +614,53 @@ async function downloadAllForOffline(onProgress, onCategory) {
         if (onProgress) onProgress(completed, totalItems);
     }
 
-    // SFBOFS (up to 49 files per run: hours 0-48, break on first 404)
+    // SFBOFS (up to 49 files per run: hours 0-48).
+    //
+    // A 404 means the run genuinely produced fewer hours — expected, so stop.
+    // Anything else (timeout, 5xx, cold-cache miss returning a bad body) is a
+    // transient network fault: retry once, and if it still fails record the
+    // hour as a GAP and keep going rather than truncating the whole sweep.
+    // Bailing out on a blip at hour 20 silently capped coverage at 20h and
+    // reported it as if that were the run's real extent.
     let flowOk = 0;
     let flowModelRun = null;
-    for (let h = 0; h <= 48; h++) {
+    let flowMaxHour = -1;
+    const flowGaps = [];
+
+    async function _tryHour(h) {
+        // → { ok: true, resp } | { notFound: true } | { failed: true }
         try {
             const resp = await _fetchWithTimeout(`${DATA_BASE}/sfbofs/hour_${String(h).padStart(2, '0')}.json`, 30000);
-            if (!resp.ok) break;
-            flowOk++;
-            if (h === 0) {
-                try {
-                    const d = await resp.json();
-                    flowModelRun = d.model_run;
-                    if (d.model_run) _sfbofsRunTime = _parseSfbofsRunTime(d.model_run);
-                } catch (e) {}
-            }
-        } catch (e) { break; }
+            if (resp.status === 404) return { notFound: true };
+            if (!resp.ok) return { failed: true };
+            return { ok: true, resp };
+        } catch (e) {
+            return { failed: true };
+        }
+    }
+
+    for (let h = 0; h <= 48; h++) {
+        let r = await _tryHour(h);
+        if (r.failed) r = await _tryHour(h);   // one retry for transient faults
+        if (r.notFound) break;                 // end of this run — normal
+        if (!r.ok) { flowGaps.push(h); continue; }
+
+        flowOk++;
+        if (h > flowMaxHour) flowMaxHour = h;
+        if (h === 0) {
+            try {
+                const d = await r.resp.json();
+                flowModelRun = d.model_run;
+                if (d.model_run) _sfbofsRunTime = _parseSfbofsRunTime(d.model_run);
+            } catch (e) {}
+        }
     }
     tick();
-    if (onCategory) onCategory('flow', flowOk > 0 ? { count: flowOk, modelRun: flowModelRun } : false);
+    if (onCategory) {
+        onCategory('flow', flowOk > 0
+            ? { count: flowOk, maxHour: flowMaxHour, gaps: flowGaps, modelRun: flowModelRun }
+            : false);
+    }
 
     // NDBC stations (still static JSON)
     try { await _fetchWithTimeout(`${DATA_BASE}/wind/stations.json`, 10000); } catch (e) {}
