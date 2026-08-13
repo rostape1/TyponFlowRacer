@@ -252,7 +252,11 @@ const TIME_STEP_S = 120;
 const TIME_STEP_HR_S = 60;
 const TIME_STEP_OPEN_S = 300;
 const MAX_TIME_S = 172800;
-const DEST_RADIUS_NM = 0.15;
+// Success radius: a candidate point within this distance of the destination
+// counts as "arrived". Set wide enough that harbor approaches blocked by a
+// final headland (e.g. Monterey's Pt Pinos) still terminate cleanly — the
+// boat is plainly close enough to declare done and motor in.
+const DEST_RADIUS_NM = 1.0;
 const PRUNE_SECTORS = 180;
 const MAX_DIVERSION_DEG = 180;
 
@@ -356,6 +360,13 @@ self.onmessage = function(e) {
     let elapsedS = 0;
     let step = 0;
     const maxSteps = 2500;
+    // Track the closest-ever approach to the destination across the whole
+    // search, not just at the final wavefront. When the wavefront stalls
+    // outside a final headland (Monterey/Pt Pinos), the closest point is
+    // reached early then gets pushed away as the wavefront thrashes — the
+    // useful "best effort" path is the EARLY closest point, not whatever
+    // happens to be nearest at MAX_TIME_S.
+    let bestEverPt = null, bestEverDist = Infinity;
 
     while (elapsedS < MAX_TIME_S && step < maxSteps) {
         const nearLand = wavefront.some(pt => _isTooCloseToLand(pt.lat, pt.lon));
@@ -471,11 +482,20 @@ self.onmessage = function(e) {
             // drop points from the wavefront and the engine raises a false
             // "no reachable path" error when the route just needs to drift for
             // a step or two.
-            if (!anyExpanded) {
-                const cvx = current ? current.vx : 0;
-                const cvy = current ? current.vy : 0;
-                const driftLat = pt.lat + (cvy / NM_PER_DEG_LAT) * dtHours;
-                const driftLon = pt.lon + (cvx / (NM_PER_DEG_LAT * Math.cos(pt.lat * DEG2RAD))) * dtHours;
+            //
+            // BUT: only drift if the current is meaningful (>= 0.2 kn). Without
+            // this guard, a point cornered against a leeward shore (all 72
+            // sailing headings hit land) with no current to carry it re-spawns
+            // itself at the same position every iteration forever — a "ghost
+            // stuck point" that pollutes the wavefront and produces a backtrack
+            // chain with 27+ hours of zero-motion drift. Better to let the
+            // point die: the wavefront still has many other points that can
+            // make progress, and the route-quality search prefers them.
+            const DRIFT_MIN_KN = 0.2;
+            const cspd = current ? Math.sqrt(current.vx * current.vx + current.vy * current.vy) : 0;
+            if (!anyExpanded && cspd >= DRIFT_MIN_KN) {
+                const driftLat = pt.lat + (current.vy / NM_PER_DEG_LAT) * dtHours;
+                const driftLon = pt.lon + (current.vx / (NM_PER_DEG_LAT * Math.cos(pt.lat * DEG2RAD))) * dtHours;
                 const distToDest = _haversineNm(driftLat, driftLon, endLat, endLon);
                 const nearDest = distToDest < DEST_APPROACH_NM;
                 const landCheck = nearDest ? _isLand : _isTooCloseToLand;
@@ -506,6 +526,11 @@ self.onmessage = function(e) {
 
         wavefront = _pruneIsochrone(newPoints, startLat, startLon, endLat, endLon, useVMC);
 
+        for (const p of wavefront) {
+            const d = _haversineNm(p.lat, p.lon, endLat, endLon);
+            if (d < bestEverDist) { bestEverDist = d; bestEverPt = p; }
+        }
+
         if (step % 5 === 0) {
             isochrones.push(wavefront.map(p => [p.lat, p.lon]));
             self.postMessage({ type: 'progress', elapsedS, maxTimeS: MAX_TIME_S });
@@ -515,9 +540,26 @@ self.onmessage = function(e) {
         step++;
     }
 
-    const bestDist = Math.min(...wavefront.map(p => _haversineNm(p.lat, p.lon, endLat, endLon)));
+    // Best-effort fallback: the wavefront ran out of time (or stalled outside a
+    // headland the buffer won't let it round) but a usable closest-approach
+    // exists. If that point sits within SOFT_DEST_RADIUS_NM of the goal,
+    // return its path with `partial: true` and `closestNm` set so the UI/log
+    // can say "best effort, X nm short" instead of dropping the whole route.
+    // Sized to cover the Monterey/Pt Pinos approach (≈2.8 nm gridlock).
+    const SOFT_DEST_RADIUS_NM = 3.0;
+    if (bestEverPt && bestEverDist <= SOFT_DEST_RADIUS_NM) {
+        const path = _backtrack(bestEverPt);
+        self.postMessage({ type: 'result', data: {
+            path, isochrones,
+            elapsedMin: Math.round((bestEverPt.timeMs - startTimeMs) / 60000),
+            distanceNm: _pathDistance(path),
+            partial: true,
+            closestNm: Math.round(bestEverDist * 10) / 10,
+        }});
+        return;
+    }
     self.postMessage({ type: 'result', data: {
         error: 'Destination not reached within ' + Math.round(MAX_TIME_S / 60) +
-               ' min (closest: ' + bestDist.toFixed(1) + ' nm away, wind: ' + maxWindSeen.toFixed(1) + ' kn)'
+               ' min (closest: ' + bestEverDist.toFixed(1) + ' nm away, wind: ' + maxWindSeen.toFixed(1) + ' kn)'
     }});
 };

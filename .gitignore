@@ -28,3 +28,6 @@ static.tgz
 # Claude Code
 .claude/
 .gstack/
+
+# Route test harness disk cache
+tests/.cache/
