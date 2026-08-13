@@ -101,6 +101,11 @@ try {
     if (stored.flow_model_run) _sfbofsRunTime = _parseSfbofsRunTime(stored.flow_model_run);
 } catch (e) {}
 
+// SFBOFS reruns every 6h (03z/09z/15z/21z). A run older than this means the
+// fetch pipeline has stalled — every requested hour would alias to hour_48,
+// silently presenting a dead forecast as current data. Refuse it instead.
+const SFBOFS_RUN_STALE_HOURS = 12;
+
 async function fetchCurrentField(minutesOffset = 0) {
     const offsetHours = Math.max(0, Math.floor(minutesOffset / 60));
 
@@ -110,6 +115,10 @@ async function fetchCurrentField(minutesOffset = 0) {
         elapsedHours = Math.max(0, Math.floor((Date.now() - _sfbofsRunTime.getTime()) / 3600000));
     }
 
+    if (elapsedHours > SFBOFS_RUN_STALE_HOURS) {
+        return { unavailable: true, stale: true, runAgeHours: elapsedHours };
+    }
+
     const fileIndex = Math.min(48, elapsedHours + offsetHours);
     const url = `${DATA_BASE}/sfbofs/hour_${String(fileIndex).padStart(2, '0')}.json`;
     const res = await fetch(url);
@@ -117,6 +126,14 @@ async function fetchCurrentField(minutesOffset = 0) {
     const data = await res.json();
     if (data.model_run) {
         _sfbofsRunTime = _parseSfbofsRunTime(data.model_run);
+    }
+    // Re-check staleness against the run time reported by the file itself —
+    // _sfbofsRunTime may have been unseeded or stale on the first request.
+    if (_sfbofsRunTime) {
+        const runAgeHours = (Date.now() - _sfbofsRunTime.getTime()) / 3600000;
+        if (runAgeHours > SFBOFS_RUN_STALE_HOURS) {
+            return { unavailable: true, stale: true, runAgeHours: Math.floor(runAgeHours) };
+        }
     }
     return data;
 }

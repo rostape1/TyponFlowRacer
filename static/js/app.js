@@ -1425,9 +1425,13 @@ async function loadCurrentField() {
             if (tidalFlow) tidalFlow.setGrid(null);
             if (legend) legend.classList.add('visible');
             if (source) {
-                const target = new Date(Date.now() + forecastMinutes * 60000);
-                const timeStr = target.toLocaleString('en-US', { weekday: 'short', hour: 'numeric', minute: '2-digit', timeZone: 'America/Los_Angeles' });
-                source.innerHTML = `<span style="color:#f39c12">No forecast data for ${timeStr}</span>`;
+                if (data.stale) {
+                    source.innerHTML = `<span style="color:#e74c3c">⚠ SFBOFS model run is ${data.runAgeHours}h old — fetch pipeline stalled</span>`;
+                } else {
+                    const target = new Date(Date.now() + forecastMinutes * 60000);
+                    const timeStr = target.toLocaleString('en-US', { weekday: 'short', hour: 'numeric', minute: '2-digit', timeZone: 'America/Los_Angeles' });
+                    source.innerHTML = `<span style="color:#f39c12">No forecast data for ${timeStr}</span>`;
+                }
             }
             return;
         }

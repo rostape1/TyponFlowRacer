@@ -42,3 +42,21 @@ jobs:
         with:
           event-type: data-updated
           client-payload: '{"source": "ndbc"}'
+
+      - name: Weekly keepalive commit
+        # GitHub auto-disables scheduled workflows after 60 days with no
+        # repo pushes — cron runs and cache writes don't count. A real
+        # commit resets that clock so the data pipeline doesn't silently
+        # go stale (see 2026-08 SFBOFS outage).
+        # Note: extension-less filename on purpose — .gitignore has *.txt.
+        run: |
+          LAST=$(git log -1 --format=%ct -- .github/data-heartbeat 2>/dev/null || echo 0)
+          NOW=$(date +%s)
+          if [ $((NOW - ${LAST:-0})) -gt 604800 ]; then
+            date -u > .github/data-heartbeat
+            git config user.email "actions@github.com"
+            git config user.name "github-actions"
+            git add .github/data-heartbeat
+            git commit -m "chore: keepalive heartbeat [skip ci]"
+            git push
+          fi
