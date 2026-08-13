@@ -30,6 +30,9 @@ jobs:
       - name: Run physics tests
         run: node tests/test_physics.mjs
 
+      - name: Run staleness gate tests
+        run: node tests/test_staleness.mjs
+
   deploy:
     needs: test
     runs-on: ubuntu-latest

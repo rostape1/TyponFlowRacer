@@ -152,6 +152,7 @@ WAL mode + async lock serializes writes. Periodic commits every 2 seconds.
 | File | Purpose |
 |------|---------|
 | `tests/test_physics.mjs` | Node-based sanity tests for `route-worker.js` polar lookup + apparent wind math. Loads worker source via `new Function` sandbox with a stubbed `self`. Run: `node tests/test_physics.mjs` (also runs in CI before deploy). |
+| `tests/test_staleness.mjs` | Regression tests for the SFBOFS staleness gate in `data-loader.js` — stale-seed deadlock, NOW-vs-+4h aliasing, high-res path parity, and the 49-concurrent-call request budget. Sandboxed `fetch` stub, no network. Run: `node tests/test_staleness.mjs` (also runs in CI before deploy). |
 | `tests/test_route.mjs` | End-to-end route tests against live SFBOFS + Open-Meteo + land mask fetched from GitHub Pages. Runs the worker headlessly in Node and prints ETA/distance/avg/ratio per variant. Use this instead of click-and-screenshot when iterating on the router. `node tests/test_route.mjs [--variant=X] [--start=lat,lon --end=lat,lon] [--base=local]`. ~13 s for a full four-variant sweep. |
 
 ## Static Data Files
