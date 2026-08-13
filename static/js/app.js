@@ -1234,7 +1234,10 @@ async function _runRoute() {
             const etaH = Math.floor(result.elapsedMin / 60);
             const etaM = result.elapsedMin % 60;
             const etaDur = etaH > 0 ? `${etaH}h ${etaM}m` : `${etaM}m`;
-            const arrivalMs = Date.now() + result.elapsedMin * 60000;
+            // Arrival clocks off the route's start, not now — in forecast mode
+            // startTime is hours ahead of Date.now(), so using Date.now() here
+            // reports an arrival earlier than the route actually reaches.
+            const arrivalMs = startTime + result.elapsedMin * 60000;
             const arrivalTime = new Date(arrivalMs).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
             _routeEta.innerHTML = `<span style="color:#a0b0c0">ETA</span><span style="color:#f39c12;font-weight:600">${etaDur}</span><span style="color:#a0b0c0;margin-left:6px">→</span><span style="color:#f39c12;font-weight:600;margin-left:4px">${arrivalTime}</span>`;
         }
