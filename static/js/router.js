@@ -244,7 +244,7 @@ class RouteRenderer {
             const p0 = path[i - 1];
             const p1 = path[i];
 
-            let color = '#ffffff';
+            let color = '#f39c12';
             if (p1.cBenefit > 0.3) color = '#2ecc71';
             else if (p1.cBenefit < -0.3) color = '#e74c3c';
 
@@ -254,14 +254,26 @@ class RouteRenderer {
         }
 
         const startMs = path[0].timeMs;
+        // Fixed 10-min labels overlap into an unreadable smear on long routes.
+        // Scale the interval to the total duration instead.
+        const totalMin = Math.round((path[path.length - 1].timeMs - startMs) / 60000);
+        const intervalMin = totalMin <= 60 ? 15 : totalMin <= 180 ? 30 : totalMin <= 480 ? 60 : 120;
+
         for (const pt of path) {
             const elapsedMin = Math.round((pt.timeMs - startMs) / 60000);
-            if (elapsedMin > 0 && elapsedMin % 10 === 0) {
+            if (elapsedMin > 0 && elapsedMin % intervalMin === 0) {
+                // Clock time must advance from the route's own start, not from
+                // now — in forecast mode startMs is hours ahead of Date.now().
+                const arrivalTime = new Date(startMs + elapsedMin * 60000)
+                    .toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+                const h = Math.floor(elapsedMin / 60);
+                const m = elapsedMin % 60;
+                const dur = h > 0 ? `${h}h${m > 0 ? ' ' + m + 'm' : ''}` : `${m}m`;
                 const label = L.divIcon({
-                    html: `<span style="background:rgba(10,22,40,0.85);color:#f39c12;padding:1px 4px;border-radius:3px;font-size:10px;white-space:nowrap">${elapsedMin}m</span>`,
+                    html: `<span style="background:rgba(10,22,40,0.85);color:#f39c12;padding:3px 7px;border-radius:4px;font-size:11px;white-space:nowrap;line-height:1.4">${dur}<br><span style="color:#a0b0c0;font-size:10px">${arrivalTime}</span></span>`,
                     className: 'route-time-label',
-                    iconSize: [30, 14],
-                    iconAnchor: [15, 7],
+                    iconSize: [56, 28],
+                    iconAnchor: [28, 14],
                 });
                 L.marker([pt.lat, pt.lon], { icon: label, interactive: false }).addTo(this.routeLayer);
             }
