@@ -54,6 +54,21 @@ const _waterLevelCache = new Map(); // stationId → { value, time, fetchedAt }
 const DATA_BASE = 'data';  // Relative to site root (for SFBOFS + NDBC static JSON)
 const NOAA_API = 'https://api.tidesandcurrents.noaa.gov/api/prod/datagetter';
 
+// --- Fetch helper with timeout ---
+// Without a timeout, fetch() can hang indefinitely on a stalled connection
+// (captive portal, flaky uplink, upstream API not responding). The UI then
+// shows "Loading…" forever with no way to recover. AbortController lets us
+// fail fast so callers can surface an actionable error and retry.
+async function _fetchWithTimeout(url, timeoutMs = 15000, options = {}) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+        return await fetch(url, Object.assign({}, options, { signal: controller.signal }));
+    } finally {
+        clearTimeout(timer);
+    }
+}
+
 // --- Helpers ---
 
 function _ymd(d) {
@@ -161,7 +176,14 @@ async function fetchCurrentField(minutesOffset = 0) {
 // Returns null on any HTTP failure.
 async function _fetchSfbofsHour(fileIndex) {
     const url = `${DATA_BASE}/sfbofs/hour_${String(fileIndex).padStart(2, '0')}.json`;
-    const res = await fetch(url);
+    // Swallow network/abort errors into the same null contract as an HTTP
+    // failure, so callers get {unavailable:true} instead of a thrown abort.
+    let res;
+    try {
+        res = await _fetchWithTimeout(url, 30000);
+    } catch (e) {
+        return null;
+    }
     if (!res.ok) return null;
     const data = await res.json();
     if (data.model_run) {
@@ -180,7 +202,7 @@ async function fetchCurrentFieldHighRes(minutesOffset = 0) {
 
     const fileIndex = Math.min(48, (elapsedHours || 0) + offsetHours);
     const url = `${DATA_BASE}/sfbofs_gg/hour_${String(fileIndex).padStart(2, '0')}.json`;
-    const res = await fetch(url);
+    const res = await _fetchWithTimeout(url, 30000);
     if (!res.ok) return null;
     return await res.json();
 }
@@ -211,7 +233,7 @@ async function _fetchWindGridFromAPI() {
         + '&hourly=wind_speed_10m,wind_direction_10m,wind_gusts_10m'
         + '&models=gfs_seamless&wind_speed_unit=kn&forecast_hours=49';
 
-    const res = await fetch(url);
+    const res = await _fetchWithTimeout(url, 15000);
     if (res.status === 429) {
         _windRateLimitedUntil = Date.now() + 5 * 60000;
         console.warn('Open-Meteo rate limited — backing off 5 min');
@@ -299,7 +321,7 @@ async function fetchWindField(minutesOffset = 0) {
     let stations = [];
     if (minutesOffset === 0) {
         try {
-            const stationsRes = await fetch(`${DATA_BASE}/wind/stations.json`);
+            const stationsRes = await _fetchWithTimeout(`${DATA_BASE}/wind/stations.json`, 10000);
             if (stationsRes.ok) stations = await stationsRes.json();
         } catch (e) { /* optional */ }
     }
@@ -387,7 +409,7 @@ async function fetchTideHeights(minutesOffset = 0) {
             let data = _tideCache.get(stationId);
             if (!data || Date.now() - data.fetchedAt > 6 * 3600000) {
                 const url = `${NOAA_API}?begin_date=${begin}&end_date=${end}&station=${stationId}&product=predictions&datum=MLLW&units=english&time_zone=gmt&format=json&interval=6`;
-                const res = await fetch(url);
+                const res = await _fetchWithTimeout(url, 12000);
                 if (!res.ok) return null;
                 const json = await res.json();
                 data = { predictions: json.predictions || [], fetchedAt: Date.now() };
@@ -425,7 +447,7 @@ async function fetchWaterLevels() {
             }
 
             const url = `${NOAA_API}?date=latest&station=${stationId}&product=water_level&datum=MLLW&units=english&time_zone=gmt&format=json`;
-            const res = await fetch(url);
+            const res = await _fetchWithTimeout(url, 10000);
             if (!res.ok) return null;
             const json = await res.json();
             if (json.error || !json.data || !json.data.length) return null;
@@ -541,7 +563,7 @@ async function fetchCurrents(minutesOffset = 0) {
             let data = _currentCache.get(stationId);
             if (!data || Date.now() - data.fetchedAt > 6 * 3600000) {
                 const url = `${NOAA_API}?begin_date=${begin}&end_date=${end}&station=${stationId}&product=currents_predictions&units=english&time_zone=gmt&format=json&interval=6`;
-                const res = await fetch(url);
+                const res = await _fetchWithTimeout(url, 12000);
                 if (!res.ok) return null;
                 const json = await res.json();
                 const preds = (json.current_predictions && json.current_predictions.cp) || json.predictions || [];
@@ -572,7 +594,7 @@ async function fetchCurrents(minutesOffset = 0) {
 
 async function fetchMeta() {
     try {
-        const res = await fetch(`${DATA_BASE}/meta.json`);
+        const res = await _fetchWithTimeout(`${DATA_BASE}/meta.json`, 10000);
         if (!res.ok) return null;
         return res.json();
     } catch (e) {
@@ -597,7 +619,7 @@ async function downloadAllForOffline(onProgress, onCategory) {
     let flowModelRun = null;
     for (let h = 0; h <= 48; h++) {
         try {
-            const resp = await fetch(`${DATA_BASE}/sfbofs/hour_${String(h).padStart(2, '0')}.json`);
+            const resp = await _fetchWithTimeout(`${DATA_BASE}/sfbofs/hour_${String(h).padStart(2, '0')}.json`, 30000);
             if (!resp.ok) break;
             flowOk++;
             if (h === 0) {
@@ -613,14 +635,14 @@ async function downloadAllForOffline(onProgress, onCategory) {
     if (onCategory) onCategory('flow', flowOk > 0 ? { count: flowOk, modelRun: flowModelRun } : false);
 
     // NDBC stations (still static JSON)
-    try { await fetch(`${DATA_BASE}/wind/stations.json`); } catch (e) {}
+    try { await _fetchWithTimeout(`${DATA_BASE}/wind/stations.json`, 10000); } catch (e) {}
     tick();
 
     // Tides — NOAA API (SW caches each response)
     let tidesOk = 0;
     for (const stationId of Object.keys(TIDE_STATIONS)) {
         try {
-            await fetch(`${NOAA_API}?begin_date=${begin}&end_date=${end}&station=${stationId}&product=predictions&datum=MLLW&units=english&time_zone=gmt&format=json&interval=6`);
+            await _fetchWithTimeout(`${NOAA_API}?begin_date=${begin}&end_date=${end}&station=${stationId}&product=predictions&datum=MLLW&units=english&time_zone=gmt&format=json&interval=6`, 12000);
             tidesOk++;
         } catch (e) {}
         tick();
@@ -631,7 +653,7 @@ async function downloadAllForOffline(onProgress, onCategory) {
     let currOk = 0;
     for (const stationId of Object.keys(CURRENT_STATIONS)) {
         try {
-            await fetch(`${NOAA_API}?begin_date=${begin}&end_date=${end}&station=${stationId}&product=currents_predictions&units=english&time_zone=gmt&format=json&interval=6`);
+            await _fetchWithTimeout(`${NOAA_API}?begin_date=${begin}&end_date=${end}&station=${stationId}&product=currents_predictions&units=english&time_zone=gmt&format=json&interval=6`, 12000);
             currOk++;
         } catch (e) {}
         tick();
@@ -672,7 +694,7 @@ async function fetchHycomCurrents() {
     }
 
     try {
-        const res = await fetch(`${DATA_BASE}/hycom/currents.json`);
+        const res = await _fetchWithTimeout(`${DATA_BASE}/hycom/currents.json`, 15000);
         if (!res.ok) return null;
         const data = await res.json();
 
