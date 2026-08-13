@@ -148,26 +148,47 @@ async function fetchCurrentField(minutesOffset = 0) {
         elapsedHours = Math.max(0, Math.floor((Date.now() - _sfbofsRunTime.getTime()) / 3600000));
     }
 
+    // A stale *cached* run time is not evidence the pipeline is stalled — it's
+    // usually a leftover localStorage seed from a previous session while the
+    // server already has a fresh run. Never refuse on the cached value alone:
+    // that deadlocks (we'd never fetch, so never learn the real run time, so
+    // the stale seed sticks forever). Distrust the seed, reset to hour_00, and
+    // let the fetched file establish ground truth.
     if (elapsedHours > SFBOFS_RUN_STALE_HOURS) {
-        return { unavailable: true, stale: true, runAgeHours: elapsedHours };
+        _sfbofsRunTime = null;
+        elapsedHours = 0;
     }
 
-    const fileIndex = Math.min(48, elapsedHours + offsetHours);
+    let fileIndex = Math.min(48, elapsedHours + offsetHours);
+    let data = await _fetchSfbofsHour(fileIndex);
+    if (!data) return { unavailable: true, requestedHour: fileIndex };
+
+    // Now that the file has told us the true run time, the index we guessed
+    // may be wrong (we may have reset to hour_00 above). Recompute once and
+    // refetch if it moved, so the displayed field matches the wall clock.
+    if (_sfbofsRunTime) {
+        const trueElapsed = Math.max(0, Math.floor((Date.now() - _sfbofsRunTime.getTime()) / 3600000));
+        if (trueElapsed > SFBOFS_RUN_STALE_HOURS) {
+            return { unavailable: true, stale: true, runAgeHours: trueElapsed };
+        }
+        const correctIndex = Math.min(48, trueElapsed + offsetHours);
+        if (correctIndex !== fileIndex) {
+            const better = await _fetchSfbofsHour(correctIndex);
+            if (better) { data = better; fileIndex = correctIndex; }
+        }
+    }
+    return data;
+}
+
+// Fetch one SFBOFS hour file, updating the cached run time from its metadata.
+// Returns null on any HTTP failure.
+async function _fetchSfbofsHour(fileIndex) {
     const url = `${dataBase()}/sfbofs/hour_${String(fileIndex).padStart(2, '0')}.json`;
     const res = await _fetchWithTimeout(url, 30000);
-    if (!res.ok) return { unavailable: true, requestedHour: fileIndex };
+    if (!res.ok) return null;
     const data = await res.json();
     if (data.model_run) {
         _sfbofsRunTime = _parseSfbofsRunTime(data.model_run);
-    }
-    // Re-check staleness against the run time reported by the file itself —
-    // _sfbofsRunTime may have been unseeded or stale on the first request.
-    // Null-guarded: a file without model_run leaves _sfbofsRunTime null.
-    if (_sfbofsRunTime) {
-        const runAgeHours = (Date.now() - _sfbofsRunTime.getTime()) / 3600000;
-        if (runAgeHours > SFBOFS_RUN_STALE_HOURS) {
-            return { unavailable: true, stale: true, runAgeHours: Math.floor(runAgeHours) };
-        }
     }
     data._cacheMeta = _readCacheMeta(res);
     return data;
