@@ -80,7 +80,7 @@ class RadarView {
     }
 
     _getCanvasSize() {
-        const scope = this.canvas?.parentElement;
+        const scope = this.canvas && this.canvas.parentElement;
         if (!scope) return 0;
         return Math.min(scope.clientWidth, scope.clientHeight);
     }

@@ -242,9 +242,9 @@ async function _fetchWindGridFromAPI() {
                 dir = point.current.wind_direction_10m || 0;
                 gst = point.current.wind_gusts_10m || 0;
             } else if (point.hourly) {
-                spd = point.hourly.wind_speed_10m?.[hour] || 0;
-                dir = point.hourly.wind_direction_10m?.[hour] || 0;
-                gst = point.hourly.wind_gusts_10m?.[hour] || 0;
+                spd = (point.hourly.wind_speed_10m && point.hourly.wind_speed_10m[hour]) || 0;
+                dir = (point.hourly.wind_direction_10m && point.hourly.wind_direction_10m[hour]) || 0;
+                gst = (point.hourly.wind_gusts_10m && point.hourly.wind_gusts_10m[hour]) || 0;
             } else {
                 continue;
             }
@@ -544,7 +544,7 @@ async function fetchCurrents(minutesOffset = 0) {
                 const res = await fetch(url);
                 if (!res.ok) return null;
                 const json = await res.json();
-                const preds = json.current_predictions?.cp || json.predictions || [];
+                const preds = (json.current_predictions && json.current_predictions.cp) || json.predictions || [];
                 data = { predictions: preds, fetchedAt: Date.now() };
                 _currentCache.set(stationId, data);
             }
