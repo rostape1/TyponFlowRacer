@@ -160,11 +160,14 @@ async function fetchCurrentField(minutesOffset = 0) {
     if (data.model_run) {
         _sfbofsRunTime = _parseSfbofsRunTime(data.model_run);
     }
-    // Re-check staleness with the run time as reported by the file itself —
-    // _sfbofsRunTime may have been stale/unseeded on the first request.
-    const runAgeHours = (Date.now() - _sfbofsRunTime.getTime()) / 3600000;
-    if (runAgeHours > SFBOFS_RUN_STALE_HOURS) {
-        return { unavailable: true, stale: true, runAgeHours: Math.floor(runAgeHours) };
+    // Re-check staleness against the run time reported by the file itself —
+    // _sfbofsRunTime may have been unseeded or stale on the first request.
+    // Null-guarded: a file without model_run leaves _sfbofsRunTime null.
+    if (_sfbofsRunTime) {
+        const runAgeHours = (Date.now() - _sfbofsRunTime.getTime()) / 3600000;
+        if (runAgeHours > SFBOFS_RUN_STALE_HOURS) {
+            return { unavailable: true, stale: true, runAgeHours: Math.floor(runAgeHours) };
+        }
     }
     data._cacheMeta = _readCacheMeta(res);
     return data;
