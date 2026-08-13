@@ -260,7 +260,9 @@ class RouteRenderer {
         for (const pt of path) {
             const elapsedMin = Math.round((pt.timeMs - startMs) / 60000);
             if (elapsedMin > 0 && elapsedMin % intervalMin === 0) {
-                const arrivalTime = new Date(Date.now() + elapsedMin * 60000)
+                // Clock time must advance from the route's own start, not from
+                // now — in forecast mode startMs is hours ahead of Date.now().
+                const arrivalTime = new Date(startMs + elapsedMin * 60000)
                     .toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
                 const h = Math.floor(elapsedMin / 60);
                 const m = elapsedMin % 60;
