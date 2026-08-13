@@ -15,7 +15,7 @@
  * Requires Node 18+ (built-in fetch).
  */
 
-import { readFileSync } from 'fs';
+import { readFileSync, writeFileSync, existsSync, mkdirSync, statSync } from 'fs';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 
@@ -63,6 +63,19 @@ async function fetchSfbofs(hour) {
     const pad = String(hour).padStart(2, '0');
     try { return await fetchJson(`${BASE}/data/sfbofs/hour_${pad}.json`); }
     catch { return null; }
+}
+
+// HYCOM is the offshore current source — covers lat 36.4–38.16 incl.
+// Monterey, where SFBOFS (SF Bay only, lat 37.4–38.05) drops out. Without
+// it the engine treats everything south of lat 37.4 as zero current, which
+// silently changes route geometry. Mirrors data-loader.js fetchHycomCurrents.
+async function fetchHycom() {
+    try {
+        const data = await fetchJson(`${BASE}/data/hycom/currents.json`);
+        const pairs = [];
+        for (const [h, g] of Object.entries(data.hours)) pairs.push([Number(h), g]);
+        return pairs;
+    } catch { return []; }
 }
 
 // Match data-loader.js bounds/dimensions and URL format exactly so we hit
@@ -168,6 +181,15 @@ function makeWorker() {
 }
 
 // --- Main ---
+const CACHE_DIR = join(ROOT, 'tests', '.cache');
+const CACHE_TTL_MS = 30 * 60 * 1000; // 30 min — wind/sfbofs barely change in that window
+if (!existsSync(CACHE_DIR)) mkdirSync(CACHE_DIR, { recursive: true });
+
+function cacheFresh(file) {
+    if (!existsSync(file)) return false;
+    return (Date.now() - statSync(file).mtimeMs) < CACHE_TTL_MS;
+}
+
 async function main() {
     const startTimeMs = Date.now();
     const hoursNeeded = 49;
@@ -176,29 +198,93 @@ async function main() {
     console.log(`Route: (${START_LAT}, ${START_LON}) → (${END_LAT}, ${END_LON})`);
     console.log(`Rhumb: ${rhumbNm.toFixed(1)} nm   Data: ${BASE}\n`);
 
-    process.stdout.write('Fetching SFBOFS ');
-    const sfbofsPairs = [];
-    for (let h = 0; h <= hoursNeeded; h++) {
-        const grid = await fetchSfbofs(h);
-        if (grid) sfbofsPairs.push([h, grid]);
-        process.stdout.write('.');
+    const sfCache = join(CACHE_DIR, 'sfbofs.json');
+    let sfbofsPairs;
+    if (cacheFresh(sfCache)) {
+        sfbofsPairs = JSON.parse(readFileSync(sfCache, 'utf8'));
+        console.log(`SFBOFS (cached) ${sfbofsPairs.length}/${hoursNeeded + 1} hours`);
+    } else {
+        process.stdout.write('Fetching SFBOFS ');
+        sfbofsPairs = [];
+        for (let h = 0; h <= hoursNeeded; h++) {
+            const grid = await fetchSfbofs(h);
+            if (grid) sfbofsPairs.push([h, grid]);
+            process.stdout.write('.');
+        }
+        writeFileSync(sfCache, JSON.stringify(sfbofsPairs));
+        console.log(` ${sfbofsPairs.length}/${hoursNeeded + 1} hours`);
     }
-    console.log(` ${sfbofsPairs.length}/${hoursNeeded + 1} hours`);
 
-    process.stdout.write('Fetching wind (Open-Meteo batched)...');
-    const windGrids = await fetchWindGrids(hoursNeeded);
-    console.log(` ${windGrids.size} hours`);
+    const windCache = join(CACHE_DIR, 'wind.json');
+    let windGrids;
+    // --wind=synth[:dir,kn] uses a uniform wind field — no API needed, ideal
+    // for regressing route geometry. Default: NW 15 kn (typical SF summer).
+    // --wind=live forces a fresh Open-Meteo fetch. Default: cache → Open-Meteo
+    // → static fallback → synth.
+    const windMode = args.wind || 'auto';
+    function synthWind(dirDeg, speedKn) {
+        const rad = dirDeg * Math.PI / 180;
+        const u = -speedKn * Math.sin(rad);
+        const v = -speedKn * Math.cos(rad);
+        const bounds = { south: 36.0, north: 38.2, west: -123.5, east: -121.5 };
+        const nx = 11, ny = 12;
+        const uG = Array.from({ length: ny }, () => new Array(nx).fill(u));
+        const vG = Array.from({ length: ny }, () => new Array(nx).fill(v));
+        const g = new Map();
+        for (let h = 0; h <= hoursNeeded; h++) g.set(h, { bounds, nx, ny, u: uG, v: vG });
+        return g;
+    }
+    if (windMode.startsWith('synth')) {
+        const m = windMode.match(/^synth(?::(\d+),(\d+(?:\.\d+)?))?$/);
+        const dir = m && m[1] ? Number(m[1]) : 315; // NW
+        const spd = m && m[2] ? Number(m[2]) : 15;
+        windGrids = synthWind(dir, spd);
+        console.log(`Wind   (synth) uniform ${dir}° @ ${spd} kn, ${windGrids.size} hours`);
+    } else if (windMode !== 'live' && cacheFresh(windCache)) {
+        windGrids = new Map(JSON.parse(readFileSync(windCache, 'utf8')));
+        console.log(`Wind   (cached) ${windGrids.size} hours`);
+    } else {
+        try {
+            process.stdout.write('Fetching wind (Open-Meteo batched)...');
+            windGrids = await fetchWindGrids(hoursNeeded);
+            writeFileSync(windCache, JSON.stringify([...windGrids]));
+            console.log(` ${windGrids.size} hours`);
+        } catch (e) {
+            console.log(` FAILED → using synth NW 15 kn`);
+            windGrids = synthWind(315, 15);
+        }
+    }
 
-    process.stdout.write('Fetching land mask...');
-    const landMask = await fetchJson(`${BASE}/data/land_mask.json`);
+    const lmCache = join(CACHE_DIR, 'land_mask.json');
+    let landMask;
+    if (cacheFresh(lmCache)) {
+        landMask = JSON.parse(readFileSync(lmCache, 'utf8'));
+        console.log('Land   (cached)');
+    } else {
+        process.stdout.write('Fetching land mask...');
+        landMask = await fetchJson(`${BASE}/data/land_mask.json`);
+        writeFileSync(lmCache, JSON.stringify(landMask));
+        console.log('');
+    }
     const landPolygons = indexLandPolygons(landMask.polygons || []);
     const landGrid = landMask.grid ? unpackLandGrid(landMask.grid) : null;
-    console.log(` ${landPolygons.length} polygons${landGrid ? ' + grid' : ''}`);
+
+    const hyCache = join(CACHE_DIR, 'hycom.json');
+    let hycomPairs;
+    if (cacheFresh(hyCache)) {
+        hycomPairs = JSON.parse(readFileSync(hyCache, 'utf8'));
+        console.log(`HYCOM  (cached) ${hycomPairs.length} hours`);
+    } else {
+        process.stdout.write('Fetching HYCOM...');
+        hycomPairs = await fetchHycom();
+        writeFileSync(hyCache, JSON.stringify(hycomPairs));
+        console.log(` ${hycomPairs.length} hours`);
+    }
 
     const baseMessage = {
         sfbofsGrids: sfbofsPairs,
         sfbofsGridsHR: [],
-        hycomGrids: [],
+        hycomGrids: hycomPairs,
         windGrids: [...windGrids],
         landPolygons,
         landGrid,
