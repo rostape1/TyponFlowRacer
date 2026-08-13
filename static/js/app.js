@@ -2358,6 +2358,32 @@ function _notifySwCacheReady() {
     }
 }
 
+// In cache-first mode the SW serves cached bytes immediately and refreshes in
+// the background. Without this, the map keeps showing the stale field until the
+// next periodic tick (up to 5 min) — a first load after going online renders
+// old currents and looks broken. Re-render the affected layer as soon as the
+// background fetch lands. Debounced: one refresh per layer per burst, since a
+// download sweep fires many of these at once.
+const _refreshPending = { flow: false, wind: false };
+function _scheduleRefresh(layer) {
+    if (_refreshPending[layer]) return;
+    _refreshPending[layer] = true;
+    setTimeout(() => {
+        _refreshPending[layer] = false;
+        if (layer === 'flow') loadCurrentField();
+        else if (layer === 'wind') loadWindField();
+    }, 250);
+}
+
+if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.addEventListener('message', (e) => {
+        if (!e.data || e.data.type !== 'DATA_REFRESHED') return;
+        const url = e.data.url || '';
+        if (url.includes('/data/sfbofs') || url.includes('/data/hycom')) _scheduleRefresh('flow');
+        else if (url.includes('/data/wind') || url.includes('open-meteo')) _scheduleRefresh('wind');
+    });
+}
+
 function _getLastDlTime() {
     return localStorage.getItem('ais_offline_dl_time');
 }
