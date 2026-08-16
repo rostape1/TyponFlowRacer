@@ -60,7 +60,15 @@ function build({ seed, serverRun }) {
 }
 
 const STALE = 't15z 07/21';   // the dead run from the 2026-08 outage
-const FRESH = 't21z 08/12';
+
+// Must stay within SFBOFS_RUN_STALE_HOURS of the moment the test runs, so
+// build it from the current time instead of a hardcoded date. A fixed
+// calendar date "looks fresh" only until real time catches up to it — that
+// drift is exactly what broke this test suite (and silently blocked every
+// CI deploy) for a day and a half in 2026-08.
+const _freshRunTime = new Date(Date.now() - 2 * 3600000);
+const FRESH = `t${String(_freshRunTime.getUTCHours()).padStart(2, '0')}z ` +
+    `${String(_freshRunTime.getUTCMonth() + 1).padStart(2, '0')}/${String(_freshRunTime.getUTCDate()).padStart(2, '0')}`;
 
 console.log('Staleness gate:');
 
