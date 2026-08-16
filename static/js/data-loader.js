@@ -195,7 +195,14 @@ async function fetchCurrentField(minutesOffset = 0) {
 // Returns null on any HTTP failure.
 async function _fetchSfbofsHour(fileIndex) {
     const url = `${dataBase()}/sfbofs/hour_${String(fileIndex).padStart(2, '0')}.json`;
-    const res = await _fetchWithTimeout(url, 30000);
+    // Swallow network/abort errors into the same null contract as an HTTP
+    // failure, so callers get {unavailable:true} instead of a thrown abort.
+    let res;
+    try {
+        res = await _fetchWithTimeout(url, 30000);
+    } catch (e) {
+        return null;
+    }
     if (!res.ok) return null;
     const data = await res.json();
     if (data.model_run) {
@@ -614,7 +621,7 @@ async function fetchCurrents(minutesOffset = 0) {
 
 async function fetchMeta() {
     try {
-        const res = await fetch(`${dataBase()}/meta.json`);
+        const res = await _fetchWithTimeout(`${dataBase()}/meta.json`, 10000);
         if (!res.ok) return null;
         return res.json();
     } catch (e) {
@@ -683,14 +690,14 @@ async function downloadAllForOffline(onProgress, onCategory) {
     }
 
     // NDBC stations (still static JSON)
-    try { await fetch(`${dataBase()}/wind/stations.json`); } catch (e) {}
+    try { await _fetchWithTimeout(`${dataBase()}/wind/stations.json`, 10000); } catch (e) {}
     tick();
 
     // Tides — NOAA API (SW caches each response)
     let tidesOk = 0;
     for (const stationId of Object.keys(TIDE_STATIONS)) {
         try {
-            await fetch(`${noaaApi()}?begin_date=${begin}&end_date=${end}&station=${stationId}&product=predictions&datum=MLLW&units=english&time_zone=gmt&format=json&interval=6`);
+            await _fetchWithTimeout(`${noaaApi()}?begin_date=${begin}&end_date=${end}&station=${stationId}&product=predictions&datum=MLLW&units=english&time_zone=gmt&format=json&interval=6`, 12000);
             tidesOk++;
         } catch (e) {}
         tick();
@@ -701,7 +708,7 @@ async function downloadAllForOffline(onProgress, onCategory) {
     let currOk = 0;
     for (const stationId of Object.keys(CURRENT_STATIONS)) {
         try {
-            await fetch(`${noaaApi()}?begin_date=${begin}&end_date=${end}&station=${stationId}&product=currents_predictions&units=english&time_zone=gmt&format=json&interval=6`);
+            await _fetchWithTimeout(`${noaaApi()}?begin_date=${begin}&end_date=${end}&station=${stationId}&product=currents_predictions&units=english&time_zone=gmt&format=json&interval=6`, 12000);
             currOk++;
         } catch (e) {}
         tick();
@@ -742,7 +749,7 @@ async function fetchHycomCurrents() {
     }
 
     try {
-        const res = await fetch(`${dataBase()}/hycom/currents.json`);
+        const res = await _fetchWithTimeout(`${dataBase()}/hycom/currents.json`, 15000);
         if (!res.ok) return null;
         const data = await res.json();
 

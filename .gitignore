@@ -39,4 +39,6 @@ build_static_bundle.sh
 debug_pi.sh
 nmea_loggerOLD.py
 wind_radar.html
+
+# Route test harness disk cache
 tests/.cache/

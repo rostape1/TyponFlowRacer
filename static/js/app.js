@@ -2454,11 +2454,13 @@ function _notifySwCacheReady() {
     }
 }
 
-// Re-render layers as soon as the SW finishes a stale-while-revalidate
-// background fetch — without this, the user sees yesterday's cached SFBOFS /
-// wind grid until the next 5-min refresh tick. Coalesce bursts so we don't
-// thrash the chart when many files land in the same second.
-let _refreshPending = { flow: false, wind: false };
+// In cache-first mode the SW serves cached bytes immediately and refreshes in
+// the background. Without this, the map keeps showing the stale field until the
+// next periodic tick (up to 5 min) — a first load after going online renders
+// old currents and looks broken. Re-render the affected layer as soon as the
+// background fetch lands. Debounced: one refresh per layer per burst, since a
+// download sweep fires many of these at once.
+const _refreshPending = { flow: false, wind: false };
 function _scheduleRefresh(layer) {
     if (_refreshPending[layer]) return;
     _refreshPending[layer] = true;

@@ -245,6 +245,8 @@ self.addEventListener('fetch', (event) => {
       }
       return response;
     }).catch(() =>
+      // caches.match resolves undefined on a miss, and respondWith() throws on
+      // old Safari when handed undefined. Always resolve to a real Response.
       caches.match(event.request, { ignoreSearch: true })
         .then((cached) => cached || new Response('', { status: 503 }))
     )

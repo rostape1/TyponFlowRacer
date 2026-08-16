@@ -254,6 +254,8 @@ class RouteRenderer {
         }
 
         const startMs = path[0].timeMs;
+        // Fixed 10-min labels overlap into an unreadable smear on long routes.
+        // Scale the interval to the total duration instead.
         const totalMin = Math.round((path[path.length - 1].timeMs - startMs) / 60000);
         const intervalMin = totalMin <= 60 ? 15 : totalMin <= 180 ? 30 : totalMin <= 480 ? 60 : 120;
 
