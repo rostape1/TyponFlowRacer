@@ -32,7 +32,11 @@ static.tgz
 # Local dev junk that should never be committed (was accidentally swept in by `git add -A`)
 logs/
 logs.zip
-*.txt
+# NMEA capture logs only — an unanchored `*.txt` silently swallowed every
+# requirements.txt (and any new .txt fixture) on `git add`.
+logs/*.txt
+nmea_*.txt
+!**/requirements.txt
 vendor/
 boat_test.sh
 build_static_bundle.sh
