@@ -110,7 +110,7 @@ known-good code. Prefer that when you're not at the boat (`P25`). Python changes
 | 8888 | local dev static server, and legacy `main.py` | `python3 -m http.server 8888 --directory static` |
 | 10110 | AIS receiver (TCP, `192.168.47.10`) | Bridged to `/nmea` WebSocket by the boat server |
 | 8443 | *nothing* — historical HTTPS default | Source of a five-file drift bug (`P24`). Only used if you pass `--ssl-cert`. |
-| 8765 | legacy `nmea_ws_proxy.py` standalone | Superseded; still the last-resort fallback in `nmea-client.js` |
+| 8765 / 8766 | legacy `nmea_ws_proxy.py` standalone | Superseded. Still the last-resort NMEA fallback in `app.js`: **8765 for `ws://`, 8766 for `wss://`**, picked from `location.protocol`. On GitHub Pages (HTTPS) it therefore probes `wss://raspberrypi.local:8766` and logs a benign `ERR_NAME_NOT_RESOLVED` off-boat. |
 
 ---
 
@@ -402,7 +402,8 @@ sudo journalctl -u ais-tracker -f
 - **NMEA AIS decoding** — `ais-decoder.js` decodes the boat's VHF receiver directly, so AIS works
   offline at sea; AISstream.io is the internet fallback.
 - **NMEA auto-connect** — source priority: `nmeaWsUrl` from `/config.json`, then localStorage, then
-  `ws://raspberrypi.local:8765`. Fails silently if unreachable.
+  `ws://raspberrypi.local:8765` (or `wss://…:8766` when the page is HTTPS). Fails silently if
+  unreachable — on GitHub Pages that failure is expected and logs one console error.
 - **True wind computation** — from apparent (AWA/AWS `$IIMWV-R`) plus BSP and heading when `$IIMWD`
   is absent; `$IIMWD` overrides when present.
 - **Instrument gauges** — SOG, BSP, HDG, Depth, AWA, TWA, TWD, TWS. TWA coloured green (VMG 30-50°),
