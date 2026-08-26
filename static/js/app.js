@@ -11,13 +11,21 @@ const MAX_VESSELS = 50;
 // falls through to today's web-mode defaults. Started immediately so the fetch
 // is in flight while the rest of the script parses.
 window.APP_CONFIG = window.APP_CONFIG || null;
+const CONFIG_TIMEOUT_MS = 2500;
 const _configPromise = (async () => {
+    // Hard abort budget. AIS, NMEA and the first environmental loads all wait
+    // on this promise, and a *hanging* (not failing) request — captive-portal
+    // marina WiFi is the canonical trigger — would leave the app with no AIS
+    // and no NMEA indefinitely, with the status pill never updating.
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), CONFIG_TIMEOUT_MS);
     try {
-        const res = await fetch('/config.json', { cache: 'no-store' });
+        const res = await fetch('/config.json', { cache: 'no-store', signal: controller.signal });
         if (res.ok) {
             window.APP_CONFIG = await res.json();
         }
-    } catch (e) { /* offline or 404 — fall through */ }
+    } catch (e) { /* offline, 404 or timed out — fall through to web mode */ }
+    finally { clearTimeout(timer); }
     if (!window.APP_CONFIG) {
         window.APP_CONFIG = { mode: 'web', useCloudAIS: true };
     }
@@ -356,27 +364,73 @@ map.on('click', (e) => {
         .openOn(map);
 });
 
-// Tile layers — CDN URLs on the deployed site, local Pi-served tiles otherwise.
-// GitHub Pages → CDN (full zoom range). Pi/LAN/localhost → local /tiles/ for offline.
-const _useLocalTiles = !location.hostname.endsWith('github.io');
-const _darkTpl = _useLocalTiles ? 'tiles/dark/{z}/{x}/{y}.png' : 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png';
-const _osmTpl  = _useLocalTiles ? 'tiles/osm/{z}/{x}/{y}.png'  : 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png';
-const _seaTpl  = _useLocalTiles ? 'tiles/sea/{z}/{x}/{y}.png'  : 'https://tiles.openseamap.org/seamark/{z}/{x}/{y}.png';
+// Tile layers — CDN URLs on the deployed site and in local dev, Pi-served
+// on-disk tiles on the boat.
+//
+// `download_offline.py` only downloads DEFAULT_ZOOM_RANGE = (10, 15), so when
+// we serve from disk every layer is clamped with min/maxNativeZoom: Leaflet
+// then upscales z15 imagery past 15 instead of 404ing every tile and painting
+// a black canvas (routine when zooming in to pick a slip or a mark).
+const LOCAL_TILE_MIN_Z = 10;
+const LOCAL_TILE_MAX_Z = 15;
 
-const darkLayer = L.tileLayer(_darkTpl, {
-    attribution: '&copy; CartoDB',
-    maxZoom: 19,
+// True only when the basemap should come from static/tiles/. That directory is
+// gitignored and empty unless download_offline.py has been run, so localhost
+// dev (`python -m http.server --directory static`) must keep hitting the CDN —
+// the old `!hostname.endsWith('github.io')` test captured it and showed a blank
+// basemap with no explanation.
+//
+// /config.json is authoritative but resolves *after* this file parses (the
+// layers below are constructed at module scope and added to the map
+// immediately), so consult it if it happens to be there and otherwise fall back
+// to the hostname test. The two agree for both real deployments; the
+// reconciliation below covers the case where they don't.
+function _serveTilesFromDisk() {
+    const cfg = window.APP_CONFIG;
+    if (cfg && cfg.mode) return cfg.mode === 'boat';
+    const h = location.hostname;
+    if (!h || h.endsWith('github.io')) return false;
+    if (h === 'localhost' || h === '127.0.0.1' || h === '[::1]') return false;
+    return true;
+}
+
+function _tileTemplates(fromDisk) {
+    return {
+        // Dark base: Esri World Dark Gray Canvas. CartoDB's dark_all now stamps
+        // "API KEY REQUIRED" over unregistered traffic; Esri's tiles are keyless.
+        dark: fromDisk ? 'tiles/dark/{z}/{x}/{y}.png' : 'https://services.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}',
+        osm:  fromDisk ? 'tiles/osm/{z}/{x}/{y}.png'  : 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
+        sea:  fromDisk ? 'tiles/sea/{z}/{x}/{y}.png'  : 'https://tiles.openseamap.org/seamark/{z}/{x}/{y}.png',
+    };
+}
+
+// Leaflet's defaults for both of these are null (= no clamping).
+function _nativeZoomOpts(fromDisk) {
+    return fromDisk
+        ? { minNativeZoom: LOCAL_TILE_MIN_Z, maxNativeZoom: LOCAL_TILE_MAX_Z }
+        : { minNativeZoom: null, maxNativeZoom: null };
+}
+
+let _tilesFromDisk = _serveTilesFromDisk();
+const _tpl = _tileTemplates(_tilesFromDisk);
+
+const darkLayer = L.tileLayer(_tpl.dark, {
+    attribution: '&copy; Esri',
+    maxZoom: 16,
+    ..._nativeZoomOpts(_tilesFromDisk),
 });
 
-const osmLayer = L.tileLayer(_osmTpl, {
+const osmLayer = L.tileLayer(_tpl.osm, {
     attribution: '&copy; OpenStreetMap contributors',
     maxZoom: 19,
+    ..._nativeZoomOpts(_tilesFromDisk),
 });
 
-const seaLayer = L.tileLayer(_seaTpl, {
+const seaLayer = L.tileLayer(_tpl.sea, {
     attribution: '&copy; OpenSeaMap',
     maxZoom: 18,
     opacity: 0.8,
+    ..._nativeZoomOpts(_tilesFromDisk),
 });
 
 // NOAA Nautical Charts — ENC display with traditional paper chart symbols
@@ -384,7 +438,7 @@ const seaLayer = L.tileLayer(_seaTpl, {
 // Offline: local tiles saved as /tiles/noaa/{z}/{x}/{y}.png by download_offline.py.
 const noaaChart = L.TileLayer.extend({
     getTileUrl: function(coords) {
-        if (_useLocalTiles) {
+        if (_tilesFromDisk) {
             return `tiles/noaa/${coords.z}/${coords.x}/${coords.y}.png`;
         }
         const lod = coords.z - 2;
@@ -397,6 +451,23 @@ const noaaChartLayer = new noaaChart({
     minZoom: 2,
     maxZoom: 16,
     opacity: 0.9,
+    ..._nativeZoomOpts(_tilesFromDisk),
+});
+
+// /config.json lands after the layers above were built from the hostname guess.
+// If it disagrees, re-point them rather than leaving the basemap wrong.
+_configPromise.then(() => {
+    const fromDisk = _serveTilesFromDisk();
+    if (fromDisk === _tilesFromDisk) return;
+    _tilesFromDisk = fromDisk;
+    const tpl = _tileTemplates(fromDisk);
+    const nz = _nativeZoomOpts(fromDisk);
+    for (const [layer, url] of [[darkLayer, tpl.dark], [osmLayer, tpl.osm], [seaLayer, tpl.sea]]) {
+        Object.assign(layer.options, nz);
+        layer.setUrl(url);
+    }
+    Object.assign(noaaChartLayer.options, nz);
+    noaaChartLayer.redraw();
 });
 
 
@@ -407,8 +478,8 @@ currentLayer = L.layerGroup().addTo(map);
 noaaChartLayer.addTo(map);
 
 L.control.layers({
-    'Dark': darkLayer,
     'NOAA Chart': noaaChartLayer,
+    'Dark': darkLayer,
     'Street': osmLayer,
 }, {
     'Nautical Marks': seaLayer,
@@ -1433,8 +1504,14 @@ if (typeof TidalFlowOverlay !== 'undefined') {
     tidalFlow.start();
 }
 
-// Load currents on startup and refresh every 60 seconds
-loadCurrents();
+// Load currents on startup and refresh every 60 seconds.
+//
+// The first load must wait for /config.json: until it resolves, data-loader's
+// noaaApi()/openMeteoApi() still return the hardcoded api.tidesandcurrents.noaa.gov
+// URLs, so on the boat with no internet this request would bypass the Pi's disk
+// cache entirely, hang its full timeout, and render "unavailable" until the next
+// refresh tick.
+_configPromise.then(() => loadCurrents());
 autoRefreshTimers.currents = setInterval(loadCurrents, 60000);
 
 // Load SFBOFS grid data for high-resolution tidal flow
@@ -1447,8 +1524,14 @@ function initFlowLegend() {
 initFlowLegend();
 
 async function loadCurrentField() {
+    const flowLegendEl = document.getElementById('flow-legend');
     const flowSourceEl = document.getElementById('flow-legend-source');
-    const _showErr = (msg) => { if (flowSourceEl) flowSourceEl.innerHTML = `<span style="color:#e74c3c">\u26a0 ${msg}</span>`; };
+    // Also make the legend visible: an error written into a still-hidden
+    // element defeats the whole point of the message.
+    const showErr = (msg) => {
+        setLegendError(flowSourceEl, msg);
+        if (flowLegendEl) flowLegendEl.classList.add('visible');
+    };
     try {
         // Show loading state in legend immediately
         if (flowSourceEl && !flowSourceEl.textContent) {
@@ -1456,28 +1539,23 @@ async function loadCurrentField() {
         }
         const data = await fetchCurrentField(forecastMinutes);
         if (!data) {
-            _showErr('Currents unavailable \u2014 Pi offline?');
+            showErr('Currents unavailable \u2014 Pi offline?');
             return;
         }
         if (data.error) {
             console.log('SFBOFS not available:', data.error);
-            _showErr('Currents unavailable');
+            showErr('Currents unavailable');
             return;
         }
 
-        const legend = document.getElementById('flow-legend');
-        const source = document.getElementById('flow-legend-source');
-
         if (data.unavailable) {
             if (tidalFlow) tidalFlow.setGrid(null);
-            if (legend) legend.classList.add('visible');
-            if (source) {
-                if (data.stale) {
-                    source.innerHTML = `<span style="color:#e74c3c">⚠ SFBOFS model run is ${data.runAgeHours}h old — fetch pipeline stalled</span>`;
-                } else {
-                    const target = new Date(Date.now() + forecastMinutes * 60000);
-                    const timeStr = target.toLocaleString('en-US', { weekday: 'short', hour: 'numeric', minute: '2-digit', timeZone: 'America/Los_Angeles' });
-                    source.innerHTML = `<span style="color:#f39c12">No forecast data for ${timeStr}</span>`;
+            if (data.stale) {
+                showErr(`SFBOFS model run is ${data.runAgeHours}h old — fetch pipeline stalled`);
+            } else {
+                if (flowLegendEl) flowLegendEl.classList.add('visible');
+                if (flowSourceEl) {
+                    flowSourceEl.innerHTML = `<span style="color:#f39c12">No forecast data for ${forecastTargetLabel()}</span>`;
                 }
             }
             return;
@@ -1487,29 +1565,24 @@ async function loadCurrentField() {
             tidalFlow.setGrid(data);
         }
         // Update legend
-        if (legend) legend.classList.add('visible');
-        if (source) {
-            const src = data.source || 'NOAA Stations';
-            const run = data.model_run ? ` ${data.model_run}` : '';
-            const age = formatDataAge(data.fetched_at);
-            const ageStr = age ? ` · ${age.dot}fetched ${age.ageText}` : '';
-            const stalePrefix = (data._cacheMeta && data._cacheMeta.state === 'STALE')
-                ? '<span style="color:#e74c3c">⚠ Pi offline</span> · ' : '';
-            if (forecastMinutes > 0) {
-                const target = new Date(Date.now() + forecastMinutes * 60000);
-                const timeStr = target.toLocaleString('en-US', { weekday: 'short', hour: 'numeric', minute: '2-digit', timeZone: 'America/Los_Angeles' });
-                source.innerHTML = `${stalePrefix}${src}${run} · forecast: ${timeStr}${ageStr}`;
-            } else {
-                source.innerHTML = `${stalePrefix}${src}${run}${ageStr}`;
-            }
-        }
+        if (flowLegendEl) flowLegendEl.classList.add('visible');
+        const src = data.source || 'NOAA Stations';
+        const run = data.model_run ? ` ${data.model_run}` : '';
+        const fcst = forecastMinutes > 0 ? ` · forecast: ${forecastTargetLabel()}` : '';
+        renderLegendSource(flowSourceEl, {
+            text: `${src}${run}${fcst}`,
+            age: formatDataAge(data.fetched_at),
+            cacheMeta: data._cache_meta,
+        });
     } catch (e) {
         console.log('Current field fetch failed (optional)');
-        _showErr('Currents fetch failed — retrying when online');
+        showErr('Currents fetch failed — retrying when online');
     }
 }
 
-loadCurrentField();
+// Gated on /config.json for the same reason as loadCurrents() above — the
+// dataBase() prefix isn't Pi-relative until the config lands.
+_configPromise.then(() => loadCurrentField());
 autoRefreshTimers.field = setInterval(loadCurrentField, 300000);  // Refresh every 5 minutes
 
 // Load HYCOM ocean currents for tidal flow visualization outside SF Bay
@@ -1566,8 +1639,50 @@ function formatDataAge(fetchedAtStr) {
         const m = ageMins % 60;
         ageText = m > 0 ? `${h}h ${m}m ago` : `${h}h ago`;
     }
-    const dot = `<span style="display:inline-block;width:6px;height:6px;border-radius:50%;background:${dotColor};box-shadow:0 0 4px ${dotColor};margin-right:3px;vertical-align:middle;"></span>`;
-    return { dot, ageText, fresh: ageMins < 45, ageMins };
+    const dot = document.createElement('span');
+    dot.style.cssText = `display:inline-block;width:6px;height:6px;border-radius:50%;background:${dotColor};box-shadow:0 0 4px ${dotColor};margin-right:3px;vertical-align:middle;`;
+    return { dot, ageText };
+}
+
+// The red "⚠ …" warning line shared by the flow and wind legends.
+function setLegendError(el, msg) {
+    if (!el) return;
+    el.textContent = '';
+    const span = document.createElement('span');
+    span.style.color = '#e74c3c';
+    span.textContent = `⚠ ${msg}`;
+    el.appendChild(span);
+}
+
+/**
+ * Render a legend's source line.
+ *
+ * `text` comes straight out of fetched JSON (data.source, data.model_run,
+ * model_obs_time), so it goes in as a text node — never innerHTML.
+ */
+function renderLegendSource(el, { text, age, cacheMeta }) {
+    if (!el) return;
+    el.textContent = '';
+    if (cacheMeta && cacheMeta.state === 'STALE') {
+        const warn = document.createElement('span');
+        warn.style.color = '#e74c3c';
+        warn.textContent = '⚠ Pi offline';
+        el.appendChild(warn);
+        el.appendChild(document.createTextNode(' · '));
+    }
+    el.appendChild(document.createTextNode(text));
+    if (age) {
+        el.appendChild(document.createTextNode(' · '));
+        el.appendChild(age.dot);
+        el.appendChild(document.createTextNode(`fetched ${age.ageText}`));
+    }
+}
+
+/** Forecast target time as a short local (PT) string, e.g. "Tue 3:00 PM". */
+function forecastTargetLabel() {
+    return new Date(Date.now() + forecastMinutes * 60000).toLocaleString('en-US', {
+        weekday: 'short', hour: 'numeric', minute: '2-digit', timeZone: 'America/Los_Angeles',
+    });
 }
 
 /** Pretty-format a UTC ISO timestamp ("2026-05-18T02:00") as local HH:mm (PT). */
@@ -1634,28 +1749,27 @@ if (windColorToggle) {
 }
 
 async function loadWindField() {
-    const _windSourceEl = document.getElementById('wind-legend-source');
-    const _showWindErr = (msg) => { if (_windSourceEl) _windSourceEl.innerHTML = `<span style="color:#e74c3c">⚠ ${msg}</span>`; };
+    const sourceEl = document.getElementById('wind-legend-source');
+    const showWindErr = (msg) => setLegendError(sourceEl, msg);
     try {
         // Wind forecasts limited to 48h (HRRR model limit)
         if (forecastMinutes > 48 * 60) {
             // Beyond wind forecast range — show note in legend
-            if (_windSourceEl) _windSourceEl.textContent = 'Wind forecast unavailable beyond 48h';
+            if (sourceEl) sourceEl.textContent = 'Wind forecast unavailable beyond 48h';
             return;
         }
         // Show loading state in legend immediately
-        const sourceEl = _windSourceEl;
         if (sourceEl && !sourceEl.textContent) {
             sourceEl.innerHTML = '<span style="opacity:0.6">Loading wind data\u2026</span>';
         }
         const data = await fetchWindField(forecastMinutes);
         if (!data) {
-            _showWindErr('Wind unavailable — Pi offline?');
+            showWindErr('Wind unavailable — Pi offline?');
             return;
         }
         if (data.error) {
             console.log('Wind data not available:', data.error);
-            _showWindErr('Wind unavailable');
+            showWindErr('Wind unavailable');
             return;
         }
 
@@ -1670,34 +1784,30 @@ async function loadWindField() {
         }
 
         // Update wind legend source text
-        const source = document.getElementById('wind-legend-source');
-        if (source && data.grid) {
+        if (data.grid) {
             const src = data.grid.source || 'HRRR';
             const stationCount = data.stations ? data.stations.length : 0;
             const stationStr = stationCount ? ` · ${stationCount} stations` : '';
             const obs = data.grid.model_obs_time
                 ? ` · model: ${formatModelTime(data.grid.model_obs_time)}`
                 : '';
-            const age = formatDataAge(data.grid.fetched_at);
-            const ageStr = age ? ` · ${age.dot}fetched ${age.ageText}` : '';
-            const stalePrefix = (data.grid._cacheMeta && data.grid._cacheMeta.state === 'STALE')
-                ? '<span style="color:#e74c3c">⚠ Pi offline</span> · ' : '';
-            if (forecastMinutes > 0) {
-                const target = new Date(Date.now() + forecastMinutes * 60000);
-                const timeStr = target.toLocaleString('en-US', { weekday: 'short', hour: 'numeric', minute: '2-digit', timeZone: 'America/Los_Angeles' });
-                source.innerHTML = `${stalePrefix}${src}${obs} · forecast: ${timeStr}${ageStr}${stationStr}`;
-            } else {
-                source.innerHTML = `${stalePrefix}${src}${obs}${ageStr}${stationStr}`;
-            }
+            const fcst = forecastMinutes > 0 ? ` · forecast: ${forecastTargetLabel()}` : '';
+            renderLegendSource(sourceEl, {
+                text: `${src}${obs}${fcst}`,
+                age: formatDataAge(data.grid.fetched_at),
+                cacheMeta: data.grid._cache_meta,
+            });
+            if (sourceEl && stationStr) sourceEl.appendChild(document.createTextNode(stationStr));
         }
     } catch (e) {
         console.log('Wind field fetch failed (optional)');
-        _showWindErr('Wind fetch failed — retrying when online');
+        showWindErr('Wind fetch failed — retrying when online');
     }
 }
 
-// Load wind data on startup and refresh every 5 minutes
-loadWindField();
+// Load wind data on startup (after /config.json, so the Open-Meteo request goes
+// through the Pi proxy at sea) and refresh every 5 minutes
+_configPromise.then(() => loadWindField());
 
 // --- Tide Height Stations ---
 let tideStations = [];  // array of {station_id, name, lat, lon, height_ft, next_extreme, observed_ft?, obs_time?}
@@ -1857,7 +1967,9 @@ function updateFlowConfidence() {
     el.innerHTML = `<span>${dot} ${label}</span> <span style="color:#4a6a8a">(avg Δ${avgDelta.toFixed(1)}ft ${avgSign})</span><br><span style="color:#4a6a8a">${detail}</span>`;
 }
 
-loadTideHeight();
+// Gated on /config.json so the NOAA tide/water-level requests resolve to the Pi
+// proxy on the first pass instead of the hardcoded public API.
+_configPromise.then(() => loadTideHeight());
 
 // Tide toggle button
 const tideToggleBtn = document.getElementById('tide-toggle');

@@ -51,6 +51,7 @@ GitHub Actions (scheduled)        │  GitHub Pages                   │
                           │                      :10110 bridge     │
                           │                                        │
                           │  Background: SFBOFS pre-warm loop      │
+                          │  + env pre-warm (wind/tides/currents)  │
                           │  (1h cycle, exp backoff on failure)    │
                           └────────────────────────────────────────┘
 
@@ -72,7 +73,7 @@ Browser-side modules (same code in both contexts, behavior switches on /config.j
 Environmental data sources:
 - `NOAA CO-OPS API` → direct browser fetch → client-side interpolation → tide/current display
 - `NOAA CO-OPS API` → `product=water_level` → real-time gauge observations (6 stations) → observed vs predicted in tide popups + SFBOFS confidence indicator
-- `Open-Meteo API` → direct browser fetch (1 batched request, 72 points × 49 hours) → wind particles
+- `Open-Meteo API` → direct browser fetch (1 batched request, 176 points × 49 hours) → wind particles
 - `data/sfbofs/hour_XX.json` → GitHub Actions pre-computed → `tidal-flow.js` particles
 - `data/wind/stations.json` → GitHub Actions NDBC fetch → `wind-overlay.js` station markers
 
@@ -83,17 +84,17 @@ This is the ground-truth table of every external data source the browser uses, w
 | Layer | Pi proxy route | Pre-warmed at startup | Age shown in UI | Notes |
 |---|---|---|---|---|
 | SFBOFS currents | `/data/sfbofs/{hour}.json` | ✓ hours 0-48 | ✓ flow legend | GH Pages → Pi cache |
-| SFBOFS GG hi-res | `/data/sfbofs_gg/{hour}.json` | ✓ same loop | ✓ | |
+| SFBOFS GG hi-res | `/data/sfbofs_gg/{hour}.json` | ✗ (on-demand only) | ✓ | route exists, `sfbofs_prewarm_loop` only sweeps `data/sfbofs/` |
 | HYCOM currents | `/data/hycom/*` | ✗ | ✗ | optional, outside SF Bay |
-| Wind grid (Open-Meteo) | `/api/open-meteo/v1/forecast` | ✗ ← **gap** | ✓ wind legend | batched lat/lon array |
+| Wind grid (Open-Meteo) | `/api/open-meteo/v1/forecast` | ✓ `env_prewarm_loop` (hourly) | ✓ wind legend | batched lat/lon array |
 | Wind stations (NDBC) | `/data/wind/stations.json` | ✓ | ✗ | static JSON |
-| Tide predictions | `/api/noaa/api/prod/datagetter` | ✗ ← **gap** | ✗ ← **gap** | 14 stations |
-| Currents predictions | `/api/noaa/api/prod/datagetter` | ✗ ← **gap** | ✗ ← **gap** | 6 stations |
+| Tide predictions | `/api/noaa/api/prod/datagetter` | ✓ `env_prewarm_loop` (hourly) | ✗ ← **gap** | 16 stations |
+| Currents predictions | `/api/noaa/api/prod/datagetter` | ✓ `env_prewarm_loop` (hourly) | ✗ ← **gap** | 6 stations |
 | Water levels (real-time) | `/api/noaa/api/prod/datagetter` | ✗ (intentional, 10-min TTL) | partial | 6 stations |
 | Land mask | `/data/land_mask.json` | ✓ | n/a | |
 | Meta JSON | `/data/meta.json` | ✓ | n/a | 60s TTL |
 | **NOAA chart tiles** | filesystem `/tiles/noaa/{z}/{x}/{y}.png` | run `download_offline.py` | n/a | **default layer**; ArcGIS REST upstream |
-| CartoDB Dark tiles | filesystem `/tiles/dark/{z}/{x}/{y}.png` | run `download_offline.py` | n/a | |
+| Esri Dark Gray tiles | filesystem `/tiles/dark/{z}/{x}/{y}.png` | run `download_offline.py` | n/a | |
 | OpenStreetMap tiles | filesystem `/tiles/osm/{z}/{x}/{y}.png` | run `download_offline.py` | n/a | |
 | OpenSeaMap tiles | filesystem `/tiles/sea/{z}/{x}/{y}.png` | run `download_offline.py` | n/a | |
 | Local NMEA stream | `/nmea` (WebSocket) | n/a | n/a | TCP→WS bridge to 192.168.47.10:10110 |
@@ -107,12 +108,13 @@ Two distinct caching layers, neither overlapping with the other:
 - Populated by `download_offline.py` (run manually with internet, idempotent — `download_file` skips files that already exist with size>0).
 - Default bbox is SF Bay through Monterey (set in `download_offline.py:DEFAULT_BOUNDS`).
 - Served as plain static files by the Pi; never refreshed by the running server.
-- When the browser is on `github.io` (`_useLocalTiles=false` at `static/js/app.js:361`), tile URLs go direct to the CDN and these files are unused.
+- Only served when `_serveTilesFromDisk()` is true (`static/js/app.js`) — i.e. boat mode per `/config.json`, or a non-`github.io`, non-localhost host. On GitHub Pages and on localhost, tile URLs go direct to the CDN and these files are unused.
+- Only zoom `LOCAL_TILE_MIN_Z`–`LOCAL_TILE_MAX_Z` (10–15, matching `download_offline.py:DEFAULT_ZOOM_RANGE`) exist on disk. The layers set `minNativeZoom`/`maxNativeZoom` to that range so Leaflet upscales past z15 instead of rendering a blank chart.
 
 **2. Reverse-proxy disk cache** (`pi/boat_server.py` `DiskCache`, default dir `cache/`).
-- Populated two ways: by `sfbofs_prewarm_loop` (every hour while online), and on-demand when a browser request misses cache.
-- Per-source TTLs (`pi/boat_server.py:52-65`): SFBOFS 1h, NOAA tides/currents 6h, water levels 10min, Open-Meteo wind 30min, NDBC 10min, meta 1min.
-- **Stale-on-error**: when upstream fetch fails and the cached entry exists, `proxy_with_cache` serves the cached body with `X-Cache: STALE` + `X-Cache-Age` headers — up to `MAX_STALE_S` (currently 24h, planned to extend per source).
+- Populated three ways: by `sfbofs_prewarm_loop` (SFBOFS hours 0-48 + NDBC + land mask + meta, hourly), by `env_prewarm_loop` (batched Open-Meteo wind URL + all 16 tide stations + all 6 current stations, hourly), and on-demand when a browser request misses cache.
+- Per-source TTLs: SFBOFS 1h, NOAA tides/currents 6h, water levels 10min, Open-Meteo wind 30min, NDBC 10min, meta 1min.
+- **Stale-on-error**: when upstream fetch fails and the cached entry exists, `proxy_with_cache` serves the cached body with `X-Cache: STALE` + `X-Cache-Age` headers — up to a per-source stale ceiling: `MAX_STALE_TIDES_S` / `MAX_STALE_CURRENTS_S` 30d (harmonic predictions stay valid for weeks), `MAX_STALE_OPEN_METEO_S` / `MAX_STALE_SFBOFS_S` / `MAX_STALE_NDBC_S` 7d, `MAX_STALE_WATER_LEVEL_S` / `MAX_STALE_META_S` / `MAX_STALE_DEFAULT_S` 24h (a stale real-time gauge reading is worse than none). Beyond the ceiling the proxy returns 504 rather than serve data masquerading as current.
 
 **The Pi serves HTTP, not HTTPS** (default `--port 8080` in `start_boat.sh`). Browsers refuse to register Service Workers on HTTP origins, so `static/sw.js` does **not** activate when the page is loaded from the Pi. All caching at sea is server-side. `sw.js` is only relevant on the GitHub Pages URL.
 
@@ -169,9 +171,9 @@ Same `static/` directory deployed to both. `boat-mode` branch is what the Pi run
 | `js/tidal-flow.js` | Canvas particle animation + speed heatmap for tidal currents (2000-3000 particles, bilinear interpolation, offscreen-rendered color overlay) |
 | `js/wind-overlay.js` | Canvas particle animation for wind (800 arrow-tipped particles with speed number flashing, NDBC station markers, dual color schemes) |
 | `css/style.css` | Dark nautical theme, glassmorphism panels, responsive 3-row mobile layout, Leaflet control styling, sailing dashboard |
-| `sw.js` | Service Worker: cache-first for external CDN tiles (CartoDB, OSM, NOAA, OpenSeaMap, jsdelivr via `ais-tiles-v1` cache), network-first for HTML/JS, network-first with cache fallback for env APIs (NOAA CO-OPS, Open-Meteo) and static data JSON via `ais-data-v2` cache, stale-while-revalidate after offline download |
+| `sw.js` | Service Worker: cache-first for external CDN tiles (Esri, OSM, NOAA, OpenSeaMap, jsdelivr via `ais-tiles-v2` cache), network-first for HTML/JS, network-first with cache fallback for env APIs (NOAA CO-OPS, Open-Meteo) and static data JSON via `ais-data-v10` cache, stale-while-revalidate after offline download |
 
-### Sailing / NMEA (project root)
+### Sailing / NMEA / Pi tooling (project root)
 
 | File | Purpose |
 |------|---------|
@@ -179,8 +181,10 @@ Same `static/` directory deployed to both. `boat-mode` branch is what the Pi run
 | `pi/boat_server.py` | **Current Pi server.** aiohttp app that serves `static/`, reverse-proxies + disk-caches NOAA/Open-Meteo/GH-Pages, bridges NMEA TCP→WebSocket at `/nmea`, synthesizes `/config.json`, runs SFBOFS pre-warm loop. HTTP :8080 by default; HTTPS optional with `--ssl-cert/--ssl-key`. |
 | `pi/startup.sh` | systemd entrypoint. `git fetch && git reset --hard origin/boat-mode`, starts `nmea_capture.py` for log files, then execs `start_boat.sh`. |
 | `pi/ais-tracker.service` | systemd unit running as `rostape1`. `Restart=on-failure`. |
-| `start_boat.sh` | Foreground launcher for `pi/boat_server.py`. Used by systemd (via `startup.sh`) and for manual runs. |
+| `pi/requirements.txt` | Python deps for the Pi server (`aiohttp`, `websockets`). |
+| `start_boat.sh` | Foreground launcher for `pi/boat_server.py`. Used by systemd (via `startup.sh`) and for manual runs. Defaults `PORT=8080`. |
 | `nmea_capture.py` | NMEA sentence logger writing hourly-rotated files into `logs/`. Started by `startup.sh` alongside the Pi server; logs are also browsable via `/logs` on the Pi. |
+| `download_offline.py` | Manual, idempotent offline pre-fetch of Leaflet assets + map tiles (NOAA chart / Esri dark / OSM / OpenSeaMap) into `static/tiles/`. `DEFAULT_BOUNDS` (SF Bay through Monterey) is the authoritative bbox; override with `--bounds` / `--zoom`. |
 
 ## Database Schema
 
@@ -202,7 +206,9 @@ WAL mode + async lock serializes writes. Periodic commits every 2 seconds.
 |------|---------|
 | `tests/test_physics.mjs` | Node-based sanity tests for `route-worker.js` polar lookup + apparent wind math. Loads worker source via `new Function` sandbox with a stubbed `self`. Run: `node tests/test_physics.mjs` (also runs in CI before deploy). |
 | `tests/test_staleness.mjs` | Regression tests for the SFBOFS staleness gate in `data-loader.js` — stale-seed deadlock, NOW-vs-+4h aliasing, high-res path parity, and the 49-concurrent-call request budget. Sandboxed `fetch` stub, no network. Run: `node tests/test_staleness.mjs` (also runs in CI before deploy). |
-| `tests/test_route.mjs` | End-to-end route tests against live SFBOFS + Open-Meteo + land mask fetched from GitHub Pages. Runs the worker headlessly in Node and prints ETA/distance/avg/ratio per variant. Use this instead of click-and-screenshot when iterating on the router. `node tests/test_route.mjs [--variant=X] [--start=lat,lon --end=lat,lon] [--base=local]`. ~13 s for a full four-variant sweep. |
+| `tests/test_route.mjs` | End-to-end route tests against live SFBOFS + Open-Meteo + land mask fetched from GitHub Pages. Runs the worker headlessly in Node and prints ETA/distance/avg/ratio per variant. Use this instead of click-and-screenshot when iterating on the router. `node tests/test_route.mjs [--variant=X] [--start=lat,lon --end=lat,lon] [--base=local]`. ~13 s for a full four-variant sweep. **Not run in CI** — needs live network. |
+| `tests/test_boat_server.py` | Regression tests for `pi/boat_server.py` — no test framework, same `ok`-line style as the `.mjs` tests. Covers (a) **cross-language parity**: `TIDE_STATIONS` / `CURRENT_STATIONS` / wind grid / NOAA + Open-Meteo URL shapes are hand-mirrored between `data-loader.js` and `boat_server.py`, and the disk cache is keyed on SHA1(url), so any drift makes pre-warming a silent no-op — the wind-URL coordinates are compared byte-for-byte against `node`'s `toFixed(4)`; (b) the **UTC-midnight rollover**: date-independent alias must serve yesterday's prediction window when offline; (c) **captive portals**: 200 `text/html` must never be cached or served; (d) **404 passes through** (the SFBOFS sweep depends on it) while 5xx/other-4xx fall through to stale-on-error; (e) stale ceilings, single-flight coalescing, `DiskCache` prune, and the path allowlists. Run: `python3 tests/test_boat_server.py` (also runs in CI before deploy; needs `pip install -r pi/requirements.txt`). Sets `sys.dont_write_bytecode` — a stale `pi/__pycache__` .pyc can otherwise mask a same-byte-length source change. |
+| `pi/test_boat_server.sh` | Curl-based end-to-end smoke test for the Pi server: `/config.json` shape, NOAA + Open-Meteo proxy byte-parity with upstream, `/data/*` reverse-proxy + local fallback, SSRF allowlist rejection, `X-Cache` MISS→HIT transition, `/nmea` WebSocket upgrade. Run on the Pi while `./start_boat.sh` is up: `./pi/test_boat_server.sh [host:port]`. **Not run in CI** — needs a live server + network. |
 
 ## Static Data Files
 
@@ -217,10 +223,10 @@ WAL mode + async lock serializes writes. Periodic commits every 2 seconds.
 
 | Source | API | Data |
 |--------|-----|------|
-| Tides (14 stations) | NOAA CO-OPS (`api.tidesandcurrents.noaa.gov`) | 3-day predictions, 6-min interval |
+| Tides (16 stations) | NOAA CO-OPS (`api.tidesandcurrents.noaa.gov`) | 3-day predictions, 6-min interval |
 | Water levels (6 stations) | NOAA CO-OPS (same API, `product=water_level`) | Latest gauge reading, 10-min cache |
 | Currents (6 stations) | NOAA CO-OPS (same API) | 3-day predictions, 6-min interval |
-| Wind grid (9×8 = 72 points) | Open-Meteo (`api.open-meteo.com`) | 49 forecast hours, batched in 1 request |
+| Wind grid (11×16 = 176 points) | Open-Meteo (`api.open-meteo.com`) | 49 forecast hours, batched in 1 request |
 
 ## External Services
 
@@ -272,10 +278,12 @@ Open **http://localhost:8888**. You'll be prompted for your AISstream.io API key
 ### Tests
 
 ```bash
-node tests/test_physics.mjs   # polar lookup + apparent wind sanity tests
+node tests/test_physics.mjs        # polar lookup + apparent wind sanity tests
+node tests/test_staleness.mjs      # SFBOFS staleness gate + download sweep
+python3 tests/test_boat_server.py  # Pi proxy/cache + JS↔Python parity (needs pi/requirements.txt)
 ```
 
-CI runs this in the `test` job of `.github/workflows/deploy.yml` before the deploy job.
+CI runs all three in the `test` job of `.github/workflows/deploy.yml` before the deploy job, plus `py_compile` on the Pi/root Python and `bash -n` on the boat shell scripts. `tests/test_route.mjs` and `pi/test_boat_server.sh` are excluded — both need live network.
 
 ### Legacy Backend (original server mode)
 
@@ -315,19 +323,19 @@ SSH: `ssh rostape1@TyponRpi4.local`
 - **50 vessel cap** — cloud AIS mode limits to 50 closest vessels to keep the map clean
 - **AIS API key embedded** — `DEFAULT_AISSTREAM_KEY` in `app.js` so the app auto-connects on any device. Users can override via `localStorage.setItem('aisstream_api_key', ...)`.
 - **Tide forecasts are unlimited range** — harmonic math, no model dependency. Wind limited to 49h (Open-Meteo forecast_hours), current field limited to 48h (SFBOFS)
-- **Browser-side data fetching** — Tides (14 NOAA CO-OPS stations), currents (6 stations), and wind (72-point Open-Meteo grid) are fetched directly in the browser. In-memory caches: tides/currents 6h TTL, wind 30min TTL. On the Pi these requests are reverse-proxied through `boat_server.py` and disk-cached so all clients on the boat WiFi share one upstream fetch. On GitHub Pages the Service Worker caches API responses for offline use.
-- **Wind grid batched in 1 request** — All 72 grid points × 49 forecast hours fetched via single Open-Meteo API call with comma-separated coordinates. Direction→u/v conversion done in browser JS.
+- **Browser-side data fetching** — Tides (16 NOAA CO-OPS stations), currents (6 stations), and wind (176-point Open-Meteo grid) are fetched directly in the browser. In-memory caches: tides/currents 6h TTL, wind 30min TTL. On the Pi these requests are reverse-proxied through `boat_server.py` and disk-cached so all clients on the boat WiFi share one upstream fetch. On GitHub Pages the Service Worker caches API responses for offline use.
+- **Wind grid batched in 1 request** — All 176 grid points (11×16) × 49 forecast hours fetched via single Open-Meteo API call with comma-separated coordinates. Direction→u/v conversion done in browser JS.
 - **Auto-download on load** — `_autoDownload()` fires 8s after page load, silently pre-fetches all data (SFBOFS, NDBC, tides, currents, wind). Retries with exponential backoff (30s→60s→…→5min) if any category fails. Retries immediately (3s grace) when network comes back online. Manual download button still works with progress panel.
 - **Per-category download badges** — Status bar shows Flow/Wind/Tide/Curr chips. Turn green when that category downloads successfully (checks actual HTTP response, not just loop completion). Persists in localStorage, resets after 6h. `_getDlStatus()` / `_setDlCategory()` in `app.js`.
 - **SFBOFS download sweep** — the offline pre-fetch loop distinguishes two failure kinds. A **404 breaks cleanly** (model runs don't always produce all 49 hours; later hours missing is normal). Any **other** fault — timeout, 5xx, cold-cache miss — is treated as transient: retried once, and if it still fails the hour is recorded in `flow_gaps` and the sweep **continues** instead of truncating. Previously any error broke the loop, so one blip at hour 20 silently capped coverage at 20h and reported it as though that were the run's real extent.
 - **Download badge tells the truth** — `Flow +Nh` is how far ahead of *now* the cached forecast reaches (computed from `flow_max_hour`, **not** the file count — with gaps the two diverge and the count understates reach). It counts down as the run ages and jumps back up on the next NOAA cycle; it is *not* a count of files. If any hour is missing the badge turns amber and reads `Flow +Nh ⚠<n>` with a tooltip naming the missing hours — an incomplete sweep must never render as the green all-clear.
 - **SFBOFS staleness gate** — `fetchCurrentField()` refuses to return a grid when the model run is older than `SFBOFS_RUN_STALE_HOURS` (12h; SFBOFS reruns every 6h), returning `{unavailable:true, stale:true, runAgeHours}`. **Why this matters:** the file index is `min(48, elapsedHours + offsetHours)`, so once a run goes stale *every* forecast offset aliases to `hour_48.json` — NOW and +4h render identically and the app silently presents a dead forecast as live data. The flow legend shows a red "model run is Nh old — fetch pipeline stalled" and the grid is cleared rather than drawn. This is the failure mode from the 2026-08 outage, where GitHub auto-disabled the cron workflows after 60 days of repo inactivity and the field froze for 3 weeks.
-- **Actions keepalive** — GitHub disables scheduled workflows after 60 days with no repo *pushes* (cron runs and cache writes don't count). `ndbc.yml` commits `.github/data-heartbeat` once a week to reset that clock. Filename is extension-less on purpose — `.gitignore` has `*.txt`. If data ever goes stale, check `gh api repos/:owner/:repo/actions/workflows` for `state: disabled_inactivity` first and re-enable with `gh workflow enable`.
+- **Actions keepalive** — GitHub disables scheduled workflows after 60 days with no repo *pushes* (cron runs and cache writes don't count). `ndbc.yml` commits `.github/data-heartbeat` once a week to reset that clock. Filename is extension-less on purpose — `.gitignore` used to carry a bare `*.txt` (now narrowed to `logs/*.txt` + `nmea_*.txt`). If data ever goes stale, check `gh api repos/:owner/:repo/actions/workflows` for `state: disabled_inactivity` first and re-enable with `gh workflow enable`.
 - **SFBOFS file convention** — NOAA publishes nowcast files (n000-n006, hindcast/analysis) and forecast files (f000-f048, actual forecasts). We fetch only the `f` files: f000 = cycle time, f048 = +48h.
-- **Offline behavior on GitHub Pages** — Service Worker (`sw.js`) caches external map tiles (CartoDB, OSM, NOAA charts, OpenSeaMap) on first view via `ais-tiles-v1` cache, plus API responses via `ais-data-v2`. Only active over HTTPS — does **not** run when accessed via the Pi (`http://typonrpi4.local:8080/`).
-- **Offline behavior on the Pi** — No service worker (HTTP origin). Instead, `pi/boat_server.py` does the caching server-side: a disk cache keyed by SHA1(url) under `cache/`, fresh-on-TTL, stale-on-error (up to `MAX_STALE_S = 24h`), with a startup pre-warm loop that fetches all 49 SFBOFS hours + NDBC + land mask from GitHub Pages every hour while internet is available. So the boat keeps working through satcom outages.
+- **Offline behavior on GitHub Pages** — Service Worker (`sw.js`) caches external map tiles (Esri, OSM, NOAA charts, OpenSeaMap) on first view via `ais-tiles-v2` cache, plus API responses via `ais-data-v10`. Only active over HTTPS — does **not** run when accessed via the Pi (`http://typonrpi4.local:8080/`).
+- **Offline behavior on the Pi** — No service worker (HTTP origin). Instead, `pi/boat_server.py` does the caching server-side: a disk cache keyed by SHA1(url) under `cache/`, fresh-on-TTL, stale-on-error up to a per-source ceiling (`MAX_STALE_TIDES_S`/`MAX_STALE_CURRENTS_S` 30d, `MAX_STALE_SFBOFS_S`/`MAX_STALE_OPEN_METEO_S`/`MAX_STALE_NDBC_S` 7d, `MAX_STALE_WATER_LEVEL_S`/`MAX_STALE_META_S`/`MAX_STALE_DEFAULT_S` 24h), plus two hourly pre-warm loops: `sfbofs_prewarm_loop` (49 SFBOFS hours + NDBC + land mask + meta from GitHub Pages) and `env_prewarm_loop` (Open-Meteo wind grid + NOAA tide/current predictions). So the boat keeps working through satcom outages.
 - **Data freshness indicators** — Wind and current field legends show green/yellow dot with relative age (e.g. "3m ago" / "2h 30m ago"). Green = data < 45 min old, yellow = stale. Wind source shows "Open-Meteo". Both legends are same width (210px).
-- **Real-time water levels** — 6 of 14 tide stations have NOAA gauges (SF, Alameda, Redwood City, Richmond, Martinez, Port Chicago). `fetchWaterLevels()` in data-loader.js fetches `product=water_level&date=latest`, 10-min cache. Popups show Predicted/Observed/Difference. Dashed green ring on gauge station markers. Only in real-time mode (forecastMinutes === 0).
+- **Real-time water levels** — 6 of 16 tide stations have NOAA gauges (SF, Alameda, Redwood City, Richmond, Martinez, Port Chicago). `fetchWaterLevels()` in data-loader.js fetches `product=water_level&date=latest`, 10-min cache. Popups show Predicted/Observed/Difference. Dashed green ring on gauge station markers. Only in real-time mode (forecastMinutes === 0).
 - **SFBOFS confidence indicator** — `updateFlowConfidence()` in app.js computes avg observed-vs-predicted delta across gauge stations. Shows in flow legend: green (≤0.3ft, reliable), yellow (≤0.5ft, moderate), red (>0.5ft, low). Detail text indicates direction: higher water → stronger currents & earlier slack; lower water → weaker currents & later slack.
 - **Route optimizer** — `computeRoute()` in `router.js` orchestrates an isochrone search executed in `js/route-worker.js` (Web Worker, off the main thread). Pre-loads up to 49 hours of SFBOFS current + Open-Meteo wind grids into `RouterDataStore` with temporal interpolation between hourly grids; sub-hour forecast offsets are passed to the worker (`gridOffsetH`) so grid lookups align to the actual start clock instead of flooring to the hour. **48h time budget** (`MAX_TIME_S = 172800`), 72 headings (144 in the Golden Gate HR zone), 60–300 s timesteps depending on whether any wavefront point is in the HR zone / near land / open water. **Wind frame:** TWA is computed against wind-over-water (`wind − current`), not wind-over-ground — the polar expects what the sails actually feel. **Tack penalty** (60 s for >60° change, 20 s for >30°) is applied as a *speed reduction* during the step, not a time addition, so the wavefront stays on a single equal-time isochrone. **Drift fallback:** if a point has wind < 0.5 kn or every heading from it hits land, a single drift point is pushed at the same wall-clock advance, displaced only by the current — so calm patches don't silently empty the wavefront. **Pruning:** best-by-distFromStart per 2° angular sector (180 sectors) for baseline; VMC variant biases by `dist * (1 + 0.5·cos(brg − destBrg))` (range 0.5–1.5× dist, strictly monotonic in dist). `bestToDest` always carried forward. **Destination approach:** within 1 nm of destination (`DEST_APPROACH_NM`), the 200 m land buffer is dropped and strict `_isLand` is used, so harbors and shoreline waypoints can be reached. Swan 47 polars with configurable performance factor (default 85%) and optional `polarFalloff` variant (linear degrade 1.0 @ 150° → 0.85 @ 180°). Variant dropdown in route-planner panel (baseline / vmc / falloff / both); changing it auto-recomputes. Route colored by current benefit: green (favorable >0.3kn), red (adverse >0.3kn), orange (neutral). Time labels at dynamic interval (15min / 30min / 1h / 2h based on total duration). **Details table** (via button) shows BSP, TWS, TWA, AWS, AWA per waypoint, color-coded by point of sail.
 - **Position data kept permanently** — for post-voyage analysis

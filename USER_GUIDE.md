@@ -78,7 +78,7 @@ Use the layer control (top-left corner) to switch between:
 
 | Layer | Best For |
 |-------|----------|
-| **Dark (CartoDB)** | Night sailing, low glare in the cockpit |
+| **Dark (Esri)** | Night sailing, low glare in the cockpit |
 | **Street (OSM)** | Finding landmarks and shore references |
 | **NOAA Nautical Chart** | Navigation with depth soundings, channels, buoys |
 | **OpenSeaMap Marks** | Buoys, lights, and aids to navigation overlay |
@@ -344,7 +344,7 @@ Before leaving the dock:
 AIS Tracker is a PWA (Progressive Web App) — you can install it on your phone or tablet for a full-screen native app experience.
 
 ### iPhone / iPad
-1. Open **http://your-server:8888** in Safari
+1. Open your server's URL in Safari — `http://<pi-ip>:8080` for the boat-mode Pi server, or `http://<host>:8888` for the legacy `main.py` server
 2. Tap the **Share** button (square with arrow)
 3. Scroll down and tap **Add to Home Screen**
 4. Tap **Add**
@@ -357,7 +357,7 @@ The app icon appears on your home screen. Opening it launches a full-screen app 
 3. Tap **Install app** or **Add to Home Screen**
 
 ### Raspberry Pi Setup
-For the best on-boat experience, run AIS Tracker on a Raspberry Pi connected to your boat's WiFi network. Then install the PWA on your phone/tablet and access it at `http://<pi-ip>:8888`. Everything stays on the local network — no internet required for AIS tracking.
+For the best on-boat experience, run AIS Tracker on a Raspberry Pi connected to your boat's WiFi network. Start it with `./start_boat.sh` (boat-mode server, `pi/boat_server.py`), then install the PWA on your phone/tablet and access it at `http://<pi-ip>:8080`. Everything stays on the local network — no internet required for AIS tracking.
 
 ---
 
@@ -373,7 +373,7 @@ All settings can be configured via environment variables or a `.env` file in the
 | AISstream API Key | (none) | `AISSTREAM_API_KEY` | Free key from aisstream.io |
 | Own MMSI | 338361814 | `OWN_MMSI` | Your vessel's MMSI number |
 | Server Host | 127.0.0.1 | `SERVER_HOST` | Bind address (use 0.0.0.0 for network access) |
-| Server Port | 8888 | `SERVER_PORT` | Web server port |
+| Server Port | 8888 | `SERVER_PORT` | Web server port — **legacy `main.py` server only**. The boat-mode Pi server (`start_boat.sh` → `pi/boat_server.py`) listens on 8080 and is set via `PORT` / `--port`, not `SERVER_PORT`. |
 | Database Path | ./ais_tracker.db | `DB_PATH` | SQLite database location |
 
 ### Important: Network Access
@@ -391,7 +391,7 @@ This makes the server listen on all network interfaces instead of just localhost
 ## Tips & Tricks
 
 ### Night Sailing
-Use the **Dark (CartoDB)** map layer — it's designed for low light conditions and won't ruin your night vision.
+Use the **Dark (Esri)** map layer — it's designed for low light conditions and won't ruin your night vision.
 
 ### Planning Your Departure
 Use the forecast timeline to check currents for the next few hours. A favorable current in the Gate can save you significant time and fuel.

@@ -8,8 +8,8 @@ server for the single TCP connection from the instruments.
 
 Usage:
     python nmea_capture.py                        # default ws url
-    python nmea_capture.py --ws-url wss://localhost:8443/nmea
-    python nmea_capture.py --web-port 8080
+    python nmea_capture.py --ws-url ws://localhost:8080/nmea
+    python nmea_capture.py --web-port 8081
 """
 
 import argparse
@@ -20,6 +20,7 @@ import os
 import ssl
 import threading
 import time
+import urllib.parse
 from collections import deque
 from datetime import datetime, timezone
 from http.server import HTTPServer, BaseHTTPRequestHandler
@@ -41,6 +42,9 @@ stats = {
     "source": "",
     "recent": deque(maxlen=10),
 }
+
+_current_hour = None
+_outfile = None
 
 
 def ts():
@@ -182,16 +186,17 @@ def log_sentence(sentence, source_url):
     stats["recent"].append((timestamp, sentence))
 
 
-_current_hour = None
-_outfile = None
-
-
 async def capture_ws(ws_url):
     stats["source"] = ws_url
     if ws_url.startswith("wss://"):
         ssl_ctx = ssl.create_default_context()
-        ssl_ctx.check_hostname = False
-        ssl_ctx.verify_mode = ssl.CERT_NONE
+        # The Pi's cert is self-signed, so verification has to be off for a
+        # loopback connection to itself — but only for loopback. Any other host
+        # gets normal verification.
+        host = urllib.parse.urlsplit(ws_url).hostname or ""
+        if host in ("localhost", "127.0.0.1", "::1"):
+            ssl_ctx.check_hostname = False
+            ssl_ctx.verify_mode = ssl.CERT_NONE
     else:
         ssl_ctx = None
 
@@ -207,7 +212,7 @@ async def capture_ws(ws_url):
                     sentence = message.strip()
                     if sentence:
                         log_sentence(sentence, ws_url)
-        except Exception as e:
+        except (OSError, websockets.WebSocketException, asyncio.TimeoutError) as e:
             print(f"WebSocket error: {e}")
 
         stats["connected"] = False
@@ -217,9 +222,10 @@ async def capture_ws(ws_url):
 
 def main():
     parser = argparse.ArgumentParser(description="NMEA capture via boat server WebSocket")
-    parser.add_argument("--ws-url", default="wss://localhost:8443/nmea",
-                        help="Boat server NMEA WebSocket URL (default: wss://localhost:8443/nmea)")
-    parser.add_argument("--web-port", type=int, default=8080, help="Status page HTTP port (default: 8080)")
+    parser.add_argument("--ws-url", default="ws://localhost:8080/nmea",
+                        help="Boat server NMEA WebSocket URL (default: ws://localhost:8080/nmea)")
+    parser.add_argument("--web-port", type=int, default=8081,
+                        help="Status page HTTP port (default: 8081; 8080 is the boat server)")
     parser.add_argument("--bind", default="0.0.0.0", help="Status page bind address (default: 0.0.0.0)")
     args = parser.parse_args()
 

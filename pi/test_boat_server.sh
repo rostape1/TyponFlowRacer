@@ -2,8 +2,9 @@
 # End-to-end smoke test for the boat-mode Pi server.
 # Run on the Pi (or any host with curl) while ./start_boat.sh is running.
 #
-# Usage:   ./pi/test_boat_server.sh [host:port]
-# Default: localhost:8443
+# Usage:   ./pi/test_boat_server.sh [host:port | url]
+# Default: http://localhost:8080  (the Pi serves plain HTTP; pass an
+#          https://host:port argument to test a TLS deployment)
 #
 # Verifies:
 #   - /config.json shape
@@ -16,9 +17,12 @@
 #   - /nmea WebSocket upgrades
 
 set -u
-HOST="${1:-localhost:8443}"
-BASE="https://${HOST}"
-CURL="curl -sk --max-time 30"  # -k for self-signed cert
+TARGET="${1:-http://localhost:8080}"
+case "$TARGET" in
+    http://*|https://*) BASE="$TARGET" ;;
+    *)                  BASE="http://${TARGET}" ;;
+esac
+CURL="curl -sk --max-time 30"  # -k tolerates a self-signed cert over https
 
 PASS=0
 FAIL=0
@@ -53,7 +57,7 @@ if [ -s /tmp/noaa_direct.json ] && [ -s /tmp/noaa_proxy.json ]; then
         diff /tmp/noaa_direct.json /tmp/noaa_proxy.json | head -5
     fi
 else
-    fail "NOAA fetch failed (direct=$(stat -c%s /tmp/noaa_direct.json 2>/dev/null || echo 0)b proxy=$(stat -c%s /tmp/noaa_proxy.json 2>/dev/null || echo 0)b)"
+    fail "NOAA fetch failed (direct=$(stat -c%s /tmp/noaa_direct.json 2>/dev/null || stat -f%z /tmp/noaa_direct.json 2>/dev/null || echo 0)b proxy=$(stat -c%s /tmp/noaa_proxy.json 2>/dev/null || stat -f%z /tmp/noaa_proxy.json 2>/dev/null || echo 0)b)"
 fi
 
 # ---- 4. Open-Meteo proxy fidelity ----

@@ -2,6 +2,14 @@
  * Flowracer sailing dashboard: instrument panel with sparklines.
  */
 
+// The history window every sparkline and the shift chart share. The x-axis
+// mapping is absolute-time based, so a divergence between the window used to
+// slice history and the window used to draw would silently render the trace at
+// the wrong horizontal scale with no error — keep it single-sourced.
+const SPARK_WINDOW_MS = 10 * 60 * 1000;
+const SPARK_AXIS_H = 10;   // px reserved at the bottom for tick labels
+const SPARK_FONT = '8px -apple-system, system-ui, sans-serif';
+
 class SailingCharts {
     constructor(store) {
         this.store = store;
@@ -98,7 +106,7 @@ class SailingCharts {
         for (const [id, field] of Object.entries(sparkFields)) {
             const canvas = this._sparkCanvases[id];
             if (!canvas) continue;
-            const history = this.store.getHistory(field, 10 * 60 * 1000);
+            const history = this.store.getHistory(field, SPARK_WINDOW_MS);
             this._drawSparkline(canvas, history, sparkColors[id]);
         }
 
@@ -122,11 +130,10 @@ class SailingCharts {
         ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
         ctx.clearRect(0, 0, w, h);
 
-        const windowMs = 10 * 60 * 1000;
-        const axisH = 10;          // reserved for tick labels
-        const plotBottom = h - axisH;
+        const windowMs = SPARK_WINDOW_MS;
+        const plotBottom = h - SPARK_AXIS_H;
 
-        this._drawTimeAxis(ctx, w, h, plotBottom, windowMs);
+        this._drawTimeAxis(ctx, w, plotBottom, windowMs);
 
         if (history.length < 2) return;
 
@@ -169,10 +176,10 @@ class SailingCharts {
     }
 
     /** Vertical tick + label at every minute boundary across the time window. */
-    _drawTimeAxis(ctx, w, h, plotBottom, windowMs) {
+    _drawTimeAxis(ctx, w, plotBottom, windowMs) {
         const minutes = Math.round(windowMs / 60000);
         ctx.save();
-        ctx.font = '8px -apple-system, system-ui, sans-serif';
+        ctx.font = SPARK_FONT;
         ctx.fillStyle = 'rgba(255,255,255,0.45)';
         ctx.strokeStyle = 'rgba(255,255,255,0.10)';
         ctx.lineWidth = 1;
@@ -201,7 +208,7 @@ class SailingCharts {
         const step = range > 25 ? 10 : range > 10 ? 5 : range > 4 ? 2 : range > 1.5 ? 1 : 0.5;
         const first = Math.ceil(min / step) * step;
         ctx.save();
-        ctx.font = '8px -apple-system, system-ui, sans-serif';
+        ctx.font = SPARK_FONT;
         ctx.fillStyle = 'rgba(255,255,255,0.35)';
         ctx.strokeStyle = 'rgba(255,255,255,0.07)';
         ctx.lineWidth = 1;
@@ -222,7 +229,7 @@ class SailingCharts {
         const canvas = this._sparkCanvases['twd-shift'];
         if (!canvas) return;
 
-        const windowMs = 10 * 60 * 1000;
+        const windowMs = SPARK_WINDOW_MS;
         const history = this.store.getHistory('twd', windowMs);
 
         const dpr = window.devicePixelRatio || 1;
@@ -241,9 +248,8 @@ class SailingCharts {
         ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
         ctx.clearRect(0, 0, w, h);
 
-        const axisH = 10;
-        const plotBottom = h - axisH;
-        this._drawTimeAxis(ctx, w, h, plotBottom, windowMs);
+        const plotBottom = h - SPARK_AXIS_H;
+        this._drawTimeAxis(ctx, w, plotBottom, windowMs);
 
         if (history.length < 3) return;
 
@@ -261,7 +267,7 @@ class SailingCharts {
         const yForShift = d => cy - (d / range) * (cy - 4);
         // Reference lines at ±5° and ±10° (faint) plus center line.
         ctx.save();
-        ctx.font = '8px -apple-system, system-ui, sans-serif';
+        ctx.font = SPARK_FONT;
         ctx.fillStyle = 'rgba(255,255,255,0.35)';
         ctx.lineWidth = 1;
         for (const d of [-10, -5, 5, 10]) {
@@ -288,7 +294,7 @@ class SailingCharts {
         for (let i = 0; i < shifts.length; i++) {
             const x = xFor(history[i].t);
             const clamped = Math.max(-range, Math.min(range, shifts[i]));
-            const y = cy - (clamped / range) * (cy - 4);
+            const y = yForShift(clamped);
             if (i === 0) ctx.moveTo(x, y);
             else ctx.lineTo(x, y);
         }

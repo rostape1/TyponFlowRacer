@@ -18,6 +18,49 @@ except ImportError:
 clients = set()
 tcp_reader = None
 
+# One stalled client must not hold up the feed for everyone else: a phone walking
+# out of WiFi range is routine on a boat.
+SEND_TIMEOUT_S = 2.0
+# A silent TCP peer looks identical to a healthy idle one, so bound the read and
+# reconnect instead of blocking forever.
+READ_TIMEOUT_S = 30.0
+
+
+async def _ws_send(client, text):
+    """Default send shape for the `websockets` library clients."""
+    await client.send(text)
+
+
+async def _send_or_drop(client, text, send_fn):
+    """Deliver one line to one client; drop the client if it can't keep up."""
+    try:
+        await asyncio.wait_for(send_fn(client, text), timeout=SEND_TIMEOUT_S)
+    except asyncio.TimeoutError:
+        print(f"Dropping stalled NMEA client after {SEND_TIMEOUT_S:.0f}s")
+        try:
+            await client.close()
+        except Exception:
+            pass
+    except Exception:
+        pass  # per-client failures are swallowed by contract
+
+
+async def _read_line(reader):
+    """One line from the TCP source.
+
+    Returns bytes, or None when the connection should be torn down and retried.
+    Oversized unterminated lines (past readline()'s 64 KiB limit) are discarded
+    rather than allowed to kill the bridge permanently.
+    """
+    while True:
+        try:
+            return await asyncio.wait_for(reader.readline(), timeout=READ_TIMEOUT_S)
+        except asyncio.TimeoutError:
+            print(f"No NMEA data for {READ_TIMEOUT_S:.0f}s, reconnecting...")
+            return None
+        except (ValueError, asyncio.LimitOverrunError) as e:
+            print(f"Discarding oversized NMEA line: {e}")
+
 
 async def nmea_tcp_broadcast(host, port, clients_iter, send_fn):
     """Connect to a TCP NMEA source and broadcast each line to all clients.
@@ -28,14 +71,15 @@ async def nmea_tcp_broadcast(host, port, clients_iter, send_fn):
             currently connected clients (so callers can manage the set with
             their own connection lifecycle).
         send_fn: async callable `send_fn(client, text)` that delivers one
-            NMEA line to one client. Exceptions are swallowed per-client.
+            NMEA line to one client. Exceptions are swallowed per-client, and a
+            client that takes longer than SEND_TIMEOUT_S is closed and dropped.
     """
     while True:
         try:
             reader, _ = await asyncio.open_connection(host, port)
             print(f"Connected to NMEA source {host}:{port}")
             while True:
-                line = await reader.readline()
+                line = await _read_line(reader)
                 if not line:
                     break
                 text = line.decode("ascii", errors="ignore").strip()
@@ -45,7 +89,7 @@ async def nmea_tcp_broadcast(host, port, clients_iter, send_fn):
                 if not snapshot:
                     continue
                 await asyncio.gather(
-                    *(send_fn(c, text) for c in snapshot),
+                    *(_send_or_drop(c, text, send_fn) for c in snapshot),
                     return_exceptions=True,
                 )
         except (ConnectionRefusedError, OSError) as e:
@@ -59,22 +103,19 @@ async def tcp_to_broadcast(host, port):
     """Standalone-CLI variant that broadcasts to the module-level `clients` set."""
     global tcp_reader
 
-    async def _send(c, text):
-        await c.send(text)
-
     while True:
         try:
             reader, _ = await asyncio.open_connection(host, port)
             tcp_reader = reader
             print(f"Connected to NMEA source {host}:{port}")
             while True:
-                line = await reader.readline()
+                line = await _read_line(reader)
                 if not line:
                     break
                 text = line.decode("ascii", errors="ignore").strip()
                 if text and clients:
                     await asyncio.gather(
-                        *(c.send(text) for c in clients.copy()),
+                        *(_send_or_drop(c, text, _ws_send) for c in clients.copy()),
                         return_exceptions=True,
                     )
         except (ConnectionRefusedError, OSError) as e:

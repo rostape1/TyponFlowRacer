@@ -30,17 +30,22 @@ STATIC_DIR = os.path.join(SCRIPT_DIR, "static")
 DEFAULT_BOUNDS = (36.45, -123.05, 38.20, -121.75)
 DEFAULT_ZOOM_RANGE = (10, 15)
 
-# Tile sources. NOAA charts use ArcGIS REST format with `lod = zoom - 2` and
-# `{lod}/{y}/{x}` ordering, so it can't share the format-string loop — handled
-# specially in `download_tiles()` below. Saved locally as `tiles/noaa/{z}/{x}/{y}.png`
-# to match what static/js/app.js requests when _useLocalTiles is true.
+# Tile sources. Each entry is `{z}/{x}/{y}` format-string based unless it names a
+# different `scheme`; NOAA charts use ArcGIS REST (`{lod}/{y}/{x}`, lod = z - 2).
+# Saved locally as `tiles/<dir>/{z}/{x}/{y}.png` to match what static/js/app.js
+# requests when _useLocalTiles is true.
 TILE_SOURCES = {
     "osm": {
         "url": "https://tile.openstreetmap.org/{z}/{x}/{y}.png",
         "dir": "tiles/osm",
+        # OSM's tile usage policy forbids bulk hammering; slow this origin down
+        # more than the rest now that the default bbox is much larger.
+        "delay": 0.25,
     },
     "dark": {
-        "url": "https://a.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png",
+        # Esri World Dark Gray Canvas (keyless). CartoDB's dark_all now watermarks
+        # unregistered traffic with "API KEY REQUIRED". Note {y} before {x}.
+        "url": "https://services.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}",
         "dir": "tiles/dark",
     },
     "sea": {
@@ -48,15 +53,21 @@ TILE_SOURCES = {
         "dir": "tiles/sea",
     },
     "noaa": {
-        # URL built per-tile in download_tiles() — see special case.
-        "url": None,
+        "url": (
+            "https://gis.charttools.noaa.gov/arcgis/rest/services/"
+            "MarineChart_Services/NOAACharts/MapServer/tile/{lod}/{y}/{x}"
+        ),
+        "scheme": "arcgis_lod",
         "dir": "tiles/noaa",
+        "min_zoom": 2,   # lod = zoom - 2 must be >= 0
     },
 }
 
 # Concurrency. Browsers do 6 parallel connections per origin; 8 workers across
 # 4 tile origins is well-behaved (~2 connections per origin amortized).
 DOWNLOAD_WORKERS = 8
+# Per-request pause after each download, overridable per source via "delay".
+TILE_DEFAULT_DELAY_S = 0.05
 
 LEAFLET_FILES = {
     "lib/leaflet.js": "https://unpkg.com/leaflet@1.9.4/dist/leaflet.js",
@@ -84,14 +95,26 @@ def download_file(url, dest):
     if os.path.exists(dest) and os.path.getsize(dest) > 0:
         return False  # Already exists
 
+    # Write to a .part sibling and rename on success. Writing straight to `dest`
+    # left a truncated PNG behind on Ctrl-C or a dropped connection, which the
+    # getsize(dest) > 0 skip test above then treated as complete forever.
+    part = dest + ".part"
     try:
         req = urllib.request.Request(url, headers={"User-Agent": "AIS-Tracker-Offline/1.0"})
         with urllib.request.urlopen(req, timeout=10) as resp:
-            with open(dest, "wb") as f:
-                f.write(resp.read())
+            data = resp.read()
+        if not data:
+            return False
+        with open(part, "wb") as f:
+            f.write(data)
+        os.replace(part, dest)
         return True
-    except Exception as e:
+    except Exception:
         # Some sea tiles return 404 for open ocean — that's fine
+        try:
+            os.remove(part)
+        except OSError:
+            pass
         return False
 
 
@@ -106,21 +129,18 @@ def download_leaflet():
             print(f"  - {dest_rel} (already exists)")
 
 
-def _build_tile_url(source_name, source, zoom, x, y):
+def _build_tile_url(source, zoom, x, y):
     """Construct the upstream URL for one tile.
 
-    NOAA uses ArcGIS REST format (`{lod}/{y}/{x}`, lod = z - 2) which doesn't
-    fit the simple format-string convention used by the other sources. Returns
-    None to skip a tile (e.g. NOAA below its minimum lod).
+    Sources declaring `"scheme": "arcgis_lod"` use ArcGIS REST ordering
+    (`{lod}/{y}/{x}`, lod = z - 2) rather than the plain `{z}/{x}/{y}` format
+    string. Returns None to skip a tile the source can't serve (NOAA below its
+    `min_zoom`).
     """
-    if source_name == "noaa":
-        lod = zoom - 2
-        if lod < 0:
+    if source.get("scheme") == "arcgis_lod":
+        if zoom < source.get("min_zoom", 0):
             return None
-        return (
-            "https://gis.charttools.noaa.gov/arcgis/rest/services/"
-            f"MarineChart_Services/NOAACharts/MapServer/tile/{lod}/{y}/{x}"
-        )
+        return source["url"].format(lod=zoom - 2, x=x, y=y)
     return source["url"].format(z=zoom, x=x, y=y)
 
 
@@ -128,16 +148,21 @@ def download_tiles(bounds, zoom_min, zoom_max):
     """Download map tiles for the given bounds and zoom range, in parallel."""
     lat_min, lon_min, lat_max, lon_max = bounds
 
-    # Build the full work list first so we can show accurate progress.
-    jobs = []  # (source_name, source, zoom, x, y, dest)
-    for source_name, source in TILE_SOURCES.items():
+    # Build the full work list first so we can show accurate progress. Tiles a
+    # source can't serve are dropped here, so `total` matches estimate_tiles().
+    jobs = []  # (url, dest, delay)
+    for source in TILE_SOURCES.values():
+        delay = source.get("delay", TILE_DEFAULT_DELAY_S)
         for zoom in range(zoom_min, zoom_max + 1):
             x_min, y_max = lat_lon_to_tile(lat_min, lon_min, zoom)
             x_max, y_min = lat_lon_to_tile(lat_max, lon_max, zoom)
             for x in range(x_min, x_max + 1):
                 for y in range(y_min, y_max + 1):
+                    url = _build_tile_url(source, zoom, x, y)
+                    if url is None:
+                        continue
                     dest = os.path.join(STATIC_DIR, source["dir"], str(zoom), str(x), f"{y}.png")
-                    jobs.append((source_name, source, zoom, x, y, dest))
+                    jobs.append((url, dest, delay))
 
     total = len(jobs)
     counter = {"processed": 0, "downloaded": 0, "skipped": 0, "errors": 0}
@@ -145,18 +170,15 @@ def download_tiles(bounds, zoom_min, zoom_max):
     start_ts = time.time()
 
     def _worker(job):
-        source_name, source, zoom, x, y, dest = job
+        url, dest, delay = job
         if os.path.exists(dest) and os.path.getsize(dest) > 0:
             with lock:
                 counter["skipped"] += 1
                 counter["processed"] += 1
             return
-        url = _build_tile_url(source_name, source, zoom, x, y)
-        if url is None:
-            with lock:
-                counter["processed"] += 1
-            return
         ok = download_file(url, dest)
+        if delay:
+            time.sleep(delay)
         with lock:
             if ok:
                 counter["downloaded"] += 1
@@ -197,14 +219,22 @@ def download_tiles(bounds, zoom_min, zoom_max):
 
 
 def estimate_tiles(bounds, zoom_min, zoom_max):
-    """Estimate how many tiles will be downloaded."""
+    """Estimate how many tiles will be downloaded.
+
+    Counted per source rather than tiles × sources: NOAA serves nothing below
+    its `min_zoom`, so a flat multiply disagreed with download_tiles()' own total.
+    """
     lat_min, lon_min, lat_max, lon_max = bounds
-    total = 0
+    per_zoom = {}
     for zoom in range(zoom_min, zoom_max + 1):
         x_min, y_max = lat_lon_to_tile(lat_min, lon_min, zoom)
         x_max, y_min = lat_lon_to_tile(lat_max, lon_max, zoom)
-        total += (x_max - x_min + 1) * (y_max - y_min + 1)
-    return total * len(TILE_SOURCES)
+        per_zoom[zoom] = (x_max - x_min + 1) * (y_max - y_min + 1)
+    total = 0
+    for source in TILE_SOURCES.values():
+        min_zoom = source.get("min_zoom", 0)
+        total += sum(n for z, n in per_zoom.items() if z >= min_zoom)
+    return total
 
 
 def main():
@@ -227,12 +257,10 @@ def main():
 
     total_est = estimate_tiles(bounds, zoom_min, zoom_max)
     per_layer = total_est // len(TILE_SOURCES)
-    # Rough estimate: ~5-15 tiles/sec sustained across DOWNLOAD_WORKERS workers.
-    # Already-cached tiles are essentially free.
     print(f"AIS Tracker Offline Downloader")
     print(f"Bounds: {bounds}")
     print(f"Zoom: {zoom_min}-{zoom_max}")
-    print(f"Estimated tiles: {total_est} total ({per_layer} per layer × {len(TILE_SOURCES)} sources)")
+    print(f"Estimated tiles: {total_est} total (~{per_layer} per layer × {len(TILE_SOURCES)} sources)")
     print(f"Estimated size: ~{total_est * 15 // 1024} MB (already-cached tiles will be skipped)")
     print(f"Concurrent workers: {DOWNLOAD_WORKERS}")
     print()

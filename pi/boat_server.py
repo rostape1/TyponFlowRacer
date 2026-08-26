@@ -3,7 +3,8 @@
 
 Runs on the Raspberry Pi on the boat WiFi. Single asyncio process that:
 
-  1. Serves the static AIS Tracker UI (HTTPS, self-signed) from ../static.
+  1. Serves the static AIS Tracker UI (HTTP by default, HTTPS optional via
+     --ssl-cert/--ssl-key) from ../static.
   2. Synthesizes /config.json so the browser switches to boat mode
      (local NMEA AIS, no AISstream.io, env data via this Pi's reverse proxy).
   3. Reverse-proxies + disk-caches NOAA CO-OPS and Open-Meteo so all clients
@@ -14,14 +15,15 @@ Runs on the Raspberry Pi on the boat WiFi. Single asyncio process that:
      WebSocket at /nmea for the browser.
 
 Usage:
+    python3 pi/boat_server.py                       # HTTP on :8080
     python3 pi/boat_server.py --ssl-cert certs/server.crt --ssl-key certs/server.key
 """
 
 import argparse
 import asyncio
 import datetime as _dt
-import glob
 import hashlib
+import html
 import json
 import logging
 import os
@@ -61,6 +63,11 @@ TTL_NDBC_S = 10 * 60
 TTL_META_S = 60
 
 UPSTREAM_TIMEOUT_S = 10.0
+# /data/* bodies run to ~1.2 MB. A *total* timeout aborts them mid-transfer over
+# satcom, so every hour fails and the whole 49-file sweep restarts forever. Bound
+# the handshake and each individual socket read instead of the whole transfer.
+DATA_SOCK_CONNECT_S = 10.0
+DATA_SOCK_READ_S = 60.0
 # Refuse to serve cache older than this on upstream error: stale data is fine,
 # day-old data masquerading as current is dangerous on the water.
 # Split per-source — coastal cruising can run a week without internet, but the
@@ -74,18 +81,32 @@ MAX_STALE_SFBOFS_S = 7 * 24 * 3600     # SFBOFS only forecasts 48h anyway
 MAX_STALE_NDBC_S = 7 * 24 * 3600
 MAX_STALE_META_S = 24 * 3600
 
-
-def _max_stale_for_noaa(query: str) -> float:
-    if "product=water_level" in query:
-        return MAX_STALE_WATER_LEVEL_S
-    if "product=currents_predictions" in query:
-        return MAX_STALE_CURRENTS_S
-    return MAX_STALE_TIDES_S
+# Disk-cache housekeeping. Nothing used to be deleted, so date-stamped NOAA URLs
+# accumulated (~22/day) and any unauthenticated LAN client could mint unlimited
+# entries with junk query params and fill the SD card — which also stops NMEA
+# logging. Age cap stays above MAX_STALE_TIDES_S so the stale window survives.
+CACHE_MAX_AGE_S = 31 * 24 * 3600
+CACHE_MAX_BYTES = 1024 * 1024 * 1024   # 1 GB
 
 # Pre-warm pacing
 PREWARM_OK_INTERVAL_S = 3600            # next cycle when last cycle succeeded
 PREWARM_FAIL_BACKOFF_S = (60, 120, 240, 300, 300)  # exponential, capped
 PREWARM_REQUEST_GAP_S = 0.2             # be polite to GH Pages
+
+DATA_TIMEOUT = aiohttp.ClientTimeout(
+    sock_connect=DATA_SOCK_CONNECT_S, sock_read=DATA_SOCK_READ_S
+)
+DEFAULT_TIMEOUT = aiohttp.ClientTimeout(total=UPSTREAM_TIMEOUT_S)
+
+
+def _acceptable_json(content_type: str) -> bool:
+    """True when the upstream body is plausibly the JSON the route expects.
+
+    A captive-portal login page comes back as 200 text/html; caching it would
+    overwrite good JSON and then re-serve the login page as STALE for weeks.
+    """
+    ct = (content_type or "").split(";")[0].strip().lower()
+    return ct in ("application/json", "text/json") or ct.endswith("+json")
 
 
 # ---- Disk cache ---------------------------------------------------------
@@ -104,6 +125,15 @@ class DiskCache:
         k = self._key(url)
         return self.dir / f"{k}.bin", self.dir / f"{k}.meta.json"
 
+    def _alias_path(self, alias: str) -> Path:
+        return self.dir / f"{self._key(alias)}.alt.json"
+
+    def _write_atomic(self, path: Path, data: bytes):
+        """Write via a .tmp sibling + os.replace so readers never see a torn body."""
+        tmp = path.with_suffix(path.suffix + ".tmp")
+        tmp.write_bytes(data)
+        os.replace(tmp, path)
+
     def get(self, url: str):
         body_path, meta_path = self._paths(url)
         if not body_path.exists() or not meta_path.exists():
@@ -115,20 +145,136 @@ class DiskCache:
         except (OSError, ValueError):
             return None
 
-    def put(self, url: str, body: bytes, content_type: str, status: int):
+    def get_alias(self, alias: str):
+        """Newest entry stored under a date-independent alias, if any.
+
+        NOAA prediction URLs embed begin_date=<today UTC>, so after midnight the
+        exact key misses and the 30-day stale window would be unreachable. The
+        alias pointer lets the stale-on-error branch find the previous window.
+        """
+        try:
+            ptr = json.loads(self._alias_path(alias).read_text())
+        except (OSError, ValueError):
+            return None
+        url = ptr.get("url")
+        if not url:
+            return None
+        return self.get(url)
+
+    def put(self, url: str, body: bytes, content_type: str, status: int,
+            alias: Optional[str] = None, last_modified: Optional[str] = None):
         body_path, meta_path = self._paths(url)
         # aiohttp's web.Response(content_type=...) rejects charset, so strip
         # it here once at write time rather than on every cache hit.
         ct = (content_type or "application/octet-stream").split(";")[0].strip()
         try:
-            body_path.write_bytes(body)
-            meta_path.write_text(json.dumps({
+            # Body first, then meta — both atomic, so a crash between them
+            # leaves a complete body with the previous timestamp, never a
+            # fresh timestamp pointing at a half-written body.
+            self._write_atomic(body_path, body)
+            self._write_atomic(meta_path, json.dumps({
                 "ts": time.time(),
                 "content_type": ct,
                 "status": status,
-            }))
+                "last_modified": last_modified,
+                "url": url,
+            }).encode("utf-8"))
+            if alias:
+                self._write_atomic(
+                    self._alias_path(alias),
+                    json.dumps({"url": url, "ts": time.time()}).encode("utf-8"),
+                )
         except OSError as e:
             log.warning("cache write failed for %s: %s", url, e)
+
+    def touch(self, url: str):
+        """Refresh an entry's timestamp — upstream answered 304 Not Modified."""
+        _body_path, meta_path = self._paths(url)
+        try:
+            meta = json.loads(meta_path.read_text())
+            meta["ts"] = time.time()
+            self._write_atomic(meta_path, json.dumps(meta).encode("utf-8"))
+        except (OSError, ValueError) as e:
+            log.warning("cache touch failed for %s: %s", url, e)
+
+    def prune(self, max_age_s: float, max_bytes: int) -> int:
+        """Delete over-age entries, then oldest-first until under `max_bytes`.
+
+        Same shape as nmea_capture.py's cleanup_old_logs(): an age sweep, plus a
+        size cap so nothing can quietly fill the SD card.
+        """
+        now = time.time()
+        removed = 0
+        entries = []
+
+        def _unlink(*paths):
+            for p in paths:
+                try:
+                    p.unlink()
+                except OSError:
+                    pass
+
+        for body_path in self.dir.glob("*.bin"):
+            meta_path = self.dir / f"{body_path.stem}.meta.json"
+            try:
+                ts = float(json.loads(meta_path.read_text())["ts"])
+                size = body_path.stat().st_size
+            except (OSError, ValueError, KeyError, TypeError):
+                ts, size = 0.0, 0
+            if now - ts > max_age_s:
+                _unlink(body_path, meta_path)
+                removed += 1
+                continue
+            entries.append((ts, size, body_path, meta_path))
+
+        total = sum(e[1] for e in entries)
+        for _ts, size, body_path, meta_path in sorted(entries, key=lambda e: e[0]):
+            if total <= max_bytes:
+                break
+            _unlink(body_path, meta_path)
+            total -= size
+            removed += 1
+
+        if removed:
+            log.info("cache prune: removed %d entries, %.0f MB remaining",
+                     removed, total / (1024 * 1024))
+        return removed
+
+
+# ---- Single-flight upstream fetch ---------------------------------------
+
+async def _fetch_upstream(app: web.Application, url: str,
+                          timeout: "aiohttp.ClientTimeout"):
+    """Fetch `url` once, even when several clients ask at the same moment.
+
+    Returns (status, body, content_type), or None when the fetch failed.
+    Concurrent callers for the same URL await the first fetch instead of each
+    opening their own connection — a cold cache otherwise meant 49 simultaneous
+    upstream fetches per client.
+    """
+    inflight: dict = app["inflight"]
+    existing = inflight.get(url)
+    if existing is not None:
+        return await asyncio.shield(existing)
+
+    fut = asyncio.get_running_loop().create_future()
+    inflight[url] = fut
+    result = None
+    try:
+        session: aiohttp.ClientSession = app["http"]
+        async with session.get(url, timeout=timeout) as resp:
+            body = await resp.read()
+            result = (
+                resp.status, body,
+                resp.headers.get("Content-Type", "application/octet-stream"),
+            )
+    except (aiohttp.ClientError, asyncio.TimeoutError) as e:
+        log.warning("upstream failed for %s: %s", url, e)
+    finally:
+        inflight.pop(url, None)
+        if not fut.done():
+            fut.set_result(result)
+    return result
 
 
 # ---- Reverse-proxy helper ------------------------------------------------
@@ -139,6 +285,8 @@ async def proxy_with_cache(
     cache: DiskCache,
     ttl_s: float,
     max_stale_s: float = MAX_STALE_DEFAULT_S,
+    timeout: Optional["aiohttp.ClientTimeout"] = None,
+    alias: Optional[str] = None,
 ) -> web.Response:
     """Fetch `upstream_url`, serving from disk cache when fresh or on failure."""
     cached = cache.get(upstream_url)
@@ -155,43 +303,79 @@ async def proxy_with_cache(
                 headers={"X-Cache": "HIT", "X-Cache-Age": f"{int(age)}"},
             )
 
-    session: aiohttp.ClientSession = request.app["http"]
-    try:
-        async with session.get(upstream_url, timeout=aiohttp.ClientTimeout(total=UPSTREAM_TIMEOUT_S)) as resp:
-            body = await resp.read()
-            ct = resp.headers.get("Content-Type", "application/octet-stream")
-            if resp.status == 200:
-                cache.put(upstream_url, body, ct, resp.status)
+    result = await _fetch_upstream(request.app, upstream_url, timeout or DEFAULT_TIMEOUT)
+    if result is not None:
+        status, body, ct = result
+        if 200 <= status < 300:
+            if _acceptable_json(ct):
+                cache.put(upstream_url, body, ct, status, alias=alias)
+                return web.Response(
+                    body=body, status=status,
+                    content_type=ct.split(";")[0].strip(),
+                    headers={"X-Cache": "MISS"},
+                )
+            # Don't cache and don't serve — a captive portal answering 200
+            # text/html must not overwrite or shadow good JSON.
+            log.warning("upstream %s returned %s, not JSON (captive portal?)",
+                        upstream_url, ct)
+        elif status == 404:
+            # Pass a real 404 through: the browser's SFBOFS download sweep
+            # relies on 404 meaning "this hour was never published".
             return web.Response(
-                body=body, status=resp.status,
+                body=body, status=404,
                 content_type=ct.split(";")[0].strip(),
                 headers={"X-Cache": "MISS"},
             )
-    except (aiohttp.ClientError, asyncio.TimeoutError) as e:
-        log.warning("upstream failed for %s: %s", upstream_url, e)
-        if cached:
-            meta, body = cached
-            stale_age = now - meta["ts"]
-            if stale_age <= max_stale_s:
-                return web.Response(
-                    body=body,
-                    status=meta.get("status", 200),
-                    content_type=meta.get("content_type", "application/json"),
-                    headers={
-                        "X-Cache": "STALE",
-                        "X-Cache-Age": f"{int(stale_age)}",
-                        "X-Cache-Reason": "upstream-error",
-                    },
-                )
-            log.warning("cache for %s exceeds MAX_STALE (%.0fh), refusing",
-                        upstream_url, stale_age / 3600)
-        return web.Response(status=504, text="upstream unreachable, no fresh cache")
+        else:
+            log.warning("upstream %s returned status %d", upstream_url, status)
+
+    # Upstream unusable (network error, 5xx, non-404 4xx, or wrong body type).
+    stale = cached
+    reason = "upstream-error"
+    if stale is None and alias:
+        stale = cache.get_alias(alias)
+        reason = "upstream-error-date-shift"
+    if stale:
+        meta, body = stale
+        stale_age = now - meta["ts"]
+        if stale_age <= max_stale_s:
+            return web.Response(
+                body=body,
+                status=meta.get("status", 200),
+                content_type=meta.get("content_type", "application/json"),
+                headers={
+                    "X-Cache": "STALE",
+                    "X-Cache-Age": f"{int(stale_age)}",
+                    "X-Cache-Reason": reason,
+                },
+            )
+        log.warning("cache for %s exceeds MAX_STALE (%.0fh), refusing",
+                    upstream_url, stale_age / 3600)
+    return web.Response(status=504, text="upstream unreachable, no fresh cache")
 
 
 def _ttl_for_noaa(query: str) -> float:
     if "product=water_level" in query:
         return TTL_WATER_LEVEL_S
     return TTL_TIDES_CURRENTS_S
+
+
+def _max_stale_for_noaa(query: str) -> float:
+    if "product=water_level" in query:
+        return MAX_STALE_WATER_LEVEL_S
+    if "product=currents_predictions" in query:
+        return MAX_STALE_CURRENTS_S
+    return MAX_STALE_TIDES_S
+
+
+def _noaa_alias(station: str, product: str, interval: str, datum: str) -> str:
+    """Date-independent secondary cache key for a NOAA datagetter request.
+
+    begin_date/end_date are deliberately excluded: they roll over at UTC
+    midnight, which would otherwise turn every pre-warmed tide and current
+    entry into a cache miss and blank all the stations while offline.
+    """
+    return f"noaa:{station}:{product}:{interval}:{datum}"
 
 
 # Tail allowlists. The proxy {tail:.*} regex would otherwise let a LAN client
@@ -229,6 +413,11 @@ async def handle_proxy_noaa(request: web.Request) -> web.Response:
     if not _NOAA_TAIL.match(tail):
         return _reject_invalid_tail()
     qs = request.rel_url.query_string
+    q = request.rel_url.query
+    alias = None
+    if q.get("station") and q.get("product"):
+        alias = _noaa_alias(q["station"], q["product"],
+                            q.get("interval", ""), q.get("datum", ""))
     upstream = f"https://api.tidesandcurrents.noaa.gov/{tail}"
     if qs:
         upstream = f"{upstream}?{qs}"
@@ -236,6 +425,7 @@ async def handle_proxy_noaa(request: web.Request) -> web.Response:
         request, upstream, request.app["cache"],
         ttl_s=_ttl_for_noaa(qs),
         max_stale_s=_max_stale_for_noaa(qs),
+        alias=alias,
     )
 
 
@@ -263,7 +453,7 @@ def _make_gh_pages_handler(subpath: str, ttl_s: float, max_stale_s: float = MAX_
         upstream = f"{base}/{subpath}/{tail}"
         return await proxy_with_cache(
             request, upstream, request.app["cache"],
-            ttl_s=ttl_s, max_stale_s=max_stale_s,
+            ttl_s=ttl_s, max_stale_s=max_stale_s, timeout=DATA_TIMEOUT,
         )
     return handler
 
@@ -282,7 +472,7 @@ async def handle_data_catchall(request: web.Request) -> web.Response:
     upstream = f"{base}/data/{tail}"
     resp = await proxy_with_cache(
         request, upstream, request.app["cache"],
-        ttl_s=TTL_SFBOFS_S, max_stale_s=MAX_STALE_SFBOFS_S,
+        ttl_s=TTL_SFBOFS_S, max_stale_s=MAX_STALE_SFBOFS_S, timeout=DATA_TIMEOUT,
     )
     if resp.status != 504:
         return resp
@@ -317,17 +507,24 @@ async def handle_logs_index(request: web.Request) -> web.Response:
 
     rows = ""
     for f in files:
-        stat = f.stat()
+        # Only list names /logs/{filename} will actually serve.
+        if not _LOG_FILE.match(f.name):
+            continue
+        try:
+            stat = f.stat()
+        except OSError:
+            continue  # nmea_capture's hourly cleanup deleted it mid-listing
         size = fmt_size(stat.st_size)
         mtime = time.strftime("%Y-%m-%d %H:%M", time.localtime(stat.st_mtime))
+        name = html.escape(f.name)
         rows += (
-            f"<tr><td><a href='/logs/{f.name}'>{f.name}</a></td>"
+            f"<tr><td><a href='/logs/{name}'>{name}</a></td>"
             f"<td>{mtime}</td><td>{size}</td></tr>\n"
         )
     if not rows:
         rows = "<tr><td colspan='3' style='color:#8395a7'>No log files yet</td></tr>"
 
-    html = f"""<!DOCTYPE html>
+    page = f"""<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
@@ -354,17 +551,17 @@ tr:last-child td{{border-bottom:none}}
 </table>
 </body>
 </html>"""
-    return web.Response(text=html, content_type="text/html")
+    return web.Response(text=page, content_type="text/html")
 
 
 async def handle_log_file(request: web.Request) -> web.Response:
     filename = request.match_info["filename"]
     if not _LOG_FILE.match(filename):
-        return web.Response(status=404, text="not found")
+        return _reject_invalid_tail()
     log_dir: Path = request.app["log_dir"]
     path = log_dir / filename
     if not path.exists():
-        return web.Response(status=404, text="not found")
+        return _reject_invalid_tail()
     return web.FileResponse(
         path,
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
@@ -392,7 +589,8 @@ async def handle_nmea_ws(request: web.Request) -> web.WebSocketResponse:
 # match what the browser will request through the reverse-proxy. If you change
 # the JS station list or wind grid here, mirror it there (and vice-versa).
 
-# 14 NOAA tide stations (mirror of TIDE_STATIONS in data-loader.js).
+# NOAA tide stations — mirror of TIDE_STATIONS in data-loader.js. No count in
+# this comment on purpose: tests/test_boat_server.py asserts the two lists match.
 TIDE_STATIONS = [
     "9414290", "9414750", "9414764", "9414816", "9414874", "9414688",
     "9414523", "9414458", "9414509", "9414131", "9413663", "9413450",
@@ -416,9 +614,13 @@ NOAA_BASE = "https://api.tidesandcurrents.noaa.gov/api/prod/datagetter"
 OPEN_METEO_BASE = "https://api.open-meteo.com/v1/forecast"
 
 
-def _noaa_date_range_utc():
-    """Same begin/end as static/js/data-loader.js _noaaDateRange (3-day window)."""
-    today = _dt.datetime.utcnow()
+def _noaa_date_range_utc(day_offset: int = 0):
+    """Same begin/end as static/js/data-loader.js _noaaDateRange (3-day window).
+
+    `day_offset=1` gives tomorrow's window, which the pre-warm loop also fetches
+    so the UTC-midnight rollover doesn't turn every cached entry into a miss.
+    """
+    today = _dt.datetime.now(_dt.timezone.utc) + _dt.timedelta(days=day_offset)
     begin = today.strftime("%Y%m%d")
     end = (today + _dt.timedelta(days=3)).strftime("%Y%m%d")
     return begin, end
@@ -463,29 +665,70 @@ def _wind_url() -> str:
     )
 
 
-async def _prewarm_url(app: web.Application, url: str, label: str) -> bool:
-    """Fetch one URL into the disk cache. Returns True on 200, False otherwise.
+async def _prewarm_url(
+    app: web.Application,
+    url: str,
+    label: str,
+    ttl_s: float = 0.0,
+    timeout: Optional["aiohttp.ClientTimeout"] = None,
+    alias: Optional[str] = None,
+) -> str:
+    """Fetch one URL into the disk cache.
 
-    Wrapped so a single failure (timeout, 5xx, network error) doesn't propagate.
+    Returns one of three outcomes so callers can tell a real gap from a fault:
+      "ok"      — cached, already fresh within `ttl_s`, or 304 Not Modified
+      "missing" — 404, upstream never published this file
+      "fail"    — timeout, 5xx, or a body that isn't the JSON we expect
+
+    Wrapped so a single failure doesn't propagate and kill the pre-warm loop.
     """
     cache: DiskCache = app["cache"]
     session: aiohttp.ClientSession = app["http"]
+    cached = cache.get(url)
+    if cached and ttl_s > 0 and (time.time() - cached[0]["ts"]) < ttl_s:
+        return "ok"
+
+    headers = {}
+    if cached and cached[0].get("last_modified"):
+        headers["If-Modified-Since"] = cached[0]["last_modified"]
+
     try:
         async with session.get(
-            url, timeout=aiohttp.ClientTimeout(total=UPSTREAM_TIMEOUT_S)
+            url, timeout=timeout or DEFAULT_TIMEOUT, headers=headers
         ) as r:
+            if r.status == 304:
+                cache.touch(url)
+                return "ok"
             body = await r.read()
+            ct = r.headers.get("Content-Type", "application/json")
             if r.status == 200:
-                cache.put(
-                    url, body,
-                    r.headers.get("Content-Type", "application/json"),
-                    200,
-                )
-                return True
+                if not _acceptable_json(ct):
+                    log.warning("pre-warm %s: %s, not JSON (captive portal?)",
+                                label, ct)
+                    return "fail"
+                cache.put(url, body, ct, 200, alias=alias,
+                          last_modified=r.headers.get("Last-Modified"))
+                return "ok"
+            if r.status == 404:
+                return "missing"
             log.info("pre-warm %s: status %d", label, r.status)
     except (aiohttp.ClientError, asyncio.TimeoutError) as e:
         log.warning("pre-warm %s failed: %s", label, e)
-    return False
+    return "fail"
+
+
+def _prewarm_sleep(cycle_failed: bool, backoff_idx: int):
+    """Decide how long to sleep after a pre-warm cycle.
+
+    Returns (sleep_seconds, next_backoff_idx). Shared by both pre-warm loops so
+    the backoff schedule can't drift between them.
+    """
+    if cycle_failed:
+        sleep_s = PREWARM_FAIL_BACKOFF_S[
+            min(backoff_idx, len(PREWARM_FAIL_BACKOFF_S) - 1)
+        ]
+        return sleep_s, backoff_idx + 1
+    return PREWARM_OK_INTERVAL_S, 0
 
 
 async def env_prewarm_loop(app: web.Application):
@@ -503,44 +746,45 @@ async def env_prewarm_loop(app: web.Application):
             cycle_failed = False
 
             # 1. Wind grid (single batched request, 176 points × 49 hours)
-            if await _prewarm_url(app, _wind_url(), "wind"):
+            if await _prewarm_url(app, _wind_url(), "wind") == "ok":
                 ok += 1
             else:
                 cycle_failed = True
             await asyncio.sleep(PREWARM_REQUEST_GAP_S)
 
-            # 2. Tide stations
-            begin, end = _noaa_date_range_utc()
-            for station_id in TIDE_STATIONS:
-                if await _prewarm_url(
-                    app, _tide_url(station_id, begin, end), f"tide:{station_id}"
-                ):
-                    ok += 1
-                else:
-                    cycle_failed = True
-                await asyncio.sleep(PREWARM_REQUEST_GAP_S)
+            # 2 + 3. Tide and current predictions, for today's window and
+            # tomorrow's. The begin_date rolls at UTC midnight, so caching only
+            # today's would leave every station a miss right after the rollover.
+            for day_offset in (0, 1):
+                begin, end = _noaa_date_range_utc(day_offset)
+                for station_id in TIDE_STATIONS:
+                    if await _prewarm_url(
+                        app, _tide_url(station_id, begin, end),
+                        f"tide:{station_id}:{begin}",
+                        alias=_noaa_alias(station_id, "predictions", "6", "MLLW"),
+                    ) == "ok":
+                        ok += 1
+                    else:
+                        cycle_failed = True
+                    await asyncio.sleep(PREWARM_REQUEST_GAP_S)
 
-            # 3. Current-prediction stations
-            for station_id in CURRENT_STATIONS:
-                if await _prewarm_url(
-                    app, _current_url(station_id, begin, end), f"current:{station_id}"
-                ):
-                    ok += 1
-                else:
-                    cycle_failed = True
-                await asyncio.sleep(PREWARM_REQUEST_GAP_S)
+                for station_id in CURRENT_STATIONS:
+                    if await _prewarm_url(
+                        app, _current_url(station_id, begin, end),
+                        f"current:{station_id}:{begin}",
+                        alias=_noaa_alias(station_id, "currents_predictions", "6", ""),
+                    ) == "ok":
+                        ok += 1
+                    else:
+                        cycle_failed = True
+                    await asyncio.sleep(PREWARM_REQUEST_GAP_S)
 
+            sleep_s, backoff_idx = _prewarm_sleep(cycle_failed, backoff_idx)
             if cycle_failed:
-                sleep_s = PREWARM_FAIL_BACKOFF_S[
-                    min(backoff_idx, len(PREWARM_FAIL_BACKOFF_S) - 1)
-                ]
-                backoff_idx += 1
                 log.info(
                     "env pre-warm had failures (%d ok); retry in %ds", ok, sleep_s
                 )
             else:
-                backoff_idx = 0
-                sleep_s = PREWARM_OK_INTERVAL_S
                 log.info(
                     "env pre-warm complete: %d urls cached; next cycle in %dm",
                     ok, sleep_s // 60,
@@ -563,7 +807,6 @@ async def sfbofs_prewarm_loop(app: web.Application):
     """
     cache: DiskCache = app["cache"]
     base = app["gh_pages_base"].rstrip("/")
-    session: aiohttp.ClientSession = app["http"]
     backoff_idx = 0
     try:
         while True:
@@ -573,33 +816,32 @@ async def sfbofs_prewarm_loop(app: web.Application):
             try:
                 for h in range(0, 49):
                     url = f"{base}/data/sfbofs/hour_{h:02d}.json"
-                    try:
-                        async with session.get(url, timeout=aiohttp.ClientTimeout(total=UPSTREAM_TIMEOUT_S)) as r:
-                            if r.status == 404:
-                                log.info("SFBOFS hour_%02d missing (404), stopping", h)
-                                break
-                            body = await r.read()
-                            if r.status == 200:
-                                cache.put(url, body, r.headers.get("Content-Type", "application/json"), 200)
-                                ok += 1
-                            else:
-                                cycle_failed = True
-                    except (aiohttp.ClientError, asyncio.TimeoutError) as e:
-                        log.warning("pre-warm sfbofs %02d failed: %s", h, e)
+                    res = await _prewarm_url(
+                        app, url, f"sfbofs:hour_{h:02d}",
+                        ttl_s=TTL_SFBOFS_S, timeout=DATA_TIMEOUT,
+                    )
+                    if res == "ok":
+                        ok += 1
+                    elif res == "missing":
+                        # Later hours missing is normal — a model run doesn't
+                        # always publish all 49. hour_00 missing is not, and
+                        # must not be logged as a clean "0 hours cached".
+                        if h == 0:
+                            cycle_failed = True
+                        log.info("SFBOFS hour_%02d missing (404), stopping", h)
+                        break
+                    else:
                         cycle_failed = True
                     await asyncio.sleep(PREWARM_REQUEST_GAP_S)
                 # NDBC + miscellaneous /data/* one-shots.
                 for relpath in ("data/wind/stations.json", "data/land_mask.json", "data/meta.json"):
                     url = f"{base}/{relpath}"
-                    try:
-                        async with session.get(url, timeout=aiohttp.ClientTimeout(total=UPSTREAM_TIMEOUT_S)) as r:
-                            if r.status == 200:
-                                cache.put(url, await r.read(), r.headers.get("Content-Type", "application/json"), 200)
-                            else:
-                                cycle_failed = True
-                    except (aiohttp.ClientError, asyncio.TimeoutError) as e:
-                        log.warning("pre-warm %s failed: %s", relpath, e)
+                    if await _prewarm_url(
+                        app, url, relpath, timeout=DATA_TIMEOUT
+                    ) != "ok":
                         cycle_failed = True
+                    await asyncio.sleep(PREWARM_REQUEST_GAP_S)
+                cache.prune(CACHE_MAX_AGE_S, CACHE_MAX_BYTES)
             except Exception:
                 # Don't let an unexpected error kill the loop forever — log
                 # and treat the whole cycle as a failure so we back off then
@@ -607,13 +849,10 @@ async def sfbofs_prewarm_loop(app: web.Application):
                 log.exception("pre-warm cycle crashed; will retry after backoff")
                 cycle_failed = True
 
+            sleep_s, backoff_idx = _prewarm_sleep(cycle_failed, backoff_idx)
             if cycle_failed:
-                sleep_s = PREWARM_FAIL_BACKOFF_S[min(backoff_idx, len(PREWARM_FAIL_BACKOFF_S) - 1)]
-                backoff_idx += 1
                 log.info("pre-warm cycle had failures (%d hours ok); retry in %ds", ok, sleep_s)
             else:
-                backoff_idx = 0
-                sleep_s = PREWARM_OK_INTERVAL_S
                 log.info("pre-warm complete: %d hours cached; next cycle in %dm", ok, sleep_s // 60)
             await asyncio.sleep(sleep_s)
     except asyncio.CancelledError:
@@ -641,13 +880,17 @@ async def on_startup(app: web.Application):
 
 
 async def on_cleanup(app: web.Application):
-    for t in (
+    tasks = [t for t in (
         app.get("nmea_task"),
         app.get("prewarm_task"),
         app.get("env_prewarm_task"),
-    ):
-        if t:
-            t.cancel()
+    ) if t]
+    for t in tasks:
+        t.cancel()
+    # Await them before closing the session, or an in-flight request logs a
+    # "Session is closed" traceback on shutdown.
+    if tasks:
+        await asyncio.gather(*tasks, return_exceptions=True)
     if "http" in app:
         await app["http"].close()
 
@@ -659,6 +902,8 @@ def build_app(args) -> web.Application:
 
     app = web.Application(client_max_size=1024 * 1024)
     app["cache"] = DiskCache(Path(args.cache_dir).resolve())
+    # url -> Future, so concurrent requests for one URL share a single fetch.
+    app["inflight"] = {}
     app["gh_pages_base"] = args.gh_pages_base
     app["tcp_host"] = args.tcp_host
     app["tcp_port"] = args.tcp_port
@@ -708,7 +953,7 @@ def build_app(args) -> web.Application:
 
 def main():
     p = argparse.ArgumentParser(description="AIS Tracker boat-mode Pi server")
-    p.add_argument("--port", type=int, default=8443)
+    p.add_argument("--port", type=int, default=8080)
     p.add_argument("--ssl-cert", default=None)
     p.add_argument("--ssl-key", default=None)
     p.add_argument("--tcp-host", default="192.168.47.10")

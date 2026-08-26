@@ -16,11 +16,15 @@ cleanup() {
 }
 trap cleanup SIGINT SIGTERM
 
-# Kill any stale instances from previous runs.
+# Kill any stale instances from previous runs. Anything in $KEEP_PIDS is left
+# alone — pi/startup.sh uses it for the NMEA logger it just launched.
 kill_stale() {
     local pat="$1"
     local pids
     pids=$(pgrep -f "$pat" | grep -v "^$$\$" || true)
+    for keep in ${KEEP_PIDS:-}; do
+        pids=$(echo "$pids" | grep -v "^$keep\$" || true)
+    done
     if [ -n "$pids" ]; then
         echo "Killing stale ($pat): $(echo $pids | tr '\n' ' ')"
         kill $pids 2>/dev/null || true
@@ -29,6 +33,7 @@ kill_stale() {
     fi
 }
 kill_stale "boat_server.py"
+kill_stale "nmea_capture.py"          # else two loggers append to one hourly file
 kill_stale "nmea_ws_proxy.py"        # legacy
 kill_stale "http.server 8888"        # legacy
 

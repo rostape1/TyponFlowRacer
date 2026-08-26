@@ -54,9 +54,29 @@ const _waterLevelCache = new Map(); // stationId → { value, time, fetchedAt }
 // API endpoints — read from window.APP_CONFIG at call time so the boat-mode
 // /config.json bootstrap can redirect them to the Pi reverse-proxy. In web
 // mode (no /config.json) these return today's absolute URLs unchanged.
-function dataBase()     { return (typeof window !== 'undefined' && window.APP_CONFIG && window.APP_CONFIG.dataBase)                                          || 'data'; }
-function noaaApi()      { return (typeof window !== 'undefined' && window.APP_CONFIG && window.APP_CONFIG.apiBase && window.APP_CONFIG.apiBase.noaa)      || 'https://api.tidesandcurrents.noaa.gov/api/prod/datagetter'; }
-function openMeteoApi() { return (typeof window !== 'undefined' && window.APP_CONFIG && window.APP_CONFIG.apiBase && window.APP_CONFIG.apiBase.openMeteo) || 'https://api.open-meteo.com/v1/forecast'; }
+// Single-sourced dotted-path read of the runtime config, so the three
+// endpoint resolvers below don't each repeat the same existence guards.
+function _cfg(path) {
+    const cfg = (typeof window !== 'undefined' && window.APP_CONFIG) || null;
+    if (!cfg) return null;
+    return path.split('.').reduce((o, k) => (o == null ? null : o[k]), cfg) || null;
+}
+
+function dataBase() {
+    return _cfg('dataBase') || 'data';
+}
+
+function noaaApi() {
+    return _cfg('apiBase.noaa') || 'https://api.tidesandcurrents.noaa.gov/api/prod/datagetter';
+}
+
+function openMeteoApi() {
+    return _cfg('apiBase.openMeteo') || 'https://api.open-meteo.com/v1/forecast';
+}
+
+// router.js is a separate classic script that also fetches static data files.
+// Expose the resolver so it can't drift back to a hardcoded 'data' prefix.
+if (typeof window !== 'undefined') window.dataBase = dataBase;
 
 // --- Fetch helper with timeout ---
 // Default timeouts tuned for the boat-mode case where the Pi reverse-proxies
@@ -85,6 +105,26 @@ function _readCacheMeta(res) {
         ageSec: ageSecRaw ? parseInt(ageSecRaw, 10) : null,
         reason: res.headers.get('X-Cache-Reason') || null,
     };
+}
+
+// When did these bytes actually leave the upstream API?
+//
+// Stamping Date.now() at parse time renders a green "fetched just now" dot over
+// a body that came from the Pi's disk cache or the Service Worker cache, which
+// is exactly the situation the freshness dot exists to expose. Prefer the Pi's
+// X-Cache-Age, then the response Date header (replayed verbatim by the Cache
+// API), and only fall back to now for a genuine uncached network fetch.
+function _responseFetchedAt(res, cacheMeta) {
+    let ms = null;
+    if (cacheMeta && Number.isFinite(cacheMeta.ageSec)) {
+        ms = Date.now() - cacheMeta.ageSec * 1000;
+    }
+    if (ms === null && res && res.headers) {
+        const t = Date.parse(res.headers.get('Date') || '');
+        if (!isNaN(t)) ms = t;
+    }
+    if (ms === null) ms = Date.now();
+    return new Date(ms).toISOString().slice(0, 16).replace('T', ' ') + ' UTC';
 }
 
 // --- Helpers ---
@@ -208,7 +248,7 @@ async function _fetchSfbofsHour(fileIndex) {
     if (data.model_run) {
         _sfbofsRunTime = _parseSfbofsRunTime(data.model_run);
     }
-    data._cacheMeta = _readCacheMeta(res);
+    data._cache_meta = _readCacheMeta(res);
     return data;
 }
 
@@ -224,7 +264,11 @@ async function fetchCurrentFieldHighRes(minutesOffset = 0) {
     const url = `${dataBase()}/sfbofs_gg/hour_${String(fileIndex).padStart(2, '0')}.json`;
     const res = await _fetchWithTimeout(url, 30000);
     if (!res.ok) return null;
-    return await res.json();
+    const data = await res.json();
+    // Same cache annotation as the standard path, so the hi-res grid can also
+    // surface the "⚠ Pi offline" prefix instead of silently looking live.
+    data._cache_meta = _readCacheMeta(res);
+    return data;
 }
 
 // --- Wind Field (batched Open-Meteo API) ---
@@ -265,7 +309,7 @@ async function _fetchWindGridFromAPI() {
     // Response is an array of objects (one per coordinate pair)
     if (!Array.isArray(data) || data.length !== lats.length) return null;
 
-    const nowStr = new Date().toISOString().slice(0, 16).replace('T', ' ') + ' UTC';
+    const fetchedAtStr = _responseFetchedAt(res, cacheMeta);
     // Open-Meteo's `current.time` is the most recent assimilation/observation
     // time the model has — use it as the "model run" indicator so the user
     // sees which forecast snapshot they're looking at, not just when the
@@ -308,13 +352,13 @@ async function _fetchWindGridFromAPI() {
             ny: WIND_NY,
             model: 'GFS Seamless',
             source: 'Open-Meteo',
-            fetched_at: nowStr,
+            fetched_at: fetchedAtStr,
             model_obs_time: obsTime,
             forecast_hour: hour,
             u,
             v,
             gusts,
-            _cacheMeta: cacheMeta,
+            _cache_meta: cacheMeta,
         });
     }
 

@@ -1,11 +1,11 @@
 const APP_BUILD = 'dev';  // git commit hash — updated on each deploy
 const CACHE_NAME = 'ais-tracker-' + APP_BUILD;
 const DATA_CACHE = 'ais-data-v10';
-const TILE_CACHE = 'ais-tiles-v1';
+const TILE_CACHE = 'ais-tiles-v2';  // v2: dark base moved CartoDB → ArcGIS
 
 // External tile CDN hosts to cache
 const TILE_HOSTS = [
-  'basemaps.cartocdn.com',
+  'services.arcgisonline.com',
   'tile.openstreetmap.org',
   'gis.charttools.noaa.gov',
   'tiles.openseamap.org',
@@ -64,8 +64,13 @@ self.addEventListener('activate', (event) => {
 // Stale-while-revalidate flag for downloaded data
 let _dataCacheFirst = false;
 
-// cache.put with quota-aware eviction. On QuotaExceededError, drop the oldest
-// ~20% of entries (Cache API preserves insertion order) so the next put has room.
+// cache.put with quota-aware eviction.
+//
+// Never evict from CACHE_NAME: the Cache API preserves insertion order, so its
+// oldest entries are the install-time ASSETS (leaflet.js, app.js, style.css) —
+// dropping those silently destroys offline bootability. The unbounded tile
+// cache is what creates the pressure in the first place, and tiles are always
+// re-fetchable, so free space there instead.
 async function safeCachePut(cacheName, request, response) {
   const cache = await caches.open(cacheName);
   try {
@@ -73,11 +78,40 @@ async function safeCachePut(cacheName, request, response) {
   } catch (err) {
     const quota = err && (err.name === 'QuotaExceededError' || /quota/i.test(err.message || ''));
     if (!quota) return;
-    const keys = await cache.keys();
-    const toDelete = Math.max(1, Math.floor(keys.length * 0.2));
-    await Promise.all(keys.slice(0, toDelete).map((k) => cache.delete(k)));
+    await evictForQuota(cacheName);
     // Don't retry: response.clone() may already be consumed; next request will succeed.
   }
+}
+
+async function evictForQuota(cacheName) {
+  await evictOldestTiles();
+  if (cacheName === DATA_CACHE) await evictFarthestForecast();
+}
+
+async function evictOldestTiles() {
+  const cache = await caches.open(TILE_CACHE);
+  const keys = await cache.keys();
+  if (!keys.length) return;
+  const toDelete = Math.max(1, Math.floor(keys.length * 0.2));
+  await Promise.all(keys.slice(0, toDelete).map((k) => cache.delete(k)));
+}
+
+// Data-cache insertion order is ascending SFBOFS hour, so evicting "oldest"
+// would delete hour_00..09 — the hours actually being sailed — and keep +40h.
+// Drop the farthest-out forecast hours instead. Entries with no hour in the URL
+// (meta.json, land_mask.json, station lists) rank as hour 0 and are kept last.
+async function evictFarthestForecast() {
+  const cache = await caches.open(DATA_CACHE);
+  const keys = await cache.keys();
+  if (!keys.length) return;
+  const ranked = keys
+    .map((k) => {
+      const m = /hour_(\d+)/.exec(k.url);
+      return { key: k, hour: m ? parseInt(m[1], 10) : 0 };
+    })
+    .sort((a, b) => b.hour - a.hour);
+  const toDelete = Math.max(1, Math.floor(ranked.length * 0.2));
+  await Promise.all(ranked.slice(0, toDelete).map((e) => cache.delete(e.key)));
 }
 
 // Tell every open client that a stale-while-revalidate background fetch
@@ -221,8 +255,10 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // External CDN tiles: cache-first (tiles don't change)
-  if (TILE_HOSTS.some(h => url.hostname.endsWith(h))) {
+  // External CDN tiles: cache-first (tiles don't change).
+  // Exact host, or a subdomain of one (OSM serves from {a,b,c}.tile.…) —
+  // a bare endsWith() would also match evilservices.arcgisonline.com.
+  if (TILE_HOSTS.some(h => url.hostname === h || url.hostname.endsWith('.' + h))) {
     event.respondWith(
       caches.open(TILE_CACHE).then((cache) =>
         cache.match(event.request).then((cached) => {
