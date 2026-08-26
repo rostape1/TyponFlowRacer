@@ -7,6 +7,10 @@ on:
     branches: [main]
     paths:
       - 'static/**'
+      - 'tests/**'
+      - 'pi/**'
+      - 'download_offline.py'
+      - 'nmea_*.py'
       - '.github/workflows/deploy.yml'
   workflow_dispatch:
 
@@ -32,6 +36,22 @@ jobs:
 
       - name: Run staleness gate tests
         run: node tests/test_staleness.mjs
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install Pi server deps
+        run: pip install -r pi/requirements.txt
+
+      - name: Run boat server tests
+        run: python3 tests/test_boat_server.py
+
+      - name: Byte-compile the Pi server and root scripts
+        run: python3 -m py_compile pi/boat_server.py nmea_capture.py nmea_ws_proxy.py download_offline.py
+
+      - name: Syntax-check the boat shell scripts
+        run: bash -n start_boat.sh pi/startup.sh pi/test_boat_server.sh
 
   deploy:
     needs: test
