@@ -102,7 +102,7 @@ DEFAULT_TIMEOUT = aiohttp.ClientTimeout(total=UPSTREAM_TIMEOUT_S)
 def _acceptable_json(content_type: str) -> bool:
     """True when the upstream body is plausibly the JSON the route expects.
 
-    A captive-portal login page comes back as 200 text/html; caching it would
+    Pitfall P07. A captive-portal login page comes back as 200 text/html; caching it would
     overwrite good JSON and then re-serve the login page as STALE for weeks.
     """
     ct = (content_type or "").split(";")[0].strip().lower()
@@ -129,7 +129,7 @@ class DiskCache:
         return self.dir / f"{self._key(alias)}.alt.json"
 
     def _write_atomic(self, path: Path, data: bytes):
-        """Write via a .tmp sibling + os.replace so readers never see a torn body."""
+        """Write via a .tmp sibling + os.replace so readers never see a torn body. (P10)"""
         tmp = path.with_suffix(path.suffix + ".tmp")
         tmp.write_bytes(data)
         os.replace(tmp, path)
@@ -146,7 +146,7 @@ class DiskCache:
             return None
 
     def get_alias(self, alias: str):
-        """Newest entry stored under a date-independent alias, if any.
+        """Newest entry stored under a date-independent alias, if any. (P06)
 
         NOAA prediction URLs embed begin_date=<today UTC>, so after midnight the
         exact key misses and the 30-day stale window would be unreachable. The
@@ -198,7 +198,7 @@ class DiskCache:
             log.warning("cache touch failed for %s: %s", url, e)
 
     def prune(self, max_age_s: float, max_bytes: int) -> int:
-        """Delete over-age entries, then oldest-first until under `max_bytes`.
+        """Delete over-age entries, then oldest-first until under `max_bytes`. (P11)
 
         Same shape as nmea_capture.py's cleanup_old_logs(): an age sweep, plus a
         size cap so nothing can quietly fill the SD card.
@@ -245,7 +245,7 @@ class DiskCache:
 
 async def _fetch_upstream(app: web.Application, url: str,
                           timeout: "aiohttp.ClientTimeout"):
-    """Fetch `url` once, even when several clients ask at the same moment.
+    """Fetch `url` once, even when several clients ask at the same moment. (P10)
 
     Returns (status, body, content_type), or None when the fetch failed.
     Concurrent callers for the same URL await the first fetch instead of each
@@ -319,7 +319,7 @@ async def proxy_with_cache(
             log.warning("upstream %s returned %s, not JSON (captive portal?)",
                         upstream_url, ct)
         elif status == 404:
-            # Pass a real 404 through: the browser's SFBOFS download sweep
+            # P08/P03. Pass a real 404 through: the browser's SFBOFS download sweep
             # relies on 404 meaning "this hour was never published".
             return web.Response(
                 body=body, status=404,
@@ -371,7 +371,7 @@ def _max_stale_for_noaa(query: str) -> float:
 def _noaa_alias(station: str, product: str, interval: str, datum: str) -> str:
     """Date-independent secondary cache key for a NOAA datagetter request.
 
-    begin_date/end_date are deliberately excluded: they roll over at UTC
+    Pitfall P06. begin_date/end_date are deliberately excluded: they roll over at UTC
     midnight, which would otherwise turn every pre-warmed tide and current
     entry into a cache miss and blank all the stations while offline.
     """

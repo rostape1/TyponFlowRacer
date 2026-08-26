@@ -1,6 +1,8 @@
 const APP_BUILD = 'dev';  // git commit hash — updated on each deploy
 const CACHE_NAME = 'ais-tracker-' + APP_BUILD;
 const DATA_CACHE = 'ais-data-v10';
+// Bump this version whenever a tile CDN in TILE_HOSTS changes, or the old
+// host's tiles are served cache-first forever (P17).
 const TILE_CACHE = 'ais-tiles-v2';  // v2: dark base moved CartoDB → ArcGIS
 
 // External tile CDN hosts to cache
@@ -17,6 +19,18 @@ const ENV_API_HOSTS = [
   'api.tidesandcurrents.noaa.gov',
   'api.open-meteo.com',
 ];
+
+// Host matching is exact, or a true subdomain. A bare endsWith() would also
+// match evilservices.arcgisonline.com and let an attacker's host be served
+// cache-first from our tile cache (P18). Hoisted out of the fetch handler so
+// tests/test_invariants.mjs can call them directly.
+function isTileHost(hostname) {
+  return TILE_HOSTS.some((h) => hostname === h || hostname.endsWith('.' + h));
+}
+
+function isEnvApiHost(hostname) {
+  return ENV_API_HOSTS.some((h) => hostname === h);
+}
 
 const ASSETS = [
   './',
@@ -66,7 +80,7 @@ let _dataCacheFirst = false;
 
 // cache.put with quota-aware eviction.
 //
-// Never evict from CACHE_NAME: the Cache API preserves insertion order, so its
+// P16. Never evict from CACHE_NAME: the Cache API preserves insertion order, so its
 // oldest entries are the install-time ASSETS (leaflet.js, app.js, style.css) —
 // dropping those silently destroys offline bootability. The unbounded tile
 // cache is what creates the pressure in the first place, and tiles are always
@@ -198,7 +212,7 @@ self.addEventListener('fetch', (event) => {
   }
 
   // External environmental APIs — network-first, never cache errors
-  if (ENV_API_HOSTS.some(h => url.hostname === h)) {
+  if (isEnvApiHost(url.hostname)) {
     if (_dataCacheFirst) {
       event.respondWith(
         caches.open(DATA_CACHE).then((cache) =>
@@ -258,7 +272,7 @@ self.addEventListener('fetch', (event) => {
   // External CDN tiles: cache-first (tiles don't change).
   // Exact host, or a subdomain of one (OSM serves from {a,b,c}.tile.…) —
   // a bare endsWith() would also match evilservices.arcgisonline.com.
-  if (TILE_HOSTS.some(h => url.hostname === h || url.hostname.endsWith('.' + h))) {
+  if (isTileHost(url.hostname)) {
     event.respondWith(
       caches.open(TILE_CACHE).then((cache) =>
         cache.match(event.request).then((cached) => {

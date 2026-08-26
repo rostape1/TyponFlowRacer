@@ -177,6 +177,8 @@ try {
 // SFBOFS reruns every 6h (03z/09z/15z/21z). A run older than this means the
 // fetch pipeline has stalled — every requested hour would alias to hour_48,
 // silently presenting a dead forecast as current data. Refuse it instead.
+// P01: past this age every forecast offset aliases to hour_48 and NOW renders
+// identically to +4h. Guarded by tests/test_staleness.mjs.
 const SFBOFS_RUN_STALE_HOURS = 12;
 
 // Memoized discovery of the true run time. The router fires up to 49

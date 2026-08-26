@@ -70,7 +70,7 @@ const _freshRunTime = new Date(Date.now() - 2 * 3600000);
 const FRESH = `t${String(_freshRunTime.getUTCHours()).padStart(2, '0')}z ` +
     `${String(_freshRunTime.getUTCMonth() + 1).padStart(2, '0')}/${String(_freshRunTime.getUTCDate()).padStart(2, '0')}`;
 
-console.log('Staleness gate:');
+console.log('Staleness gate (P01):');
 
 // The deadlock: a stale localStorage seed must not prevent discovering the
 // fresh run on the server.
@@ -98,7 +98,7 @@ console.log('Staleness gate:');
     check('genuinely stalled pipeline is refused', r.stale === true && r.runAgeHours > 12);
 }
 
-console.log('High-res path (router consumes this):');
+console.log('High-res path — router consumes this (P01):');
 
 {
     const { api } = build({ seed: STALE, serverRun: STALE });
@@ -158,7 +158,7 @@ async function sweep(behave) {
     return { flow, attempts };
 }
 
-console.log('Download sweep:');
+console.log('Download sweep (P03):');
 {
     const { flow } = await sweep(() => 200);
     check('gapless run caches all 49 hours',

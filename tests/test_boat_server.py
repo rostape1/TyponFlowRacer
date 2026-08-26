@@ -40,7 +40,7 @@ ROOT = Path(__file__).resolve().parent.parent
 
 def _load_boat_server():
     import importlib.util
-    # Don't write pi/__pycache__: a cached .pyc whose source changed by the same
+    # P21. Don't write pi/__pycache__: a cached .pyc whose source changed by the same
     # byte count (e.g. WIND_NX 11 → 12) can be reused, and the test then reads
     # stale code and passes against a bug it should catch.
     sys.dont_write_bytecode = True
@@ -122,7 +122,7 @@ def js_wind_bounds():
 
 # ---- 1. Cross-language parity --------------------------------------------
 
-section("Cross-language parity (data-loader.js ↔ boat_server.py)")
+section("Cross-language parity — data-loader.js ↔ boat_server.py (P20)")
 
 eq("tide station list matches data-loader.js",
    list(bs.TIDE_STATIONS), js_object_keys("TIDE_STATIONS"))
@@ -195,7 +195,7 @@ else:
 
 # ---- 2. Date window + alias key ------------------------------------------
 
-section("NOAA date window and date-independent alias")
+section("NOAA date window and date-independent alias (P06)")
 
 _begin, _end = bs._noaa_date_range_utc()
 _t_begin, _t_end = bs._noaa_date_range_utc(1)
@@ -249,7 +249,7 @@ ok("a stale gauge reading expires long before a prediction does",
 
 # ---- 4. Content-type gate ------------------------------------------------
 
-section("Captive-portal content-type gate")
+section("Captive-portal content-type gate (P07)")
 
 for ct in ("application/json", "application/json; charset=utf-8",
            "text/json", "application/geo+json", "APPLICATION/JSON"):
@@ -283,7 +283,7 @@ for name in ("nmea_../../etc/passwd", "boat_server.py", "nmea_x.txt.bak",
 
 # ---- 6. DiskCache --------------------------------------------------------
 
-section("DiskCache")
+section("DiskCache (P10 atomic writes, P11 prune)")
 
 _tmp = Path(tempfile.mkdtemp(prefix="ais-cache-test-"))
 try:
@@ -364,7 +364,7 @@ finally:
 
 # ---- 7. proxy_with_cache -------------------------------------------------
 
-section("proxy_with_cache (offline behaviour)")
+section("proxy_with_cache — offline behaviour (P06, P07, P08, P10)")
 
 
 class _CM:

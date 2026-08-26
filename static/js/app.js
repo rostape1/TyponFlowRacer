@@ -13,7 +13,7 @@ const MAX_VESSELS = 50;
 window.APP_CONFIG = window.APP_CONFIG || null;
 const CONFIG_TIMEOUT_MS = 2500;
 const _configPromise = (async () => {
-    // Hard abort budget. AIS, NMEA and the first environmental loads all wait
+    // P14. Hard abort budget. AIS, NMEA and the first environmental loads all wait
     // on this promise, and a *hanging* (not failing) request — captive-portal
     // marina WiFi is the canonical trigger — would leave the app with no AIS
     // and no NMEA indefinitely, with the status pill never updating.
@@ -374,7 +374,7 @@ map.on('click', (e) => {
 const LOCAL_TILE_MIN_Z = 10;
 const LOCAL_TILE_MAX_Z = 15;
 
-// True only when the basemap should come from static/tiles/. That directory is
+// P15. True only when the basemap should come from static/tiles/. That directory is
 // gitignored and empty unless download_offline.py has been run, so localhost
 // dev (`python -m http.server --directory static`) must keep hitting the CDN —
 // the old `!hostname.endsWith('github.io')` test captured it and showed a blank
