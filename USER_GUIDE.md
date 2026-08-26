@@ -319,7 +319,7 @@ Before leaving the dock:
 1. Make sure you're connected to WiFi
 2. Click the **download arrow** in the timeline strip
 3. Watch the progress panel — it downloads 24 hours of:
-   - Tide predictions for all 14 stations
+   - Tide predictions for all 16 stations
    - Tidal current data (6 stations + SFBOFS grid)
    - Wind field data (HRRR model)
    - Wind station observations
