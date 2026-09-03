@@ -1,0 +1,216 @@
+<!DOCTYPE html>
+<!--
+  Standalone offline viewer for the SI-TEX MDA-5 voyage recorder tracks.
+
+  Deliberately separate from index.html: this is an archive browser, not part of
+  the tracker app, and nothing here touches the live map.
+
+  Open it by double-clicking the file. It runs from a file:// URL with no server
+  and no network:
+    * Leaflet comes from lib/ rather than a CDN.
+    * Track data comes from data/tracks/tracks.js as a <script> assignment,
+      because fetch() on a file:// URL is blocked by CORS.
+    * Chart tiles come from tiles/ on disk, which download_offline.py populated.
+
+  Those tiles only exist for z10-15 inside (36.45,-123.05)-(38.20,-121.75) (P15),
+  so the map clamps to that zoom range and the one passage that ran south of
+  Big Sur draws over empty background. Extend it with:
+    python3 download_offline.py --bounds 35.4,-123.2,38.2,-121.6
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Typon — voyage tracks 2021-2026</title>
+<link rel="stylesheet" href="lib/leaflet.css">
+<script src="lib/leaflet.js"></script>
+<script src="data/tracks/tracks.js"></script>
+<style>
+  html, body { margin: 0; height: 100%; background: #0a1628; color: #c8d6e5;
+               font: 13px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+  #map { position: absolute; inset: 0; background: #0a1628; }
+  .panel {
+    position: absolute; top: 12px; right: 12px; z-index: 1000; width: 208px;
+    padding: 12px 14px; border-radius: 10px; border: 1px solid rgba(200,214,229,.18);
+    background: rgba(10,22,40,.82); backdrop-filter: blur(12px);
+    box-shadow: 0 6px 24px rgba(0,0,0,.45); max-height: calc(100% - 24px); overflow-y: auto;
+  }
+  .panel h1 { margin: 0 0 2px; font-size: 13px; letter-spacing: .04em; text-transform: uppercase; }
+  .panel .sub { color: #7f93a8; font-size: 11px; margin-bottom: 10px; }
+  .panel h2 { margin: 12px 0 6px; font-size: 10px; letter-spacing: .09em;
+              text-transform: uppercase; color: #7f93a8; font-weight: 600; }
+  .row { display: flex; align-items: center; gap: 8px; padding: 3px 0; cursor: pointer; }
+  .row input { accent-color: #3498db; margin: 0; cursor: pointer; }
+  .swatch { width: 20px; height: 3px; border-radius: 2px; flex: none; }
+  .count { margin-left: auto; color: #7f93a8; font-size: 11px; font-variant-numeric: tabular-nums; }
+  .total { margin-top: 12px; padding-top: 10px; border-top: 1px solid rgba(200,214,229,.14);
+           color: #7f93a8; font-size: 11px; line-height: 1.6; }
+  .total b { color: #c8d6e5; font-weight: 600; }
+  .leaflet-popup-content-wrapper, .leaflet-popup-tip {
+    background: rgba(10,22,40,.95); color: #c8d6e5; border: 1px solid rgba(200,214,229,.2);
+  }
+  .leaflet-popup-content { margin: 10px 12px; font-size: 12px; line-height: 1.7; }
+  .leaflet-popup-content .d { color: #7f93a8; }
+  .leaflet-container { background: #0a1628; }
+  .leaflet-bar a { background: #0a1628; color: #c8d6e5; border-color: rgba(200,214,229,.2); }
+  .leaflet-bar a:hover { background: #14263f; }
+</style>
+</head>
+<body>
+<div id="map"></div>
+<div class="panel">
+  <h1>Typon</h1>
+  <div class="sub">MDA-5 voyage recorder</div>
+  <h2>Chart</h2>
+  <div id="layers"></div>
+  <h2>Years</h2>
+  <div id="years"></div>
+  <div class="total" id="total"></div>
+</div>
+<script>
+'use strict';
+
+// z10-15 is all download_offline.py fetched (P15). maxNativeZoom lets Leaflet
+// upscale tile 15 rather than request a 16 that isn't on disk and 404 to grey.
+// minZoom goes below 10 anyway so the whole 35.6-37.9N extent can be seen at
+// once; below 10 there is no chart, just tracks on the background colour.
+var MIN_ZOOM = 8, MIN_CHART_ZOOM = 10, MAX_NATIVE = 15, MAX_ZOOM = 17;
+// What download_offline.py actually covers, as (S,W)-(N,E). The opening view,
+// because it holds 98% of the tracks and always has chart underneath.
+var CHART_BOUNDS = L.latLngBounds([36.45, -123.05], [38.20, -121.75]);
+
+var CHARTS = [
+  { id: 'noaa', label: 'NOAA charts' },
+  { id: 'osm',  label: 'OpenStreetMap' },
+  { id: 'dark', label: 'Dark gray' }
+];
+// Per-year colours, cool -> warm with age, readable on both chart backgrounds.
+var COLORS = {
+  2021: '#5dade2', 2022: '#48c9b0', 2023: '#58d68d',
+  2024: '#f4d03f', 2025: '#eb984e', 2026: '#e74c3c'
+};
+
+var map = L.map('map', {
+  minZoom: MIN_ZOOM, maxZoom: MAX_ZOOM, zoomControl: true,
+  preferCanvas: true   // ~24k vertices as SVG paths would crawl on pan
+});
+
+function tiles(dir) {
+  return L.tileLayer('tiles/' + dir + '/{z}/{x}/{y}.png', {
+    minZoom: MIN_CHART_ZOOM, maxZoom: MAX_ZOOM, maxNativeZoom: MAX_NATIVE,
+    attribution: 'Tracks: Typon VDR'
+  });
+}
+
+var chartLayers = {}, activeChart = null;
+function selectChart(id) {
+  if (activeChart) map.removeLayer(chartLayers[activeChart]);
+  if (!chartLayers[id]) chartLayers[id] = tiles(id);
+  chartLayers[id].addTo(map).bringToBack();
+  activeChart = id;
+}
+
+var seamarks = L.tileLayer('tiles/sea/{z}/{x}/{y}.png', {
+  minZoom: MIN_CHART_ZOOM, maxZoom: MAX_ZOOM, maxNativeZoom: MAX_NATIVE, opacity: .9
+});
+
+function fmtDate(iso) {
+  var d = new Date(iso);
+  return d.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' }) +
+         ' ' + d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+}
+
+var yearLayers = {}, totals = { nm: 0, tracks: 0, hours: 0 }, allBounds = L.latLngBounds([]);
+var years = Object.keys(window.VDR_TRACKS || {}).sort();
+
+years.forEach(function (year) {
+  var fc = window.VDR_TRACKS[year];
+  var stats = { nm: 0, hours: 0 };
+  var layer = L.geoJSON(fc, {
+    style: { color: COLORS[year] || '#3498db', weight: 2, opacity: .85 },
+    onEachFeature: function (feature, lyr) {
+      var p = feature.properties;
+      stats.nm += p.distance_nm;
+      stats.hours += p.hours;
+      lyr.bindPopup(
+        '<b>' + fmtDate(p.start) + '</b><br>' +
+        '<span class="d">Distance</span> ' + p.distance_nm.toFixed(1) + ' nm<br>' +
+        '<span class="d">Duration</span> ' + p.hours.toFixed(1) + ' h<br>' +
+        '<span class="d">Average</span> ' +
+          (p.hours > 0 ? (p.distance_nm / p.hours).toFixed(1) : '0.0') + ' kt<br>' +
+        '<span class="d">Max SOG</span> ' + p.max_sog.toFixed(1) + ' kt<br>' +
+        '<span class="d">Fixes</span> ' + p.fixes
+      );
+      lyr.on('mouseover', function () { this.setStyle({ weight: 4, opacity: 1 }); });
+      lyr.on('mouseout',  function () { this.setStyle({ weight: 2, opacity: .85 }); });
+    }
+  });
+  yearLayers[year] = layer;
+  layer.addTo(map);
+  allBounds.extend(layer.getBounds());
+  totals.nm += stats.nm;
+  totals.hours += stats.hours;
+  totals.tracks += fc.features.length;
+
+  var row = document.createElement('label');
+  row.className = 'row';
+  row.innerHTML =
+    '<input type="checkbox" checked>' +
+    '<span class="swatch" style="background:' + (COLORS[year] || '#3498db') + '"></span>' +
+    '<span>' + year + '</span>' +
+    '<span class="count">' + Math.round(stats.nm) + ' nm</span>';
+  row.querySelector('input').addEventListener('change', function () {
+    if (this.checked) layer.addTo(map); else map.removeLayer(layer);
+  });
+  document.getElementById('years').appendChild(row);
+});
+
+CHARTS.forEach(function (chart, i) {
+  var row = document.createElement('label');
+  row.className = 'row';
+  row.innerHTML = '<input type="radio" name="chart"' + (i === 0 ? ' checked' : '') + '>' +
+                  '<span>' + chart.label + '</span>';
+  row.querySelector('input').addEventListener('change', function () { selectChart(chart.id); });
+  document.getElementById('layers').appendChild(row);
+});
+
+var seaRow = document.createElement('label');
+seaRow.className = 'row';
+seaRow.innerHTML = '<input type="checkbox"><span>Seamarks</span>';
+seaRow.querySelector('input').addEventListener('change', function () {
+  if (this.checked) seamarks.addTo(map); else map.removeLayer(seamarks);
+});
+document.getElementById('layers').appendChild(seaRow);
+
+document.getElementById('total').innerHTML =
+  '<b>' + Math.round(totals.nm).toLocaleString() + ' nm</b> over ' +
+  '<b>' + totals.tracks + '</b> voyages<br>' +
+  '<b>' + Math.round(totals.hours).toLocaleString() + ' h</b> under way<br>' +
+  years[0] + '&ndash;' + years[years.length - 1] +
+  '<br><a href="#" id="fitall" style="color:#5dade2">Fit all voyages</a> &middot; ' +
+  '<a href="#" id="fitbay" style="color:#5dade2">Bay</a>';
+
+function showChartArea() {
+  map.fitBounds(CHART_BOUNDS, { padding: [20, 20] });
+  // In a short window the fit can land below z10, where no tiles exist and the
+  // map opens blank. Seeing chart beats seeing the whole box.
+  if (map.getZoom() < MIN_CHART_ZOOM) map.setZoom(MIN_CHART_ZOOM);
+}
+
+document.getElementById('fitall').addEventListener('click', function (e) {
+  e.preventDefault();
+  if (allBounds.isValid()) map.fitBounds(allBounds, { padding: [30, 30] });
+});
+document.getElementById('fitbay').addEventListener('click', function (e) {
+  e.preventDefault();
+  showChartArea();
+});
+
+selectChart('noaa');
+// Open on the charted area rather than on every voyage: fitting the full
+// extent lands the view on Monterey Canyon, which is where the single longest
+// passage drags the bounding box, not where the sailing is.
+showChartArea();
+</script>
+</body>
+</html>
