@@ -16,8 +16,8 @@ re-introduces a bug already paid for.
 > IDs are permanent. Never renumber. New pitfalls take the next unused number, even if an
 > earlier one is retired.
 >
-> **19 of these are mechanically enforced** — `P01` `P03` `P06` `P07` `P08` `P10` `P11` `P15` `P16`
-> `P18` `P20` `P21` `P22` `P24` `P33` `P34` `P36` `P37` `P40` have a test that fails if the fix is undone. Entries marked
+> **20 of these are mechanically enforced** — `P01` `P03` `P06` `P07` `P08` `P10` `P11` `P15` `P16`
+> `P18` `P20` `P21` `P22` `P24` `P33` `P34` `P36` `P37` `P40` `P41` have a test that fails if the fix is undone. Entries marked
 > **`ENFORCED`** name the test. The rest rely on this file being read, so if you touch a doc-only
 > pitfall's code area, ask whether an assertion could promote it.
 >
@@ -638,6 +638,42 @@ returns a writer; discarding it leaves the old socket ESTABLISHED because the ev
 holds the transport, so after a 30-second read timeout the Pi reconnects while its own previous
 session is still open and is refused by its own receiver — this lockout with no power cut
 involved.
+
+---
+
+## Unversioned static URLs with no Cache-Control ship a deploy that never arrives [P41]
+
+**`ENFORCED`** — `tests/test_boat_server.py` asserts `revalidate_static` sets `no-cache` on
+`.html/.js/.css`, leaves tiles and images cacheable, and never downgrades a handler's own
+`no-store`. Verified by mutation: removing the header fails four assertions.
+
+On 2026-09-14 the Replay button "did nothing" on the Pi. Everything checked out — the Pi was
+serving the current `app.js` (verified by SHA), `/api/logs` returned 18 recordings, and a *fresh*
+headless browser drove the whole flow correctly. Chrome was running an `app.js` from before the
+replay feature existed. `Cmd+Shift+R` fixed it instantly.
+
+`static/index.html` loads every module with an **unversioned** URL (`js/app.js`, not
+`js/app.<hash>.js`), and aiohttp's `add_static` sets only `ETag` and `Last-Modified`. **With no
+`Cache-Control` at all, a browser applies heuristic caching** — it may reuse its stored copy
+without revalidating, for an interval it chooses. So the Pi had the new code and the browser ran
+the old one, with nothing in the console to say so.
+
+`revalidate_static` now sets `Cache-Control: no-cache` on `.html`, `.js`, `.css`, `.webmanifest`,
+`.json`, and on `/` and `/hub`. `no-cache` still *stores* the file — it forces an ETag
+revalidation, which is a 304 on the boat LAN. **Chart tiles and images are deliberately excluded**:
+they are large, effectively immutable, and must stay cacheable for offline use.
+
+Two things follow from this:
+
+- When a UI change "isn't there", check what the *browser* is running before you check the server.
+  CLAUDE.md's browser rule says this already; this is the failure it was written for.
+- `APP_BUILD` in `static/js/app.js` is a **hand-edited** constant and has been stale for dozens of
+  commits, so the hash in the status bar cannot be used to tell what is deployed. Either wire it to
+  the real commit at deploy time or delete it — a version indicator that lies is worse than none.
+
+Same family: `loadScript()` in `index.html` used to swallow `onerror` and resolve, so a module that
+failed to load produced an app where the dependent feature silently did nothing. Failures now log
+and are recorded in `window.__bootFailures`.
 
 ---
 
