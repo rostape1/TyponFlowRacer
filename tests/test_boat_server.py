@@ -825,6 +825,44 @@ eq("and is capped rather than unbounded", nwp.retry_delay(50), nwp.RETRY_MAX_S)
 ok("the cap is short enough to recover promptly", nwp.RETRY_MAX_S <= 120,
    f"got {nwp.RETRY_MAX_S}")
 
+# Unversioned script URLs + no Cache-Control let a browser reuse stale JS after a
+# deploy: the Pi serves the new code, Chrome runs the old one, and the missing
+# feature has an empty console. Cost a debugging session on 2026-09-14.
+async def _cache_headers():
+    class _Req:
+        def __init__(self, path):
+            self.path = path
+
+    async def _plain(_r):
+        return web.Response(text="x")
+
+    async def _api(_r):
+        return web.Response(text="{}", headers={"Cache-Control": "no-store"})
+
+    out = {}
+    for path in ("/", "/hub", "/js/app.js", "/css/style.css", "/index.html",
+                 "/tiles/noaa/12/1/2.png", "/favicon.ico"):
+        r = await bs.revalidate_static(_Req(path), _plain)
+        out[path] = r.headers.get("Cache-Control")
+    # A handler that set its own stricter policy must win.
+    r = await bs.revalidate_static(_Req("/api/health"), _api)
+    out["_api"] = r.headers.get("Cache-Control")
+    return out
+
+
+from aiohttp import web  # noqa: E402
+_ch = asyncio.run(_cache_headers())
+eq("app.js must be revalidated, not heuristically cached",
+   _ch["/js/app.js"], "no-cache")
+eq("the page itself must be revalidated", _ch["/"], "no-cache")
+eq("so must /hub", _ch["/hub"], "no-cache")
+eq("and the stylesheet", _ch["/css/style.css"], "no-cache")
+# Tiles are large and effectively immutable — they must stay cacheable offline.
+eq("chart tiles stay cacheable", _ch["/tiles/noaa/12/1/2.png"], None)
+eq("images stay cacheable", _ch["/favicon.ico"], None)
+eq("a handler's own no-store is not downgraded", _ch["_api"], "no-store")
+
+
 _q = _FakeQueue(maxsize=2)
 _st_drop = {}
 nwp._NmeaDatagramProtocol(_q, status=_st_drop).datagram_received(

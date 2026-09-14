@@ -1160,12 +1160,40 @@ async def on_cleanup(app: web.Application):
         await app["http"].close()
 
 
+# Suffixes that must be revalidated on every load. The boat's UI is served with
+# unversioned URLs (`js/app.js`, not `js/app.<hash>.js`), and aiohttp's static
+# handler sets only ETag and Last-Modified. With no Cache-Control at all a
+# browser applies *heuristic* caching and may reuse its copy without asking —
+# which shipped a deploy that looked live and wasn't: the Pi had the new code,
+# Chrome ran the old one, and the new UI was simply missing with nothing in the
+# console. `no-cache` still stores the file, it just forces an ETag
+# revalidation, which is a 304 on the boat LAN.
+#
+# Deliberately NOT applied to images or chart tiles: those are large, effectively
+# immutable, and must stay cacheable for offline use.
+_REVALIDATE_SUFFIXES = (".html", ".js", ".css", ".webmanifest", ".json")
+
+
+@web.middleware
+async def revalidate_static(request: web.Request, handler):
+    resp = await handler(request)
+    # Never override a handler that set its own policy (the API routes use
+    # no-store, which is stricter).
+    if resp.headers.get("Cache-Control"):
+        return resp
+    path = request.path.lower()
+    if path in ("/", "/hub") or path.endswith(_REVALIDATE_SUFFIXES):
+        resp.headers["Cache-Control"] = "no-cache"
+    return resp
+
+
 def build_app(args) -> web.Application:
     static_dir = Path(args.static_dir).resolve()
     if not static_dir.exists():
         raise SystemExit(f"static dir not found: {static_dir}")
 
-    app = web.Application(client_max_size=1024 * 1024)
+    app = web.Application(client_max_size=1024 * 1024,
+                          middlewares=[revalidate_static])
     app["cache"] = DiskCache(Path(args.cache_dir).resolve())
     # url -> Future, so concurrent requests for one URL share a single fetch.
     app["inflight"] = {}

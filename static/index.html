@@ -385,6 +385,11 @@
 
     <!-- Try local Leaflet first, fall back to CDN -->
     <script>
+        // A module that fails to load must not vanish silently. The chain still
+        // resolves so the rest of the app boots, but the failure is recorded and
+        // logged — otherwise a missing js/nmea-client.js produces an app where
+        // Replay simply does nothing, with an empty console to debug from.
+        window.__bootFailures = [];
         function loadScript(src, fallback) {
             return new Promise((resolve) => {
                 const s = document.createElement('script');
@@ -395,8 +400,16 @@
                         const f = document.createElement('script');
                         f.src = fallback;
                         f.onload = resolve;
+                        f.onerror = () => {
+                            window.__bootFailures.push(src + ' (and fallback ' + fallback + ')');
+                            console.error('[boot] FAILED to load', src, 'and its fallback', fallback);
+                            resolve();
+                        };
                         document.head.appendChild(f);
                     } else {
+                        window.__bootFailures.push(src);
+                        console.error('[boot] FAILED to load', src,
+                            '— features depending on it will silently do nothing');
                         resolve();
                     }
                 };
