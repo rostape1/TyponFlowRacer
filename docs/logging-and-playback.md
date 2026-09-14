@@ -10,13 +10,22 @@ Companion to the [pitfall index](pitfalls.md) entries `P33` `P34` `P35` `P36` `P
 | Piece | Where | Job |
 |---|---|---|
 | `nmea_capture.py` | Pi, port **8081** | Subscribes to the boat server's `/nmea` WebSocket, writes every sentence to an hourly-rotated file in `logs/`, serves a status page |
-| `pi/boat_server.py` | Pi, port **8080** | Bridges the receiver's TCP stream to `/nmea`, serves `/logs`, `/logs/<file>`, `/api/logs`, `/hub` |
+| `pi/boat_server.py` | Pi, port **8080** | Bridges the receiver's NMEA stream — TCP client *and* UDP listener (`P40`) — to `/nmea`, serves `/logs`, `/logs/<file>`, `/api/logs`, `/hub` |
 | `static/js/nmea-client.js` | Browser | Live WebSocket **or** file replay, into one shared store |
 
-`nmea_capture.py` deliberately reads from the boat server rather than the receiver directly. The
-AIS unit at `192.168.47.10:10110` accepts **one** TCP client; the Pi holds it, and everything else
-fans out from `/nmea`. If you try to `nc` that port from a laptop while the Pi is running, you get
-nothing — that is the design, not a fault.
+`nmea_capture.py` deliberately reads from the boat server rather than the receiver directly, so
+everything fans out from `/nmea`.
+
+Over **TCP** the receiver accepts one client at a time and the Pi holds it, so `nc`-ing
+`192.168.47.10:10110` from a laptop while the Pi is running is refused — that much is by design.
+But do **not** read a refusal as proof the system is healthy: the same refusal is what a wedged
+receiver looks like, and it is indistinguishable from outside. That ambiguity cost ~10 hours of
+recording on 2026-09-13/14. See [`P40`](pitfalls.md) and
+[nmea-hardware.md](nmea-hardware.md) before drawing any conclusion from that port.
+
+Over **UDP** nothing holds a slot at all, so a refusal there means nothing whatsoever. Check
+`/api/health` — `nmea.transport` names the transport actually feeding the boat, and
+`nmea.tcp.state` / `nmea.udp.state` say why the other one isn't.
 
 ---
 

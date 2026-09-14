@@ -578,6 +578,49 @@ console.log('vessel-store replay isolation:');
         `clearAll must return the removed MMSIs, got ${JSON.stringify(removed)}`);
 }
 
+// --- AIS sentences must be checksum-validated (P40) ----------------------
+// Over TCP, framing guaranteed one sentence per line and an unvalidated AIS
+// path was merely untidy. Over UDP a single dropped datagram splices the tail
+// of one sentence onto the head of the next, and an unvalidated AIVDM decodes
+// to a vessel with an arbitrary MMSI at an arbitrary position — drawn on the
+// map and radar, fed into CPA/TCPA, and written permanently to the race log.
+{
+    const parserSrc = readFileSync(join(__dirname, '../static/js/nmea-parser.js'), 'utf8');
+    const pbox = {};
+    new Function('module', parserSrc + '\nmodule.NmeaParser = NmeaParser;')(pbox);
+    const { parseLine, validateChecksum } = pbox.NmeaParser;
+
+    // Real sentences lifted from a Pi capture, checksums verified.
+    const goodAis = '!AIVDM,1,1,,A,35O7I1P00ro?bAhEd;qRvBLP00u@,0*3D';
+    const otherAis = '!AIVDM,1,1,,A,15O0kl0000o@::0EWL8S12nN0@:I,0*50';
+    const ownShip = '!AIVDO,1,1,,,B52cumP00=l:Bl5GL4KQ3w`Ql000,0*77';
+
+    assert(validateChecksum(goodAis),
+        'fixture sanity: the good AIVDM must have a valid checksum');
+    assert(parseLine(goodAis) !== null, 'a valid AIVDM is still accepted');
+    assert(parseLine(goodAis).isAIS === true, 'and is still flagged as AIS');
+    assert(parseLine(ownShip) !== null, 'a valid own-ship AIVDO is still accepted');
+
+    // Flip one payload character: structurally perfect, checksum now wrong.
+    const corrupted = goodAis.replace('35O7I1P0', '35O7I1P1');
+    assert(!validateChecksum(corrupted), 'fixture sanity: corruption breaks the checksum');
+    assert(parseLine(corrupted) === null,
+        'an AIVDM with a bad checksum must be rejected, not decoded into a phantom vessel');
+
+    // The realistic UDP failure: the head of one sentence joined to the tail of
+    // another after a dropped datagram. Syntactically a perfect single-fragment
+    // AIVDM; the checksum is the only thing that catches it.
+    const spliced = '!AIVDM,1,1,,A,35O7I1P00ro' + '?::0EWL8S12nN0@:I,0*50';
+    assert(spliced.indexOf('*') > 0, 'fixture sanity: the splice looks well-formed');
+    assert(parseLine(spliced) === null, 'a spliced AIVDM must be rejected');
+
+    // Regression: $ sentences must be unaffected.
+    assert(parseLine('$GPGGA,123519,4807.038,N,01131.000,E,1,08,0.9,545.4,M,46.9,M,,*47') !== null,
+        'valid $ sentences still parse');
+    assert(parseLine('$GPGGA,123519,4807.038,N,01131.000,E,1,08,0.9,545.4,M,46.9,M,,*00') === null,
+        'invalid $ sentences are still rejected');
+}
+
 // --- summary -------------------------------------------------------------
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failed > 0) process.exit(1);

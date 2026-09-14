@@ -574,67 +574,58 @@ silent on TCP.
 
 ## A single-client TCP feed lets any power cut lock the Pi out [P40]
 
-The NMEA source at `192.168.47.10:10110` is **not** the MDA-5's own network
-stack. It is a separate **Lantronix XPort** serial-to-Ethernet module (MAC
-`00:80:A3:C9:F3:F9`, firmware `V6.10.0.1`) with its own power switch, wired to
-the MDA-5 over RS-232 at 460800 8-N-1. Diagnosing the receiver without knowing
-that wastes a night: the box answers ARP, ICMP, its web UI on `:80` and its setup
-menu on `:9999` while serving no data at all, so "the AIS unit is on" is not
-evidence about the feed.
+**`ENFORCED`** — `tests/test_boat_server.py` asserts `on_startup` really starts both transports,
+that the UDP source filter defaults closed and resolves hostnames, that reassembly is per-source
+and bounded, and that shedding drops the oldest line. `tests/test_replay.mjs` asserts AIS
+sentences are checksum-validated. Verified by mutation: each fix reverted fails the suite.
 
-**The trap:** that XPort serves TCP to **one client at a time** and answers every
-other connection with `ECONNREFUSED`. So a refusal is ambiguous — it means
-either "another client holds the slot" or "the box isn't listening", and *nothing
-observable from outside separates them*. Its SNMP agent implements neither
-`tcpConnTable` nor the Lantronix private MIB, so you cannot ask it who holds the
-slot either.
+The NMEA source at `192.168.47.10:10110` is a **Lantronix XPort** serial-to-Ethernet bridge with
+its own power switch — not the MDA-5's own network stack. It serves TCP to **one client at a
+time** and answers everyone else with `ECONNREFUSED`, so a refusal means *either* "another client
+holds the slot" *or* "the box isn't listening", and nothing observable from outside separates
+them. Device identification, safe probing and the config procedure live in
+[nmea-hardware.md](nmea-hardware.md) — read it before touching the receiver.
 
-On 2026-09-13/14 this cost ~10 hours of recording. The Pi logged
-`ECONNREFUSED` every 5 seconds for hours while every layer we own — bridge task,
-logger, disk, server — was healthy. An abrupt Pi power-off sends no FIN, so a
-session the Pi no longer owns can stay claimed on the receiver, and the Pi is
-then locked out for an unbounded time. That directly violates a hard requirement:
+On 2026-09-13/14 this cost ~10 hours of recording. The Pi logged `ECONNREFUSED` every 5 seconds
+for hours while every layer we own — bridge task, logger, disk, server — was healthy. An abrupt
+Pi power-off sends no FIN, so a session the Pi no longer owns can stay claimed on the receiver,
+and the Pi is then locked out for an unbounded time. That directly violates a hard requirement:
 the boat's Pi gets shut down whenever nobody is aboard.
 
-**The fix is the transport, not the retry logic.** No amount of Pi-side code
-helps, because the damage is done after the Pi is already dead. UDP datagram mode
-is connectionless: no session to orphan, no single-client slot, so no client's
-power state can wedge the feed. `boat_server.py` therefore runs
-`nmea_udp_broadcast()` *and* `nmea_tcp_broadcast()` simultaneously — the XPort's
-`xprtproto` is TCP or UDP and never both, so only one can ever deliver and there
-is no double-counting, while a reverted config or a replacement receiver keeps
-working with no redeploy.
+**The fix is the transport, not the retry logic.** No amount of Pi-side code helps, because the
+damage is done after the Pi is already dead. UDP datagram mode is connectionless: no session to
+orphan, no single-client slot. `boat_server.py` runs `nmea_udp_broadcast()` *and*
+`nmea_tcp_broadcast()` simultaneously — the XPort speaks one protocol at a time, so only one can
+ever deliver, and a reverted config keeps working with no redeploy.
 
-Three things that are easy to get wrong when touching this:
+Five things that are easy to get wrong here, each of which shipped as a bug in the first draft:
 
-- **A datagram is not a line.** The XPort ships whatever the serial side
-  produced before its flush trigger fired, so one packet may carry several
-  sentences or split one across two. Reassembly carries a remainder between
-  packets; if a packet is lost that join yields one malformed sentence, which is
-  why consumers must keep validating the NMEA checksum rather than trusting
-  framing.
-- **An open UDP listener on the boat LAN is not a neutral default.** Position and
-  AIS data steer a boat. Datagrams are accepted only from `--tcp-host`;
-  `--udp-allow-any` is the deliberate escape hatch.
-- **Keep both transports on the same port.** Flipping the XPort's protocol must
-  not also mean changing a port, or the change lands on a closed door and looks
-  exactly like a dead receiver. A test asserts the two defaults agree.
+- **A datagram is not a line.** One packet may carry several sentences or split one across two, so
+  a remainder is carried between packets — **per source address**, or two senders splice into each
+  other. Bound only the *remainder*, after splitting: bounding the whole buffer discards the
+  complete sentences in front of it and resyncs mid-sentence, manufacturing the very splice you
+  are trying to avoid.
+- **Lossy framing means AIS must be checksum-validated.** `nmea-parser.js` used to return `!`
+  sentences unvalidated, which was safe only because TCP framing made splices impossible. Over UDP
+  one dropped datagram yields a syntactically perfect AIVDM carrying garbage, which decodes to a
+  vessel with an arbitrary MMSI at an arbitrary position — on the map, the radar, in CPA/TCPA, and
+  permanently in the race log.
+- **An open UDP listener on the boat LAN is not a neutral default.** Position and AIS data steer a
+  boat. Accept only from `--tcp-host`, **resolved to literal IPs** — a hostname compared against a
+  datagram's dotted-quad source matches nothing and silently discards the entire feed. Count
+  rejections into `/api/health`: "refusing every datagram" and "receiver is silent" otherwise read
+  identically, which is the `P39` failure all over again.
+- **Shed the oldest line, never the newest.** A full queue of stale positions walks own-ship
+  through a 40-second-old track while health shows lines flowing and `last_line_age_s` near zero.
+- **No `SO_REUSEADDR` on the UDP socket.** UDP has no `TIME_WAIT`, so it buys nothing; on Linux it
+  lets a second process bind the same port, after which each datagram reaches only one of them and
+  both report "listening". A hard `EADDRINUSE` is the better outcome.
 
-Reading the config is not free: connecting to `:9999` enters Setup Mode, and
-**exiting Setup Mode reboots the unit** — never do it while recording. The
-device is fully remotely administrable (`77FEh Access Mode: Read & Write`,
-`Enhanced Password disabled`), and `secure/setuprec.xml` over HTTP with empty
-credentials is a complete config backup to revert from. Decode Connect Mode from
-the device's own `secure/connset.js`, not from memory: `curropt & 0xc0` maps
-`0xc0`→"accept incoming: yes", `0x00`→"no", `0x40`→"only with active modem
-control in". `C0` accepts unconditionally, so a refusal is *not* the serial
-device being powered off.
-
-Finally, tooling lies here. On macOS `nc` reported a known-open port as closed,
-and `nmap` silently reported every port `filtered` because the agent sandbox
-denies raw sockets. Probe with raw Python sockets and print the real `errno`, and
-treat a `Date:` header from the XPort as meaningless — it has no RTC either
-(`P33`).
+Finally, the TCP path must **close its socket before reconnecting**. `asyncio.open_connection`
+returns a writer; discarding it leaves the old socket ESTABLISHED because the event loop still
+holds the transport, so after a 30-second read timeout the Pi reconnects while its own previous
+session is still open and is refused by its own receiver — this lockout with no power cut
+involved.
 
 ---
 

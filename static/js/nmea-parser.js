@@ -134,6 +134,15 @@ const NmeaParser = (() => {
         }
 
         if (sentence.startsWith('!')) {
+            // P40. This used to return unvalidated, which was safe only because
+            // TCP framing made a spliced sentence impossible. Over UDP a single
+            // dropped datagram joins the tail of one sentence to the head of the
+            // next, and the result can be a syntactically perfect single-fragment
+            // AIVDM carrying garbage — decoded into a vessel with an arbitrary
+            // MMSI at an arbitrary position, drawn on the map and the radar, fed
+            // into CPA/TCPA, and written permanently to the race log. AIVDM
+            // always carries a checksum, so there is no reason to trust framing.
+            if (!validateChecksum(sentence)) return null;
             return { timestamp, sentence, isAIS: true };
         }
 

@@ -108,7 +108,7 @@ known-good code. Prefer that when you're not at the boat (`P25`). Python changes
 | **8080** | `pi/boat_server.py` via `start_boat.sh` | HTTP. The boat server. `PORT` env overrides. |
 | 8081 | `nmea_capture.py` status page | `--web-port`, set explicitly in `startup.sh`. Also the disk-space alert (`P34`) |
 | 8888 | local dev static server, and legacy `main.py` | `python3 -m http.server 8888 --directory static` |
-| 10110 | AIS receiver (TCP **or** UDP, `192.168.47.10`) | Bridged to `/nmea` WebSocket by the boat server. The receiver is a Lantronix XPort that speaks one protocol at a time; the Pi listens on both (`P40`) |
+| 10110 | AIS receiver (`192.168.47.10`) | **TCP:** the Pi dials out to the receiver. **UDP:** the Pi listens on `0.0.0.0:10110`, accepting only from `--tcp-host`. The receiver speaks one or the other; the Pi runs both (`P40`) |
 | 8443 | *nothing* — historical HTTPS default | Source of a five-file drift bug (`P24`). Only used if you pass `--ssl-cert`. |
 | 8765 / 8766 | legacy `nmea_ws_proxy.py` standalone | Superseded. Still the last-resort NMEA fallback in `app.js`: **8765 for `ws://`, 8766 for `wss://`**, picked from `location.protocol`. On GitHub Pages (HTTPS) it therefore probes `wss://raspberrypi.local:8766` and logs a benign `ERR_NAME_NOT_RESOLVED` off-boat. |
 
@@ -205,7 +205,7 @@ its freshness. **Audit before changing offline behavior.** Mechanics and rationa
 | Meta JSON | `/data/meta.json` | ✓ | n/a | 60s TTL |
 | **NOAA chart tiles** | filesystem `/tiles/noaa/{z}/{x}/{y}.png` | `download_offline.py` | n/a | **default layer**; ArcGIS REST upstream |
 | Esri Dark Gray / OSM / OpenSeaMap tiles | filesystem `/tiles/{dark,osm,sea}/…` | `download_offline.py` | n/a | z10-15 only (`P15`) |
-| Local NMEA stream | `/nmea` (WebSocket) | n/a | n/a | TCP→WS bridge to 192.168.47.10:10110 |
+| Local NMEA stream | `/nmea` (WebSocket) | n/a | n/a | TCP client **or** UDP listener → WS bridge, 192.168.47.10:10110 (`P40`) |
 | AISstream.io | n/a | n/a | n/a | disabled in boat mode |
 
 ---
@@ -311,7 +311,7 @@ safely. Look up your group's IDs in [docs/pitfalls.md](docs/pitfalls.md), by ID,
 
 | File | Purpose |
 |------|---------|
-| `pi/boat_server.py` | **The boat server.** aiohttp: serves `static/`, reverse-proxies + disk-caches NOAA/Open-Meteo/GH-Pages, bridges NMEA TCP→WS at `/nmea`, synthesizes `/config.json`, runs both pre-warm loops. HTTP :8080. |
+| `pi/boat_server.py` | **The boat server.** aiohttp: serves `static/`, reverse-proxies + disk-caches NOAA/Open-Meteo/GH-Pages, bridges NMEA (TCP client **and** UDP listener) → WS at `/nmea`, synthesizes `/config.json`, runs both pre-warm loops. HTTP :8080. |
 | `pi/startup.sh` | systemd entrypoint: `git reset --hard origin/boat-mode`, start `nmea_capture.py`, exec `start_boat.sh` |
 | `pi/ais-tracker.service` | systemd unit, runs as `rostape1`, `Restart=on-failure` |
 | `pi/requirements.txt` | `aiohttp`, `websockets` |
@@ -355,7 +355,8 @@ on the boat shell scripts.
 documentation-only: the index is the only thing standing between you and re-introducing them. If you
 fix a doc-only pitfall's code area, consider whether an assertion could move it into the enforced set.
 
-Code that implements a guarded pitfall **cites its ID in a comment** (`grep -rn 'P0[0-9]' pi/ static/js/`),
+Code that implements a guarded pitfall **cites its ID in a comment**
+(`grep -rnE 'P[0-4][0-9]' pi/ static/js/ nmea_ws_proxy.py` — a `P0[0-9]` pattern silently misses everything past P09),
 so the trap is discoverable from the code, not only from this file.
 
 ## Data and services
@@ -507,6 +508,7 @@ new topic doc gets a row in the map below.
 | **Offline caching** — both layers, TTLs, stale-on-error, the date alias, SW eviction | [docs/offline-cache.md](docs/offline-cache.md) |
 | **Route optimizer** — isochrone search, wind frame, pruning, polars, variants | [docs/router.md](docs/router.md) |
 | **Logging, hub and playback** — retention, the disk alert, the transport, seek semantics | [docs/logging-and-playback.md](docs/logging-and-playback.md) |
+| **NMEA receiver hardware** — the XPort, why a refusal is ambiguous, safe probing, TCP↔UDP | [docs/nmea-hardware.md](docs/nmea-hardware.md) |
 | Land mask — TIGER/Line polygons, water/land detection | [docs/land-mask.md](docs/land-mask.md) |
 | Router open work / next session notes | [docs/router-next-session.md](docs/router-next-session.md) |
 | **Pre-ship review gate** — the 5 passes, pitfall injection, adversarial verification | [.claude/skills/pre-ship-review/SKILL.md](.claude/skills/pre-ship-review/SKILL.md) |

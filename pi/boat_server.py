@@ -11,8 +11,9 @@ Runs on the Raspberry Pi on the boat WiFi. Single asyncio process that:
      on the boat WiFi share one fetch and the cache survives flaky satcom.
   4. Reverse-proxies + disk-caches the pre-computed SFBOFS / NDBC / meta JSON
      hosted on GitHub Pages, with a startup-time SFBOFS pre-warm.
-  5. Bridges the local NMEA TCP stream (default 192.168.47.10:10110) to a
-     WebSocket at /nmea for the browser.
+  5. Bridges the local NMEA stream to a WebSocket at /nmea for the browser —
+     an outbound TCP client to 192.168.47.10:10110 *and* a UDP listener on
+     :10110, because the receiver speaks one or the other (`P40`).
 
 Usage:
     python3 pi/boat_server.py                       # HTTP on :8080
@@ -29,6 +30,7 @@ import logging
 import os
 import re
 import shutil
+import socket
 import ssl
 import sys
 import time
@@ -658,27 +660,47 @@ async def handle_health(request: web.Request) -> web.Response:
 
     # The NMEA source. If the logger is alive but nothing is being written, the
     # fault is upstream of it, and this is where that shows. `tcp`/`udp` carry
-    # enough to separate the three upstream failures that look identical from
-    # the logger's seat (`P40`): a bridge task that died (`alive: false`), a
-    # receiver refusing the connection (`state: retrying` with a refusal in
-    # `last_error`), and a receiver connected but silent (`state: connected`
-    # with a stale `last_line_age_s`).
+    # enough to separate the upstream failures that look identical from the
+    # logger's seat (`P40`). Read `state` first, then `last_error`:
+    #   dead       — the bridge task itself died; `error` has the exception
+    #   retrying   — with a ConnectionRefusedError: the receiver refused us
+    #              — with "no data for 30s": it accepted, then sent nothing
+    #              — with "receiver closed the connection": it hung up
+    #   listening  — UDP is bound. If `rejected` is climbing, datagrams ARE
+    #                arriving and being refused by the source filter; check
+    #                `rejected_from` against `allow_from`.
     st = request.app.get("nmea_stats") or {}
     last_ts = st.get("last_line_ts")
-    tcp_status = dict(request.app.get("nmea_tcp_status") or {})
-    tcp_status.update(_task_state(request.app.get("nmea_task")))
-    tcp_status["source"] = f'{request.app["tcp_host"]}:{request.app["tcp_port"]}'
-    tcp_status["lines"] = st.get("tcp_lines", 0)
+
+    def _transport_status(raw, task, extra):
+        out = dict(raw or {})
+        out.update(extra)
+        state = _task_state(task)
+        out.update(state)
+        if not state["alive"]:
+            # Otherwise a crashed task keeps advertising "listening", which is
+            # the first field a human scans.
+            out["state"] = "dead"
+        return out
+
+    tcp_status = _transport_status(
+        request.app.get("nmea_tcp_status"), request.app.get("nmea_task"),
+        {"source": f'{request.app["tcp_host"]}:{request.app["tcp_port"]}',
+         "lines": st.get("tcp_lines", 0)})
     udp_port = request.app.get("udp_port")
     if udp_port:
-        udp_status = dict(request.app.get("nmea_udp_status") or {})
-        udp_status.update(_task_state(request.app.get("nmea_udp_task")))
-        udp_status["port"] = udp_port
-        udp_status["allow_from"] = request.app.get("udp_allow_from")
-        udp_status["lines"] = st.get("udp_lines", 0)
+        udp_status = _transport_status(
+            request.app.get("nmea_udp_status"), request.app.get("nmea_udp_task"),
+            {"port": udp_port, "bind": request.app.get("udp_bind"),
+             "allow_from": request.app.get("udp_allow_from"),
+             "lines": st.get("udp_lines", 0)})
     else:
-        udp_status = {"alive": False, "error": "disabled"}
+        # Not a fault: don't give it the shape of one, or anything keying on
+        # `alive` alarms on a correct configuration.
+        udp_status = {"state": "disabled", "alive": None, "error": None}
     nmea = {
+        # "source" and "lines" keep their pre-P40 shape for existing readers.
+        # The feed that is actually live is `transport` plus `tcp`/`udp`.
         "source": f'{request.app["tcp_host"]}:{request.app["tcp_port"]}',
         "lines": st.get("lines", 0),
         "last_line": st.get("last_line"),
@@ -1039,8 +1061,9 @@ async def sfbofs_prewarm_loop(app: web.Application):
 class _StatsSink:
     """A fake NMEA client that exists only to be counted.
 
-    One per transport. Identified by type rather than identity so send_to_ws can
-    tell a sink from a real WebSocket without reaching for `.closed`.
+    One per transport. `send_to_ws` matches on type rather than identity
+    because there are now two of them, and reads `.name` to attribute the line
+    to tcp or udp.
     """
 
     __slots__ = ("name",)
@@ -1112,7 +1135,8 @@ async def on_startup(app: web.Application):
     if app["udp_port"]:
         app["nmea_udp_task"] = asyncio.create_task(
             nmea_udp_broadcast(app["udp_port"], lambda: snapshot_for(udp_sink),
-                               send_to_ws, allow_from=app["udp_allow_from"],
+                               send_to_ws, bind_host=app["udp_bind"],
+                               allow_from=app["udp_allow_from"],
                                status=app["nmea_udp_status"])
         )
     app["prewarm_task"] = asyncio.create_task(sfbofs_prewarm_loop(app))
@@ -1149,10 +1173,28 @@ def build_app(args) -> web.Application:
     app["tcp_host"] = args.tcp_host
     app["tcp_port"] = args.tcp_port
     app["udp_port"] = args.udp_port
+    app["udp_bind"] = args.udp_bind
     # Default to accepting NMEA only from the configured receiver. Position and
     # AIS data steer a boat, so an open listener on the boat LAN is not a
     # neutral default. `--udp-allow-any` is the deliberate escape hatch.
-    app["udp_allow_from"] = None if args.udp_allow_any else args.tcp_host
+    #
+    # Resolve to literal IPs here: the filter compares against a datagram's
+    # source address, which is always a dotted quad, so leaving a hostname in
+    # place would reject the entire feed while /api/health still read
+    # "listening" — a silent total loss from a plausible config change.
+    if args.udp_allow_any:
+        app["udp_allow_from"] = None
+    else:
+        try:
+            app["udp_allow_from"] = sorted({
+                ai[4][0] for ai in socket.getaddrinfo(args.tcp_host, None,
+                                                      socket.AF_INET)
+            })
+        except OSError as e:
+            log.error("Cannot resolve --tcp-host %r for the UDP source filter "
+                      "(%s); UDP will accept nothing until this is fixed",
+                      args.tcp_host, e)
+            app["udp_allow_from"] = []
     app["static_dir"] = static_dir
     app["log_dir"] = Path(args.log_dir).resolve()
     app["ssl_cert"] = args.ssl_cert or ""
@@ -1221,6 +1263,11 @@ def main():
     p.add_argument(
         "--udp-allow-any", action="store_true",
         help="Accept NMEA UDP from any source, not just --tcp-host.",
+    )
+    p.add_argument(
+        "--udp-bind", default="0.0.0.0",
+        help="Address the UDP listener binds. Narrow this when the Pi joins "
+             "marina or hotspot WiFi.",
     )
     p.add_argument("--mmsi", type=int, default=338361814)
     p.add_argument("--cache-dir", default="cache")

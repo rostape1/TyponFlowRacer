@@ -724,6 +724,8 @@ sys.path.insert(0, str(ROOT))
 import socket as _socket  # noqa: E402
 import nmea_ws_proxy as nwp  # noqa: E402
 
+section("NMEA transports — UDP reassembly, source filter, liveness (P40)")
+
 _src_bs = (ROOT / "pi" / "boat_server.py").read_text()
 _tcp_def = re.search(r'"--tcp-port",\s*type=int,\s*default=(\d+)', _src_bs)
 _udp_def = re.search(r'"--udp-port",\s*type=int,\s*default=(\d+)', _src_bs)
@@ -733,6 +735,16 @@ if _tcp_def and _udp_def:
     # the config change lands on a closed door and looks like a dead receiver.
     eq("UDP default port matches the TCP default port",
        _udp_def.group(1), _tcp_def.group(1))
+else:
+    skip("UDP default port matches the TCP default port",
+         "port defaults not parseable from boat_server.py")
+
+# Absolute ceilings, not just "whatever the constant says" — a test written
+# relative to the constant passes happily after someone raises it to 2**40.
+ok("the UDP reassembly bound is an actual bound",
+   nwp.UDP_BUFFER_MAX <= 1 << 20, f"got {nwp.UDP_BUFFER_MAX}")
+ok("the UDP queue bound is an actual bound",
+   0 < nwp.UDP_QUEUE_MAX <= 100_000, f"got {nwp.UDP_QUEUE_MAX}")
 
 
 class _FakeQueue:
@@ -746,6 +758,11 @@ class _FakeQueue:
         if self.maxsize and len(self.items) >= self.maxsize:
             raise asyncio.QueueFull
         self.items.append(item)
+
+    def get_nowait(self):
+        if not self.items:
+            raise asyncio.QueueEmpty
+        return self.items.pop(0)
 
 
 _q = _FakeQueue()
@@ -771,9 +788,32 @@ eq("datagrams from an unexpected source are ignored", _q.items, [])
 
 _q = _FakeQueue()
 _proto = nwp._NmeaDatagramProtocol(_q)
-_proto.datagram_received(b"x" * (nwp.UDP_MAX_BUFFER + 10), ("1.2.3.4", 5))
-eq("an unterminated flood cannot grow the reassembly buffer", len(_proto._buf), 0)
-eq("and emits nothing", _q.items, [])
+# Fixed size, deliberately NOT relative to the constant: sizing the payload off
+# UDP_BUFFER_MAX means raising the constant makes this test attempt a huge
+# allocation and crash instead of failing, which reads as a broken suite rather
+# than a removed bound.
+_proto.datagram_received(b"$GPGGA,keep*11\r\n" + b"x" * 70000, ("1.2.3.4", 5))
+eq("an unterminated flood cannot grow the reassembly buffer",
+   len(_proto._bufs.get("1.2.3.4", b"")), 0)
+eq("but complete sentences in front of it survive the discard",
+   _q.items, ["$GPGGA,keep*11"])
+
+# Two sources interleaving must not have their partial sentences spliced
+# together — that is how a junk AIVDM gets manufactured.
+_q = _FakeQueue()
+_proto = nwp._NmeaDatagramProtocol(_q)
+_proto.datagram_received(b"$AAAAA,one", ("1.1.1.1", 5))
+_proto.datagram_received(b"$BBBBB,two", ("2.2.2.2", 5))
+_proto.datagram_received(b"-end*01\r\n", ("1.1.1.1", 5))
+_proto.datagram_received(b"-end*02\r\n", ("2.2.2.2", 5))
+eq("per-source reassembly keeps two senders from splicing",
+   _q.items, ["$AAAAA,one-end*01", "$BBBBB,two-end*02"])
+
+# A bare string must not degrade the membership test into a substring match.
+_q = _FakeQueue()
+nwp._NmeaDatagramProtocol(_q, allow_from="192.168.47.1").datagram_received(
+    b"$GPGGA,x*00\r\n", ("2.168.47.", 5))
+eq("a string allow_from is not treated as a substring filter", _q.items, [])
 
 _q = _FakeQueue(maxsize=2)
 _st_drop = {}
@@ -781,6 +821,19 @@ nwp._NmeaDatagramProtocol(_q, status=_st_drop).datagram_received(
     b"a*1\r\nb*2\r\nc*3\r\nd*4\r\n", ("1.2.3.4", 5))
 eq("a full queue sheds lines instead of raising", len(_q.items), 2)
 eq("and the shed count is reported, not swallowed", _st_drop.get("dropped"), 2)
+# Shedding the newest would leave the consumer replaying a stale backlog while
+# health showed lines flowing — the exact "looks live and isn't" shape.
+eq("the OLDEST lines are shed, so the feed stays current", _q.items, ["c*3", "d*4"])
+
+# A rejected datagram must be visible in /api/health, not just on stdout:
+# "refusing every datagram" and "receiver is silent" read identically otherwise.
+_q = _FakeQueue()
+_st_rej = {}
+_proto = nwp._NmeaDatagramProtocol(_q, allow_from={"10.0.0.1"}, status=_st_rej)
+_proto.datagram_received(b"$GPGGA,spoof*00\r\n", ("10.0.0.99", 5))
+_proto.datagram_received(b"$GPGGA,spoof*00\r\n", ("10.0.0.99", 5))
+eq("rejected datagrams are counted", _st_rej.get("rejected"), 2)
+eq("and name the source that was refused", _st_rej.get("rejected_from"), "10.0.0.99")
 
 
 def _free_udp_port():
@@ -796,18 +849,30 @@ async def _udp_end_to_end():
     listener actually binds and delivers."""
     port = _free_udp_port()
     got = []
+    seen = {}
 
     async def send_fn(client, text):
         got.append(text)
 
+    real_queue_cls = asyncio.Queue
+
+    class _SpyQueue(real_queue_cls):
+        def __init__(self, *a, **kw):
+            super().__init__(*a, **kw)
+            seen["maxsize"] = self.maxsize
+
     status = {}
-    task = asyncio.create_task(nwp.nmea_udp_broadcast(
-        port, lambda: ["sink"], send_fn, bind_host="127.0.0.1",
-        allow_from="127.0.0.1", status=status))
-    for _ in range(100):
-        await asyncio.sleep(0.02)
-        if status.get("state") == "listening":
-            break
+    asyncio.Queue = _SpyQueue
+    try:
+        task = asyncio.create_task(nwp.nmea_udp_broadcast(
+            port, lambda: ["sink"], send_fn, bind_host="127.0.0.1",
+            allow_from={"127.0.0.1"}, status=status))
+        for _ in range(100):
+            await asyncio.sleep(0.02)
+            if status.get("state") == "listening":
+                break
+    finally:
+        asyncio.Queue = real_queue_cls
     tx = _socket.socket(_socket.AF_INET, _socket.SOCK_DGRAM)
     tx.sendto(b"!AIVDM,1,1,,A,15M,0*7B\r\n", ("127.0.0.1", port))
     for _ in range(100):
@@ -820,14 +885,18 @@ async def _udp_end_to_end():
     task.cancel()
     try:
         await task
-    except BaseException:
+    except asyncio.CancelledError:
         pass
-    return state_while_running, got
+    return state_while_running, got, seen.get("maxsize")
 
 
-_udp_state, _udp_got = asyncio.run(_udp_end_to_end())
+_udp_state, _udp_got, _udp_maxsize = asyncio.run(_udp_end_to_end())
 eq("the UDP listener binds and reports itself listening", _udp_state, "listening")
 eq("a real datagram reaches the clients", _udp_got, ["!AIVDM,1,1,,A,15M,0*7B"])
+# Without this, the real listener could be switched to an unbounded Queue and
+# every other assertion here would still pass.
+eq("the real listener queue is bounded by UDP_QUEUE_MAX",
+   _udp_maxsize, nwp.UDP_QUEUE_MAX)
 
 
 async def _tcp_survives_unexpected_error():
@@ -902,6 +971,59 @@ eq("a never-started task reports dead", _none["alive"], False)
 _health_tmp = tempfile.mkdtemp(prefix="ais-health-")
 
 
+# Without this, deleting the on_startup block that starts the UDP listener
+# leaves every other assertion green while the boat silently reverts to
+# single-client TCP — P40 re-introduced with a passing suite.
+class _Args:
+    def __init__(self, **kw):
+        defaults = dict(
+            port=8080, ssl_cert=None, ssl_key=None,
+            tcp_host="127.0.0.1", tcp_port=10110,
+            udp_port=_free_udp_port(), udp_allow_any=False, udp_bind="127.0.0.1",
+            mmsi=1, cache_dir=str(Path(_health_tmp) / "cache"),
+            log_dir=str(Path(_health_tmp) / "logs"),
+            gh_pages_base="https://example.test",
+            static_dir=str(ROOT / "static"),
+        )
+        defaults.update(kw)
+        for k, v in defaults.items():
+            setattr(self, k, v)
+
+
+async def _wiring(**kw):
+    app = bs.build_app(_Args(**kw))
+    await bs.on_startup(app)
+    try:
+        return {
+            "tcp_alive": bool(app.get("nmea_task")) and not app["nmea_task"].done(),
+            "udp_task": app.get("nmea_udp_task"),
+            "allow_from": app.get("udp_allow_from"),
+        }
+    finally:
+        await bs.on_cleanup(app)
+
+
+_w = asyncio.run(_wiring())
+ok("on_startup actually starts the TCP bridge", _w["tcp_alive"])
+ok("on_startup actually starts the UDP listener", _w["udp_task"] is not None)
+eq("the UDP source filter defaults to the configured receiver",
+   _w["allow_from"], ["127.0.0.1"])
+
+_w_any = asyncio.run(_wiring(udp_allow_any=True))
+eq("--udp-allow-any opens the filter, and only when asked",
+   _w_any["allow_from"], None)
+
+_w_off = asyncio.run(_wiring(udp_port=0))
+ok("--udp-port 0 disables the listener", _w_off["udp_task"] is None)
+
+# A hostname would be compared against a dotted quad and match nothing, so
+# build_app must resolve it rather than storing the name.
+_w_name = asyncio.run(_wiring(tcp_host="localhost"))
+ok("a hostname --tcp-host is resolved to literal IPs for the filter",
+   _w_name["allow_from"] == ["127.0.0.1"],
+   f"got {_w_name['allow_from']!r}")
+
+
 class _HealthRequest:
     def __init__(self, app):
         self.app = app
@@ -926,7 +1048,8 @@ async def _health_payload():
         "tcp_host": "192.168.47.10",
         "tcp_port": 10110,
         "udp_port": 10110,
-        "udp_allow_from": "192.168.47.10",
+        "udp_bind": "0.0.0.0",
+        "udp_allow_from": ["192.168.47.10"],
         "nmea_clients": set(),
         "started_monotonic": time.monotonic(),
     }
@@ -948,8 +1071,9 @@ eq("health reports the TCP refusal reason", _hn["tcp"].get("state"), "retrying")
 ok("including the errno text",
    "ConnectionRefusedError" in (_hn["tcp"].get("last_error") or ""))
 eq("health reports TCP bridge liveness", _hn["tcp"].get("alive"), True)
-eq("health reports a missing UDP task as dead", _hn["udp"].get("alive"), False)
-eq("health reports the UDP source filter", _hn["udp"].get("allow_from"), "192.168.47.10")
+eq("a dead bridge stops advertising 'listening'", _hn["udp"].get("state"), "dead")
+eq("health reports the UDP source filter", _hn["udp"].get("allow_from"),
+   ["192.168.47.10"])
 
 shutil.rmtree(_health_tmp, ignore_errors=True)
 
