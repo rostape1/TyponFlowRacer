@@ -656,9 +656,22 @@ async def handle_health(request: web.Request) -> web.Response:
     # is not recording, and that distinction is the whole point of this endpoint.
     recording = bool(newest and newest["age_s"] < 120)
 
+    # The NMEA source. If the logger is alive but nothing is being written, the
+    # fault is upstream of it, and this is where that shows.
+    st = request.app.get("nmea_stats") or {}
+    last_ts = st.get("last_line_ts")
+    nmea = {
+        "source": f'{request.app["tcp_host"]}:{request.app["tcp_port"]}',
+        "lines": st.get("lines", 0),
+        "last_line": st.get("last_line"),
+        "last_line_age_s": int(time.time() - last_ts) if last_ts else None,
+        "ws_clients": len(request.app.get("nmea_clients") or ()),
+    }
+
     return web.json_response(
         {
             "recording": recording,
+            "nmea": nmea,
             "logger": logger,          # None = not running (or not on Linux)
             "newest_log": newest,
             "disk": {"free": free, "capacity": capacity},
@@ -1005,13 +1018,28 @@ async def sfbofs_prewarm_loop(app: web.Application):
 async def on_startup(app: web.Application):
     app["http"] = aiohttp.ClientSession()
     app["nmea_clients"] = set()
+    app["nmea_stats"] = {"lines": 0, "last_line_ts": None, "last_line": None}
 
-    async def send_to_ws(client: web.WebSocketResponse, text: str):
+    # A pseudo-client that only records statistics. nmea_tcp_broadcast calls
+    # send_fn once per connected client, so counting inside send_to_ws would see
+    # nothing whenever no browser is attached — and "is the receiver sending
+    # anything at all?" is exactly the question that needs answering when the
+    # logger is alive but writing nothing. This sink is always in the snapshot,
+    # so every line is observed regardless of who else is listening.
+    stats_sink = object()
+
+    async def send_to_ws(client, text: str):
+        if client is stats_sink:
+            st = app["nmea_stats"]
+            st["lines"] += 1
+            st["last_line_ts"] = time.time()
+            st["last_line"] = text[:120]
+            return
         if not client.closed:
             await client.send_str(text)
 
     def clients_snapshot():
-        return list(app["nmea_clients"])
+        return [stats_sink] + list(app["nmea_clients"])
 
     app["nmea_task"] = asyncio.create_task(
         nmea_tcp_broadcast(app["tcp_host"], app["tcp_port"], clients_snapshot, send_to_ws)
