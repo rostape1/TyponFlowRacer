@@ -375,6 +375,138 @@ console.log('loadUrl:');
     assert(errored !== null, 'a failed fetch must surface an error, not load an empty log');
 }
 
+// --- loadUrl races and timeouts ------------------------------------------
+console.log('loadUrl races and timeouts:');
+
+{
+    // Pick a big recording, then a small one. The small one resolves first and
+    // starts; the big one must NOT then replace it underneath, or the picker
+    // names one recording while another plays.
+    const store = makeStore();
+    const c = new NmeaClient(store);
+    const slowLog = makeLog(500);
+    let resolveSlow;
+    const loaded = [];
+
+    globalThis.fetch = (url) => {
+        if (url.includes('slow')) {
+            return new Promise((res) => { resolveSlow = () => res({ ok: true, text: async () => slowLog }); });
+        }
+        return Promise.resolve({ ok: true, text: async () => LOG });
+    };
+
+    c.loadUrl('/logs/slow.txt', (n) => loaded.push(['slow', n]));
+    await new Promise((res) => c.loadUrl('/logs/fast.txt', (n) => { loaded.push(['fast', n]); res(); }));
+    assert(loaded.length === 1 && loaded[0][0] === 'fast',
+        `only the newest selection should load, got ${JSON.stringify(loaded)}`);
+
+    resolveSlow();
+    await new Promise((r) => setTimeout(r, 10));
+    assert(loaded.length === 1,
+        `a superseded load must be dropped when it finally resolves, got ${JSON.stringify(loaded)}`);
+    assert(c._replayLines.length === LOG_N,
+        `the loaded log must still be the fast one, got ${c._replayLines.length} lines`);
+}
+
+{
+    // A half-open connection never resolves. Without a timeout the clock sat on
+    // "loading…" forever while the previous recording kept playing.
+    const store = makeStore();
+    const c = new NmeaClient(store);
+    globalThis.fetch = (url, opts) => new Promise((_res, rej) => {
+        // Honour the AbortController the way a real fetch does.
+        opts.signal.addEventListener('abort', () => {
+            const e = new Error('aborted');
+            e.name = 'AbortError';
+            rej(e);
+        });
+    });
+    // Outer guard: if loadUrl has no timeout of its own, this must FAIL rather
+    // than hang. A test that proves a timeout by hanging forever is useless in
+    // CI — it burns the job's whole time limit instead of reporting a failure.
+    let err = null;
+    let timedOutBySafetyNet = false;
+    await Promise.race([
+        new Promise((res) => c.loadUrl('/logs/hang.txt', () => res(), (e) => { err = e; res(); }, 40)),
+        new Promise((res) => setTimeout(() => { timedOutBySafetyNet = true; res(); }, 2000)),
+    ]);
+    assert(!timedOutBySafetyNet, 'loadUrl did not time out on its own within 2s');
+    assert(err !== null, 'a hung fetch must time out and report an error');
+    assert(/timed out/.test(err.message), `the error should name the timeout, got "${err.message}"`);
+    assert(c._replayLines === null,
+        'a failed load must stop the replay, not leave the previous recording running');
+}
+
+// --- guards before a recording is loaded ---------------------------------
+console.log('guards before a recording is loaded:');
+
+{
+    // The transport shows speed and play/pause the moment playback is opened,
+    // i.e. before any recording is chosen. These used to throw a TypeError
+    // indexing _replayTimestamps, leaving the bar visibly dead.
+    const store = makeStore();
+    const c = new NmeaClient(store);
+    let threw = null;
+    try {
+        c.setReplaySpeed(5);
+        c.pauseReplay();
+        c.resumeReplay();
+        c.seek(10);
+    } catch (e) { threw = e; }
+    assert(threw === null, `transport controls must not throw with no log: ${threw && threw.message}`);
+    assert(c._replaySpeed === 5, 'setReplaySpeed should still record the choice');
+    assert(c.getReplayTimeRange() === null, 'no range without a log');
+}
+
+{
+    // A recording with no parseable timestamps must reach a named terminal state,
+    // not sit at 0% looking like it is playing.
+    const store = makeStore();
+    const c = new NmeaClient(store);
+    c.loadText('!AIVDM,1,1,,A,15Mue30002o?fR@E`:AaDW>42<3;,0*49\n!AIVDM,1,1,,B,x,0*00');
+    assert(c.getReplayTimeRange() === null, 'a log with no timestamps has no range');
+    c.startReplay(1);
+    assert(c._status === 'replay-empty',
+        `expected 'replay-empty', got '${c._status}'`);
+}
+
+{
+    // A shape-valid but impossible date yields NaN, which is not null and slipped
+    // through every guard — making the whole log flush at max speed.
+    const store = makeStore();
+    const c = new NmeaClient(store);
+    c.loadText('2026-13-45 99:99:99.000  $GPRMC,1,A\n2026-09-13 19:00:00.000  $GPRMC,2,A');
+    assert(c._replayTimestamps[0] === null,
+        `an impossible date must parse to null, got ${c._replayTimestamps[0]}`);
+    assert(c._replayFirstTs === Date.parse('2026-09-13T19:00:00Z'),
+        'the first *valid* timestamp becomes the range start');
+}
+
+{
+    // Seeking to the very end is trivially easy with a slider; it must reach the
+    // terminal state rather than sitting on 'replaying' with the counter ticking.
+    const store = makeStore();
+    const c = new NmeaClient(store);
+    nowMs = 0;
+    c.loadText(LOG);
+    c.startReplay(1);
+    c.seek(LOG_N);
+    assert(c._status === 'replay-done', `expected 'replay-done' at the end, got '${c._status}'`);
+    assert(c._rateInterval === null, 'the rate counter must stop at the end, not run forever');
+}
+
+{
+    // stopReplay must leave nothing behind that could report a stale range.
+    const store = makeStore();
+    const c = new NmeaClient(store);
+    c.loadText(LOG);
+    c.startReplay(1);
+    c.stopReplay();
+    assert(c.getReplayTimeRange() === null,
+        'stopReplay must clear the parsed timestamps, not just the lines');
+    assert(c._rateInterval === null, 'and stop the rate counter');
+}
+
 // --- vessel-store replay isolation ---------------------------------------
 console.log('vessel-store replay isolation:');
 

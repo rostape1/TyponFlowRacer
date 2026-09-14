@@ -105,9 +105,22 @@ function setValue(el, text, cls) {
     el.className = 'v' + (cls ? ' ' + cls : '');
 }
 
-// The capture status page lives on a separate port on the same host.
-document.getElementById('link-capture').href =
-    location.protocol + '//' + location.hostname + ':8081/';
+// The capture status page lives on a separate port on the same host, and
+// nmea_capture.py serves plain HTTP unless --ssl-cert is passed — so pin http://
+// rather than inheriting the page protocol. On GitHub Pages there is no Pi at
+// all, so hide the card instead of offering a link that cannot work.
+(function () {
+    const card = document.getElementById('link-capture');
+    const host = location.hostname;
+    // P18: bare endsWith('github.io') also matches 'evilgithub.io'. Anchor on the
+    // dot, or an exact match, the way sw.js does.
+    const onPages = host === 'github.io' || host.endsWith('.github.io');
+    if (!host || onPages) {
+        card.style.display = 'none';
+        return;
+    }
+    card.href = 'http://' + host + ':8081/';
+})();
 
 // no-store, always. A cached count here would claim recordings exist that
 // don't, or hide ones that do — the "looks live and isn't" failure.

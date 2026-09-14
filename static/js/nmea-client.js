@@ -21,6 +21,10 @@ class NmeaClient {
         this._replayRafId = null;
         this._replayStartWall = 0;
         this._replayStartTime = 0;
+        this._replayTimestamps = null;
+        this._replayFirstTs = null;
+        this._replayLastTs = null;
+        this._loadGen = 0;
     }
 
     setStatusCallback(cb) { this._onStatus = cb; }
@@ -96,7 +100,18 @@ class NmeaClient {
         this._reconnectTimer = setTimeout(() => this._doConnect(wsUrl), 5000);
     }
 
+    /** The one place the replay reaches its end, so cleanup cannot diverge. */
+    _finishReplay() {
+        this._stopRateCounter();
+        this._setStatus('replay-done');
+    }
+
+    _stopRateCounter() {
+        if (this._rateInterval) { clearInterval(this._rateInterval); this._rateInterval = null; }
+    }
+
     _startRateCounter() {
+        this._stopRateCounter();          // never stack two
         let prevCount = 0;
         this._rateInterval = setInterval(() => {
             this._sentenceRate = this._sentenceCount - prevCount;
@@ -120,20 +135,45 @@ class NmeaClient {
         if (callback) callback(this._replayLines.length);
     }
 
-    /** Load a log straight off the Pi (/logs/<name>), no download step. */
-    loadUrl(url, callback, onError) {
-        fetch(url, { cache: 'no-store' })
+    /**
+     * Load a log straight off the Pi (/logs/<name>), no download step.
+     *
+     * Two guards, both necessary on boat WiFi:
+     *  - A timeout. A half-open TCP connection at the edge of range never
+     *    resolves and never rejects, so without this the clock sat on
+     *    "loading…" forever while the PREVIOUS recording kept playing — you
+     *    would be watching A while the picker said B.
+     *  - A generation token. Two quick selections race, and whichever resolves
+     *    last used to win. Pick a 40 MB morning log then a 2 MB afternoon one
+     *    and the small one starts, then the big one replaces it underneath.
+     */
+    loadUrl(url, callback, onError, timeoutMs = 30000) {
+        const gen = ++this._loadGen;
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), timeoutMs);
+
+        fetch(url, { cache: 'no-store', signal: controller.signal })
             .then((r) => {
                 if (!r.ok) throw new Error(`${r.status} fetching ${url}`);
                 return r.text();
             })
-            .then((text) => this.loadText(text, callback))
+            .then((text) => {
+                if (gen !== this._loadGen) return;   // superseded; drop it
+                this.loadText(text, callback);
+            })
             .catch((err) => {
+                if (gen !== this._loadGen) return;   // superseded; its error is moot
                 // Surface it. Silently loading nothing would look like an empty
-                // recording rather than a failed fetch.
-                if (onError) onError(err);
+                // recording rather than a failed fetch, and leaving the previous
+                // recording running would be worse still.
+                this.stopReplay();
+                const e = err && err.name === 'AbortError'
+                    ? new Error(`timed out after ${timeoutMs / 1000}s fetching ${url}`)
+                    : err;
+                if (onError) onError(e);
                 else this._setStatus('error');
-            });
+            })
+            .finally(() => clearTimeout(timer));
     }
 
     _parseReplayTimestamps() {
@@ -141,8 +181,23 @@ class NmeaClient {
         this._replayTimestamps = this._replayLines.map(line => {
             const m = re.exec(line);
             if (!m) return null;
-            return new Date(m[1].replace(' ', 'T').replace(',', '.') + (m[1].endsWith('Z') ? '' : 'Z')).getTime();
+            const t = new Date(
+                m[1].replace(' ', 'T').replace(',', '.') + (m[1].endsWith('Z') ? '' : 'Z')
+            ).getTime();
+            // A shape-valid but impossible date (2026-13-45…) yields NaN, which is
+            // not null, so it slipped through every null check. _replayStartTime
+            // became NaN, every `lineTs > targetTime` compared false, and the rest
+            // of the log flushed at 500 lines a frame — a replay silently running
+            // at max speed.
+            return Number.isFinite(t) ? t : null;
         });
+
+        // Cache the bounds. getReplayTimeRange() is called from a 250 ms timer and
+        // on every scrubber input event; filtering ~150k entries each time to read
+        // two numbers that never change was pure GC churn.
+        const stamped = this._replayTimestamps.filter(t => t != null);
+        this._replayFirstTs = stamped.length ? stamped[0] : null;
+        this._replayLastTs = stamped.length ? stamped[stamped.length - 1] : null;
     }
 
     startReplay(speed) {
@@ -161,8 +216,12 @@ class NmeaClient {
         this._sentenceCount = 0;
         this._startRateCounter();
 
-        const firstTs = this._replayTimestamps.find(t => t != null);
-        if (!firstTs) return;
+        // No parseable timestamps at all (a raw AIVDM dump, or an empty file the
+        // rotation just created). Previously this returned before setting a
+        // status, so the transport sat at 0% / --:--:-- with a Pause button,
+        // forever, with nothing saying the recording was unusable.
+        const firstTs = this._replayFirstTs;
+        if (!firstTs) { this._setStatus('replay-empty'); return; }
         this._replayStartTime = firstTs;
         this._replayStartWall = performance.now();
 
@@ -173,7 +232,7 @@ class NmeaClient {
     _replayTick() {
         if (this._replayPaused) return;
         if (this._replayIdx >= this._replayLines.length) {
-            this._setStatus('replay-done');
+            this._finishReplay();
             return;
         }
 
@@ -208,7 +267,7 @@ class NmeaClient {
         this._publishReplayClock();
 
         if (this._replayIdx >= this._replayLines.length) {
-            this._setStatus('replay-done');
+            this._finishReplay();
             return;
         }
 
@@ -267,6 +326,10 @@ class NmeaClient {
         if (!this._replayPaused && target < this._replayLines.length) {
             this._setStatus('replaying');
             this._replayRafId = requestAnimationFrame(() => this._replayTick());
+        } else if (target >= this._replayLines.length) {
+            // Dragging the scrubber to max is trivially easy, and used to leave
+            // the status on 'replaying' with the rate counter still ticking.
+            this._finishReplay();
         }
     }
 
@@ -290,21 +353,21 @@ class NmeaClient {
 
     /** {start, end, current} epoch ms for the scrubber's clock readout. */
     getReplayTimeRange() {
-        if (!this._replayTimestamps || !this._replayTimestamps.length) return null;
-        const stamped = this._replayTimestamps.filter(t => t != null);
-        if (!stamped.length) return null;
+        if (this._replayFirstTs == null) return null;
         const idx = Math.min(this._replayIdx, this._replayTimestamps.length - 1);
         let current = this._replayTimestamps[idx];
-        if (current == null) current = stamped[0];
-        return { start: stamped[0], end: stamped[stamped.length - 1], current };
+        if (current == null) current = this._replayFirstTs;
+        return { start: this._replayFirstTs, end: this._replayLastTs, current };
     }
 
     pauseReplay() {
+        if (!this._replayLines) return;
         this._replayPaused = true;
         this._setStatus('replay-paused');
     }
 
     resumeReplay() {
+        if (!this._replayLines || !this._replayTimestamps) return;
         if (!this._replayPaused) return;
         this._replayPaused = false;
         const lineTs = this._replayTimestamps[this._replayIdx];
@@ -317,6 +380,10 @@ class NmeaClient {
     }
 
     setReplaySpeed(speed) {
+        // The transport bar shows speed/play before a recording is picked, so
+        // these are reachable with no log loaded. They used to throw a TypeError
+        // indexing _replayTimestamps, leaving the bar visibly dead.
+        if (!this._replayTimestamps) { this._replaySpeed = speed; return; }
         const lineTs = this._replayTimestamps[this._replayIdx];
         if (lineTs) {
             this._replayStartTime = lineTs;
@@ -327,9 +394,19 @@ class NmeaClient {
 
     stopReplay() {
         if (this._replayRafId) { cancelAnimationFrame(this._replayRafId); this._replayRafId = null; }
-        if (this._rateInterval) { clearInterval(this._rateInterval); this._rateInterval = null; }
+        this._stopRateCounter();
+        // Clear the parsed log too, not just the lines: a leftover timestamp array
+        // would let getReplayTimeRange() keep reporting a range for a recording
+        // that is no longer loaded, and the transport would show its clock.
         this._replayLines = null;
+        this._replayTimestamps = null;
+        this._replayFirstTs = null;
+        this._replayLastTs = null;
+        this._replayIdx = 0;
         this._replayPaused = false;
+        // Invalidate any in-flight loadUrl, so a slow fetch cannot resurrect a
+        // replay after the user has left it.
+        this._loadGen++;
         this._setStatus('disconnected');
     }
 

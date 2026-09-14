@@ -286,7 +286,7 @@ safely. Look up your group's IDs in [docs/pitfalls.md](docs/pitfalls.md), by ID,
 |------|---------|
 | `index.html` | Single page: tab bar (Map/Charts/Radar), map, side panel, legends, timeline, modals, playback transport |
 | `hub.html` | Navigation hub at `/hub` — links every view plus live storage figures from `/api/logs` |
-| `js/app.js` (~2500 lines) | Leaflet map, vessel markers, popups, CPA/TCPA, search, forecast UI, offline pre-fetch, config bootstrap, tile-layer selection |
+| `js/app.js` (~3300 lines) | Leaflet map, vessel markers, popups, CPA/TCPA, search, forecast UI, offline pre-fetch, config bootstrap, tile-layer selection |
 | `js/aisstream.js` | Browser WebSocket to AISstream.io → internal vessel format |
 | `js/vessel-store.js` | In-memory vessel DB, track history, localStorage persistence |
 | `js/data-loader.js` | NOAA CO-OPS tides/currents/water levels + Open-Meteo wind, client-side interpolation, SFBOFS staleness gate |

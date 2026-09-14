@@ -2789,6 +2789,7 @@ if (nmeaStore && nmeaClient) {
             else if (status === 'replaying') nmeaStatusEl.textContent = `Replay: ${rate}/s`;
             else if (status === 'replay-paused') nmeaStatusEl.textContent = 'Replay: Paused';
             else if (status === 'replay-done') nmeaStatusEl.textContent = 'Replay: Done';
+            else if (status === 'replay-empty') nmeaStatusEl.textContent = 'Replay: empty recording';
             else nmeaStatusEl.textContent = 'NMEA: Off';
         }
     });
@@ -3038,21 +3039,34 @@ if (nmeaStore && nmeaClient) {
     // The map-only bars (layers tray, timeline) are hidden on Charts and Radar,
     // so a fixed offset would either overlap the buttons on the map or float
     // in mid-air everywhere else.
+    const REPLAY_BAR_STACK = ['layers-tray', 'timeline-strip', 'forecast-quick-btns', 'status-bar'];
+
     function positionReplayBar() {
         if (!replayBar || replayBar.classList.contains('hidden')) return;
         let topmost = window.innerHeight;
-        for (const id of ['layers-tray', 'timeline-strip', 'status-bar']) {
+        for (const id of REPLAY_BAR_STACK) {
             const el = document.getElementById(id);
             if (!el) continue;
-            // Not offsetParent: these bars are position:fixed, for which
-            // offsetParent is null by spec even when fully visible.
-            if (getComputedStyle(el).display === 'none') continue;
+            // Three ways these bars go away, and only one is display:none:
+            //  - tab switch sets inline display:none
+            //  - the mobile hamburger adds .hidden, which is a transform +
+            //    opacity:0 — display stays flex and the box keeps its size, so
+            //    neither a display test nor a ResizeObserver can see it
+            //  - opacity 0 generally
+            const cs = getComputedStyle(el);
+            if (cs.display === 'none') continue;
+            if (el.classList.contains('hidden')) continue;
+            if (parseFloat(cs.opacity) === 0) continue;
             const r = el.getBoundingClientRect();
             if (r.height > 0) topmost = Math.min(topmost, r.top);
         }
         replayBar.style.bottom = (window.innerHeight - topmost + 8) + 'px';
     }
     window.addEventListener('resize', positionReplayBar);
+    // The hamburger collapse is a CSS transform, invisible to both the resize
+    // event and the ResizeObserver, so hook the button itself.
+    const _layersBtn = document.getElementById('layers-btn');
+    if (_layersBtn) _layersBtn.addEventListener('click', () => setTimeout(positionReplayBar, 320));
     document.querySelectorAll('.tab-btn').forEach(b =>
         b.addEventListener('click', () => setTimeout(positionReplayBar, 0)));
     // The mobile bottom stack collapses and expands via the hamburger without
@@ -3060,13 +3074,28 @@ if (nmeaStore && nmeaClient) {
     // Observe it directly rather than hoping for a window event.
     if (typeof ResizeObserver !== 'undefined') {
         const ro = new ResizeObserver(() => positionReplayBar());
-        for (const id of ['layers-tray', 'timeline-strip', 'status-bar']) {
+        for (const id of REPLAY_BAR_STACK) {
             const el = document.getElementById(id);
             if (el) ro.observe(el);
         }
     }
 
     function beginReplay(lineCount) {
+        scrubbing = false;
+        // A zero-byte file (the rotation just created one) or a raw dump with no
+        // ISO timestamps cannot be replayed. Previously the bar appeared, read
+        // NaN%, and sat there — indistinguishable from a working replay of an
+        // empty stretch of water.
+        if (!lineCount || !nmeaClient.getReplayTimeRange()) {
+            if (replayBar) replayBar.classList.remove('hidden');
+            positionReplayBar();
+            if (replayClock) replayClock.textContent = 'empty';
+            if (replayScrub) { replayScrub.max = '0'; replayScrub.value = '0'; }
+            if (replayProgressEl) replayProgressEl.textContent = '—';
+            stopReplayUiSync();
+            console.warn('[playback] recording has no usable timestamps; not starting');
+            return;
+        }
         // Historical contacts must never be written to localStorage, or they come
         // back on the next page load as live traffic.
         vesselStore.setReplayMode(true);
@@ -3087,13 +3116,22 @@ if (nmeaStore && nmeaClient) {
     // Populate the recording list from the Pi. Uncached on purpose, and an
     // outright failure is shown rather than leaving an empty-looking picker
     // that implies there are no recordings.
-    let logsLoaded = false;
+    const PLACEHOLDER = 'Select a recording…';
+
+    // Refetched on every open, not cached for the session. Sail for three hours,
+    // come back to Playback, and the recordings you actually want are the ones
+    // written while the page was open — a once-per-load list would never show them.
     function loadLogList() {
-        if (!replayLogSel || logsLoaded) return Promise.resolve();
-        logsLoaded = true;
+        if (!replayLogSel) return Promise.resolve();
+        const keep = replayLogSel.value;
         return fetch('/api/logs', { cache: 'no-store' })
             .then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
             .then(d => {
+                replayLogSel.textContent = '';
+                const ph = document.createElement('option');
+                ph.value = '';
+                ph.textContent = d.files.length ? PLACEHOLDER : 'No recordings on the Pi';
+                replayLogSel.appendChild(ph);
                 for (const f of d.files) {
                     const opt = document.createElement('option');
                     opt.value = f.url;
@@ -3101,13 +3139,17 @@ if (nmeaStore && nmeaClient) {
                     opt.textContent = `${f.name.replace(/^nmea_|\.txt$/g, '')} (${mb} MB)`;
                     replayLogSel.appendChild(opt);
                 }
-                if (!d.files.length) {
-                    replayLogSel.options[0].textContent = 'No recordings on the Pi';
-                }
+                // Keep the current selection if it is still on the Pi.
+                if (keep) replayLogSel.value = keep;
             })
             .catch(err => {
-                logsLoaded = false;  // let the next open retry
-                replayLogSel.options[0].textContent = 'Recording list unavailable';
+                // Rebuild the placeholder so a later success is not still labelled
+                // broken, and say plainly that the list failed.
+                replayLogSel.textContent = '';
+                const ph = document.createElement('option');
+                ph.value = '';
+                ph.textContent = 'Recording list unavailable';
+                replayLogSel.appendChild(ph);
                 console.error('[playback] could not list logs:', err);
             });
     }
@@ -3208,9 +3250,9 @@ if (nmeaStore && nmeaClient) {
         replayLogSel.addEventListener('change', () => {
             const url = replayLogSel.value;
             if (!url) return;
-            replayClock.textContent = 'loading…';
+            if (replayClock) replayClock.textContent = 'loading…';
             nmeaClient.loadUrl(url, beginReplay, (err) => {
-                replayClock.textContent = 'failed';
+                if (replayClock) replayClock.textContent = 'load failed';
                 console.error('[playback] could not load recording:', err);
             });
         });
@@ -3260,6 +3302,13 @@ if (nmeaStore && nmeaClient) {
             scrubbing = false;
             syncReplayUi();
         });
+        // `change` is not guaranteed: a touch-cancel, or the bar being hidden
+        // mid-drag, leaves `scrubbing` latched true — and syncReplayUi() then
+        // stops updating the clock and scrubber while playback runs on
+        // underneath. A frozen clock over a moving replay is the house failure.
+        for (const ev of ['pointerup', 'pointercancel', 'blur', 'touchend', 'touchcancel']) {
+            replayScrub.addEventListener(ev, () => { scrubbing = false; });
+        }
     }
 
     if (replayLiveBtn) {
