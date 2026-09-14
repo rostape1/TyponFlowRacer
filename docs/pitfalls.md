@@ -529,6 +529,47 @@ The deadband is not cosmetic: a jittering own-ship icon on a navigation display 
 misleading about your own position. If you raise the thresholds, check a moving boat still tracks
 smoothly — at 6 kn the marker updates ~1.5×/s, which is the intended floor.
 
+## A shell script that git-pulls itself deploys one boot late [P38]
+
+`pi/startup.sh` does `git reset --hard origin/boat-mode` and is *itself* under
+that reset. bash reads a script incrementally as it executes, so the running
+instance keeps following the version it started with. Python files are read when
+their process starts — which happens *after* the pull — so they DO get the new
+code immediately.
+
+Net effect: after one power-cycle, `boat_server.py` was on the new commit
+(`/api/health` existed) while `startup.sh` was still the old one (no boot log, no
+logger supervision, SSH key not installed). It looks like a partial or corrupted
+deploy and is neither.
+
+**Anything you change in `startup.sh`, `start_boat.sh`, or the systemd unit takes
+effect on the boot *after* the one that pulls it.** Two power-cycles, or verify
+with something the new shell code produces — `logs/startup.log` existing is the
+cheap tell.
+
+## "The logger is dead" and "the logger has nothing to log" look identical [P39]
+
+On 2026-09-13 recording stopped and the first conclusion was that
+`nmea_capture.py` had crashed: `:8081` was refusing connections and the log file
+had frozen. It had not crashed — it was running, connected, and receiving zero
+sentences, because the NMEA source had stopped sending.
+
+The two states are indistinguishable from outside unless something reports the
+*feed*, not just the process and the file. `/api/health` therefore reports
+`nmea.lines`, `nmea.last_line_age_s` and the source `host:port` alongside logger
+liveness, and `recording` is computed from whether the newest log is actually
+growing — not from whether a process exists.
+
+Note the subtlety in how those line counts are collected: `nmea_tcp_broadcast`
+invokes `send_fn` once per connected client, so counting inside the send path
+sees nothing when no browser is attached — precisely the situation you are
+debugging. A stats-only pseudo-client sits permanently in the client snapshot so
+every line is observed regardless.
+
+Also: the receiver answering ARP proves its network interface is powered, and
+nothing more. An MDA-5 with the instrument bus off is present on the LAN and
+silent on TCP.
+
 ---
 
 ## Adding a pitfall

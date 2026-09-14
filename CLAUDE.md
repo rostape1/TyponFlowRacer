@@ -265,6 +265,8 @@ safely. Look up your group's IDs in [docs/pitfalls.md](docs/pitfalls.md), by ID,
 - The replay transport measures the visible bottom bars; `offsetParent` is null when fixed `P35`
 - A closed WebSocket's handlers fire late and clobbered replay status mid-playback `P36`
 - Own-ship marker needs bulk-coalescing plus a movement deadband or it shakes `P37`
+- `startup.sh` git-pulls itself, so shell/systemd changes land one boot late `P38`
+- A dead logger and a silent NMEA source look identical; `/api/health` separates them `P39`
 
 ---
 
@@ -346,7 +348,7 @@ python3 tests/test_boat_server.py  # Pi proxy/cache + JS↔Python parity
 CI runs all five in `deploy.yml`'s `test` job, plus `py_compile` on the Pi/root Python and `bash -n`
 on the boat shell scripts.
 
-**18 of the 37 pitfalls are mechanically enforced** — a test fails if you undo the fix. Those are
+**18 of the 39 pitfalls are mechanically enforced** — a test fails if you undo the fix. Those are
 `P01` `P03` `P06` `P07` `P08` `P10` `P11` `P15` `P16` `P18` `P20` `P21` `P22` `P24` `P33` `P34` `P36` `P37`. The rest are
 documentation-only: the index is the only thing standing between you and re-introducing them. If you
 fix a doc-only pitfall's code area, consider whether an assertion could move it into the enforced set.
