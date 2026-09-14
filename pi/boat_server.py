@@ -580,6 +580,95 @@ async def handle_log_file(request: web.Request) -> web.Response:
     )
 
 
+def _process_alive(needle: str) -> Optional[dict]:
+    """Find a running process whose command line contains `needle`.
+
+    Reads /proc directly rather than shelling out to pgrep: no subprocess, works
+    in the aiohttp event loop, and degrades to None off Linux (so the test suite
+    on macOS just reports unknown rather than failing).
+    """
+    proc = Path("/proc")
+    if not proc.is_dir():
+        return None
+    now = time.time()
+    for entry in proc.iterdir():
+        if not entry.name.isdigit():
+            continue
+        try:
+            cmdline = (entry / "cmdline").read_bytes().replace(b"\0", b" ").decode(
+                "utf-8", "replace")
+        except OSError:
+            continue
+        if needle not in cmdline:
+            continue
+        try:
+            started = entry.stat().st_mtime
+        except OSError:
+            started = None
+        return {
+            "pid": int(entry.name),
+            "cmdline": cmdline.strip()[:200],
+            "age_s": int(now - started) if started else None,
+        }
+    return None
+
+
+async def handle_health(request: web.Request) -> web.Response:
+    """What is actually running on this Pi, answerable over HTTP.
+
+    Exists because the Pi's SSH password was lost on 2026-09-13, which made
+    journalctl unreachable and left "the voyage recorder stopped, why?"
+    undiagnosable. Anything needed to answer that has to be reachable here.
+    """
+    log_dir: Path = request.app["log_dir"]
+
+    logger = _process_alive("nmea_capture.py")
+    newest = None
+    try:
+        files = sorted((f for f in log_dir.glob("nmea_*.txt") if _LOG_FILE.match(f.name)),
+                       key=lambda f: f.stat().st_mtime, reverse=True)
+        if files:
+            st = files[0].stat()
+            newest = {
+                "name": files[0].name,
+                "bytes": st.st_size,
+                "mtime": int(st.st_mtime),
+                # The number that actually matters: is anything being written?
+                "age_s": int(time.time() - st.st_mtime),
+            }
+    except OSError:
+        pass
+
+    try:
+        usage = shutil.disk_usage(log_dir)
+        free, capacity = usage.free, usage.total
+    except OSError:
+        free = capacity = None
+
+    boot_log = None
+    try:
+        text = (log_dir / "startup.log").read_text(errors="replace")
+        boot_log = text.splitlines()[-40:]
+    except OSError:
+        pass
+
+    # "Recording" is the honest bottom line: a live process that is not writing
+    # is not recording, and that distinction is the whole point of this endpoint.
+    recording = bool(newest and newest["age_s"] < 120)
+
+    return web.json_response(
+        {
+            "recording": recording,
+            "logger": logger,          # None = not running (or not on Linux)
+            "newest_log": newest,
+            "disk": {"free": free, "capacity": capacity},
+            "server_uptime_s": int(time.monotonic() - request.app["started_monotonic"]),
+            "boot_log_tail": boot_log,
+        },
+        headers={"Cache-Control": "no-store"},
+    )
+
+
 async def handle_logs_api(request: web.Request) -> web.Response:
     """JSON index of NMEA logs, for the playback picker and the hub page.
 
@@ -980,6 +1069,7 @@ def build_app(args) -> web.Application:
     app.router.add_get("/logs", handle_logs_index)
     app.router.add_get("/logs/{filename}", handle_log_file)
     app.router.add_get("/api/logs", handle_logs_api)
+    app.router.add_get("/api/health", handle_health)
     app.router.add_get("/api/noaa/{tail:.*}", handle_proxy_noaa)
     app.router.add_get("/api/open-meteo/{tail:.*}", handle_proxy_open_meteo)
     app.router.add_get("/data/meta.json", handle_meta)
@@ -1005,6 +1095,7 @@ def build_app(args) -> web.Application:
     # Static site last — catches everything else (JS, CSS, images, manifest, sw.js).
     app.router.add_static("/", static_dir, show_index=False, follow_symlinks=False)
 
+    app["started_monotonic"] = time.monotonic()   # monotonic, not wall clock (P33)
     app.on_startup.append(on_startup)
     app.on_cleanup.append(on_cleanup)
     return app
