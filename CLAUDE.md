@@ -155,7 +155,9 @@ GitHub Actions (scheduled)        │  GitHub Pages                   │
                           │  GET /api/open-meteo/* disk cache      │
                           │  GET /data/*       → GH Pages + cache  │
                           │                      + local fallback  │
+                          │  GET /hub          → navigation hub    │
                           │  GET /logs         → NMEA log browser  │
+                          │  GET /api/logs     → log index (JSON)  │
                           │  WS  /nmea         → TCP 192.168.47.10 │
                           │                      :10110 bridge     │
                           │                                        │
@@ -257,9 +259,12 @@ safely. Look up your group's IDs in [docs/pitfalls.md](docs/pitfalls.md), by ID,
 - A pruning score must stay strictly monotonic in distance `P30`
 - The 200 m land buffer must be dropped near the destination or harbors are unreachable `P31`
 
-### Touching NMEA logging or the capture status page
+### Touching NMEA logging, the capture status page or playback
 - The Pi has no RTC, so any duration from wall clock counts the NTP step as elapsed `P33`
 - NMEA logs are race data and are never deleted; the guard is a free-space alert `P34`
+- The replay transport measures the visible bottom bars; `offsetParent` is null when fixed `P35`
+- A closed WebSocket's handlers fire late and clobbered replay status mid-playback `P36`
+- Own-ship marker needs bulk-coalescing plus a movement deadband or it shakes `P37`
 
 ---
 
@@ -279,7 +284,8 @@ safely. Look up your group's IDs in [docs/pitfalls.md](docs/pitfalls.md), by ID,
 
 | File | Purpose |
 |------|---------|
-| `index.html` | Single page: tab bar (Map/Charts/Radar), map, side panel, legends, timeline, modals |
+| `index.html` | Single page: tab bar (Map/Charts/Radar), map, side panel, legends, timeline, modals, playback transport |
+| `hub.html` | Navigation hub at `/hub` — links every view plus live storage figures from `/api/logs` |
 | `js/app.js` (~2500 lines) | Leaflet map, vessel markers, popups, CPA/TCPA, search, forecast UI, offline pre-fetch, config bootstrap, tile-layer selection |
 | `js/aisstream.js` | Browser WebSocket to AISstream.io → internal vessel format |
 | `js/vessel-store.js` | In-memory vessel DB, track history, localStorage persistence |
@@ -325,6 +331,7 @@ SQLite schema they use (`vessels`, `positions`, WAL mode) is superseded in the b
 | `tests/test_staleness.mjs` | SFBOFS staleness gate (`P01`) + download sweep (`P03`): stale-seed deadlock, NOW-vs-+4h aliasing, high-res parity, 49-call request budget. Sandboxed `fetch`, no network. In CI. |
 | `tests/test_invariants.mjs` | Cross-file invariants — the traps that live in the gap between two files. `sw.js` host matching (`P18`) and quota eviction (`P16`) are **functional**: `sw.js` is loaded in a sandbox with a fake Cache API and its real functions called. Tile zoom range (`P15`) and the Pi port/scheme (`P24`) are cross-file source assertions, because the thing under test *is* agreement between two files' literals. In CI. |
 | `tests/test_boat_server.py` | Pi proxy + cache: JS↔Python parity (`P20`, incl. `toFixed` comparison against real `node`), UTC-rollover alias (`P06`), captive portals (`P07`), 404-vs-5xx (`P08`), stale ceilings, single-flight, prune, allowlists. In CI; needs `pip install -r pi/requirements.txt`. |
+| `tests/test_replay.mjs` | Playback scrub (`nmea-client.js`) in a sandbox with a fake store and controllable clock. The invariant: seeking to N leaves the store identical to playing through to N. Mutation-tested. In CI. |
 | `tests/test_route.mjs` | End-to-end route runs against live SFBOFS + Open-Meteo. Prints ETA/distance/avg/ratio per variant, ~13s for four. **Use this instead of screenshots for router work.** Not in CI (network). |
 | `pi/test_boat_server.sh` | Curl smoke test against a running Pi: proxy byte-parity, local fallback, SSRF rejection, `X-Cache` MISS→HIT, `/nmea` upgrade. Not in CI (live server). |
 
@@ -332,14 +339,15 @@ SQLite schema they use (`vessels`, `positions`, WAL mode) is superseded in the b
 node tests/test_physics.mjs        # polar + apparent wind
 node tests/test_staleness.mjs      # staleness gate + download sweep
 node tests/test_invariants.mjs     # cross-file invariants (sw.js, zoom range, ports)
+node tests/test_replay.mjs         # playback seek/scrub invariant
 python3 tests/test_boat_server.py  # Pi proxy/cache + JS↔Python parity
 ```
 
-CI runs all four in `deploy.yml`'s `test` job, plus `py_compile` on the Pi/root Python and `bash -n`
+CI runs all five in `deploy.yml`'s `test` job, plus `py_compile` on the Pi/root Python and `bash -n`
 on the boat shell scripts.
 
-**16 of the 34 pitfalls are mechanically enforced** — a test fails if you undo the fix. Those are
-`P01` `P03` `P06` `P07` `P08` `P10` `P11` `P15` `P16` `P18` `P20` `P21` `P22` `P24` `P33` `P34`. The rest are
+**18 of the 37 pitfalls are mechanically enforced** — a test fails if you undo the fix. Those are
+`P01` `P03` `P06` `P07` `P08` `P10` `P11` `P15` `P16` `P18` `P20` `P21` `P22` `P24` `P33` `P34` `P36` `P37`. The rest are
 documentation-only: the index is the only thing standing between you and re-introducing them. If you
 fix a doc-only pitfall's code area, consider whether an assertion could move it into the enforced set.
 
@@ -434,6 +442,10 @@ sudo journalctl -u ais-tracker -f
 - **NMEA logs kept permanently too** — no retention sweep; a free-space alert on `:8081`
   guards the card, and a failing write says "disk", not "disconnected" (`P34`).
 
+- **Navigation hub** at `/hub` — links every view; map stays at `/`.
+- **Race playback** — pick a Pi recording, scrub to any moment; drives Map, Charts and Radar alike.
+  Details: [docs/logging-and-playback.md](docs/logging-and-playback.md).
+
 ## Key patterns
 
 - **All Python I/O is async** — `asyncio.Queue` between tasks, `asyncio.Lock` for DB writes,
@@ -490,6 +502,7 @@ new topic doc gets a row in the map below.
 | **Critical pitfalls** — solved traps, full writeups, retrieve by ID | [docs/pitfalls.md](docs/pitfalls.md) |
 | **Offline caching** — both layers, TTLs, stale-on-error, the date alias, SW eviction | [docs/offline-cache.md](docs/offline-cache.md) |
 | **Route optimizer** — isochrone search, wind frame, pruning, polars, variants | [docs/router.md](docs/router.md) |
+| **Logging, hub and playback** — retention, the disk alert, the transport, seek semantics | [docs/logging-and-playback.md](docs/logging-and-playback.md) |
 | Land mask — TIGER/Line polygons, water/land detection | [docs/land-mask.md](docs/land-mask.md) |
 | Router open work / next session notes | [docs/router-next-session.md](docs/router-next-session.md) |
 | **Pre-ship review gate** — the 5 passes, pitfall injection, adversarial verification | [.claude/skills/pre-ship-review/SKILL.md](.claude/skills/pre-ship-review/SKILL.md) |

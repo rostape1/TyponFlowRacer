@@ -16,8 +16,8 @@ re-introduces a bug already paid for.
 > IDs are permanent. Never renumber. New pitfalls take the next unused number, even if an
 > earlier one is retired.
 >
-> **16 of these are mechanically enforced** — `P01` `P03` `P06` `P07` `P08` `P10` `P11` `P15` `P16`
-> `P18` `P20` `P21` `P22` `P24` `P33` `P34` have a test that fails if the fix is undone. Entries marked
+> **18 of these are mechanically enforced** — `P01` `P03` `P06` `P07` `P08` `P10` `P11` `P15` `P16`
+> `P18` `P20` `P21` `P22` `P24` `P33` `P34` `P36` `P37` have a test that fails if the fix is undone. Entries marked
 > **`ENFORCED`** name the test. The rest rely on this file being read, so if you touch a doc-only
 > pitfall's code area, ask whether an assertion could promote it.
 >
@@ -416,7 +416,7 @@ unreachable. Within `DEST_APPROACH_NM` (1nm) of the destination the buffer is dr
 
 ---
 
-## NMEA logging and the capture status page
+## NMEA logging, the capture status page and playback
 
 ## Elapsed time must be monotonic — the Pi has no clock [P33]
 
@@ -474,6 +474,60 @@ Three things about that alert are load-bearing, and all three were wrong on the 
 
 `disk_stats()` is memoised for 30s: the page self-refreshes every 5s over a directory that now grows
 without bound (~8.8k files/year), in the same process writing the live NMEA stream.
+
+## The transport bar is positioned against measured bars, not a fixed offset [P35]
+
+The bottom of the map is a stack of independently-toggled fixed elements — `layers-tray`,
+`timeline-strip`, `status-bar`, `forecast-quick-btns` — and which are visible depends on the active
+tab and the viewport. A hardcoded `bottom:` for `#replay-bar` overlapped the Vessels/Labels/Route
+buttons on desktop and the layer toggles on mobile.
+
+`positionReplayBar()` in `app.js` measures the topmost visible bar and sets `bottom` from it. Two
+traps if you rewrite it:
+
+- **`offsetParent` is `null` for `position: fixed` elements**, by spec, even when fully visible.
+  Using it as the visibility test skips every bar and collapses the transport onto the status bar.
+  Test with `getComputedStyle(el).display === 'none'` instead.
+- The mobile stack collapses via the hamburger **without firing `resize`**, so a `ResizeObserver` on
+  those bars is what keeps it correct, not the window event alone.
+
+## A closed WebSocket's handlers fire late and clobber replay state [P36]
+
+**`ENFORCED`** — `tests/test_replay.mjs`: a stale socket's `onclose` must not change status, and its
+`onmessage` must not ingest into a running replay.
+
+`startReplay()` calls `disconnect()`, which closes the live socket. But `close()` is asynchronous:
+the socket's `onclose` fires *afterwards*, and the handlers were bound to `this`, so it set the
+client status to `'disconnected'` **while the recording was playing**. The header read
+"Disconnected" over a visibly advancing scrubber, which is what made the transport look broken —
+the user reported "there was no play button" because nothing on screen said playback was running.
+
+`onmessage` was the more dangerous half: a late-arriving live sentence would ingest into the middle
+of a replay, mixing present-day instrument data into a historical picture.
+
+Fix: `_doConnect()` captures the socket in a local and every handler checks
+`this.ws === sock && !this._stopped` before acting. Do not "simplify" that back to `this.ws`.
+
+## The own-ship marker needs a deadband, or it shakes [P37]
+
+**`ENFORCED`** — `tests/test_replay.mjs` covers the coalescing half (one bulk span per playback
+frame); the deadband itself is doc-only.
+
+Two compounding causes, both of which have to stay fixed:
+
+1. **Coalescing.** `nmea-store` dispatches `'ais'` synchronously per sentence, and its listener
+   calls `updateMarker()` + `updatePanel()` (a full `innerHTML` rebuild of up to 50 cards). Replay
+   ingests in bulk, so every replay ingest — the per-frame batch **and** a seek — runs inside
+   `beginBulk()`/`endBulk()`, which coalesces to one `'ais-batch'` event. Without it a scrub froze
+   the tab for minutes and normal playback redrew hundreds of times a second.
+2. **A deadband on own position.** GPS arrives at ~10 Hz and a boat at the dock has a couple of
+   metres of noise; its AIS position is coarser and disagrees. Redrawing on every event made the
+   icon visibly shake. `ownMarkerNeedsUpdate()` holds the marker unless it moved >2 m
+   (`OWN_MOVE_DEG`), turned >2° (`OWN_TURN_DEG`), and at least 200 ms has passed.
+
+The deadband is not cosmetic: a jittering own-ship icon on a navigation display is actively
+misleading about your own position. If you raise the thresholds, check a moving boat still tracks
+smoothly — at 6 kn the marker updates ~1.5×/s, which is the intended floor.
 
 ---
 

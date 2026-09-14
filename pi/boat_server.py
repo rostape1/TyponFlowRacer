@@ -28,6 +28,7 @@ import json
 import logging
 import os
 import re
+import shutil
 import ssl
 import sys
 import time
@@ -200,8 +201,10 @@ class DiskCache:
     def prune(self, max_age_s: float, max_bytes: int) -> int:
         """Delete over-age entries, then oldest-first until under `max_bytes`. (P11)
 
-        Same shape as nmea_capture.py's cleanup_old_logs(): an age sweep, plus a
-        size cap so nothing can quietly fill the SD card.
+        This applies to the HTTP cache only — cached copies of upstream data
+        that can always be refetched. NMEA logs are the opposite: irreplaceable
+        race recordings, never deleted, guarded by a free-space alert on
+        nmea_capture.py's status page instead.
         """
         now = time.time()
         removed = 0
@@ -498,6 +501,11 @@ async def handle_meta(request: web.Request) -> web.Response:
 _LOG_FILE = re.compile(r"^nmea_[\d_-]+\.txt$")
 
 
+def _tzname() -> str:
+    """Local zone abbreviation (PDT/PST here) for labelling displayed times."""
+    return time.strftime("%Z") or "local"
+
+
 async def handle_logs_index(request: web.Request) -> web.Response:
     log_dir: Path = request.app["log_dir"]
     files = sorted(log_dir.glob("nmea_*.txt"), reverse=True)
@@ -513,8 +521,10 @@ async def handle_logs_index(request: web.Request) -> web.Response:
         try:
             stat = f.stat()
         except OSError:
-            continue  # nmea_capture's hourly cleanup deleted it mid-listing
+            continue  # rotated away mid-listing, or still being written
         size = fmt_size(stat.st_size)
+        # Local time, matching the filenames (which are local) and the capture
+        # status page. Sentence timestamps inside the files are UTC with a Z.
         mtime = time.strftime("%Y-%m-%d %H:%M", time.localtime(stat.st_mtime))
         name = html.escape(f.name)
         rows += (
@@ -545,8 +555,10 @@ tr:last-child td{{border-bottom:none}}
 </head>
 <body>
 <h1>NMEA Logs</h1>
+<p style="color:#8395a7;font-size:0.8em;margin-bottom:12px">Filenames and dates below are local
+time ({_tzname()}). Timestamps inside each file are UTC, marked with a trailing Z.</p>
 <table>
-<thead><tr><th>File</th><th>Modified</th><th>Size</th></tr></thead>
+<thead><tr><th>File</th><th>Modified ({_tzname()})</th><th>Size</th></tr></thead>
 <tbody>{rows}</tbody>
 </table>
 </body>
@@ -565,6 +577,46 @@ async def handle_log_file(request: web.Request) -> web.Response:
     return web.FileResponse(
         path,
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+async def handle_logs_api(request: web.Request) -> web.Response:
+    """JSON index of NMEA logs, for the playback picker and the hub page.
+
+    Deliberately uncached: this reports what is on disk right now. A stale
+    listing here would offer the operator a recording that no longer exists,
+    or hide one that does — the "looks live and isn't" failure this repo
+    exists to avoid.
+    """
+    log_dir: Path = request.app["log_dir"]
+    total = 0
+    entries = []
+    for f in sorted(log_dir.glob("nmea_*.txt"), reverse=True):
+        # Only advertise names handle_log_file will actually serve.
+        if not _LOG_FILE.match(f.name):
+            continue
+        try:
+            stat = f.stat()
+        except OSError:
+            continue  # rotated away mid-listing
+        total += stat.st_size
+        entries.append({
+            "name": f.name,
+            "bytes": stat.st_size,
+            "mtime": int(stat.st_mtime),
+            "url": f"/logs/{f.name}",
+        })
+
+    try:
+        usage = shutil.disk_usage(log_dir)
+        free, capacity = usage.free, usage.total
+    except OSError:
+        free = capacity = None
+
+    return web.json_response(
+        {"files": entries, "count": len(entries), "bytes": total,
+         "free": free, "capacity": capacity},
+        headers={"Cache-Control": "no-store"},
     )
 
 
@@ -927,6 +979,7 @@ def build_app(args) -> web.Application:
     app.router.add_get("/certs/server.crt", handle_cert)
     app.router.add_get("/logs", handle_logs_index)
     app.router.add_get("/logs/{filename}", handle_log_file)
+    app.router.add_get("/api/logs", handle_logs_api)
     app.router.add_get("/api/noaa/{tail:.*}", handle_proxy_noaa)
     app.router.add_get("/api/open-meteo/{tail:.*}", handle_proxy_open_meteo)
     app.router.add_get("/data/meta.json", handle_meta)
@@ -943,6 +996,12 @@ def build_app(args) -> web.Application:
     async def handle_root(_request):
         return web.FileResponse(static_dir / "index.html")
     app.router.add_get("/", handle_root)
+
+    # Navigation hub. The map stays at "/" so nothing about the existing
+    # bookmark changes; /hub is the index of everything else.
+    async def handle_hub(_request):
+        return web.FileResponse(static_dir / "hub.html")
+    app.router.add_get("/hub", handle_hub)
     # Static site last — catches everything else (JS, CSS, images, manifest, sw.js).
     app.router.add_static("/", static_dir, show_index=False, follow_symlinks=False)
 

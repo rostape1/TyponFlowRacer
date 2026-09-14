@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Typon — Hub</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:-apple-system,system-ui,sans-serif;background:#0a1628;color:#c8d6e5;padding:20px;min-height:100vh}
+h1{font-size:1.5em;color:#f5f6fa;margin-bottom:4px}
+.sub{color:#8395a7;font-size:0.85em;margin-bottom:20px}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:12px;margin-bottom:20px}
+a.card{display:block;background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.08);
+       border-radius:12px;padding:16px;text-decoration:none;color:inherit;backdrop-filter:blur(8px);
+       transition:background 0.15s,border-color 0.15s}
+a.card:hover{background:rgba(255,255,255,0.11);border-color:rgba(52,152,219,0.5)}
+.icon{font-size:1.6em;margin-bottom:8px}
+.name{font-size:1.05em;font-weight:600;color:#f5f6fa;margin-bottom:3px}
+.desc{font-size:0.8em;color:#8395a7;line-height:1.35}
+.stat{margin-top:9px;font-size:0.78em;color:#576574;font-variant-numeric:tabular-nums}
+.stat.ok{color:#2ecc71}
+.stat.warn{color:#f39c12}
+.stat.err{color:#e74c3c}
+.card-static{background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.07);
+             border-radius:12px;padding:14px 16px}
+.card-static h2{font-size:0.85em;color:#8395a7;font-weight:600;margin-bottom:10px}
+.row{display:flex;justify-content:space-between;padding:5px 0;font-size:0.88em}
+.row .k{color:#8395a7}
+.row .v{font-variant-numeric:tabular-nums;font-weight:600}
+.row .v.ok{color:#2ecc71}
+.row .v.warn{color:#f39c12}
+.row .v.err{color:#e74c3c}
+.footer{text-align:center;color:#576574;font-size:0.75em;margin-top:20px}
+</style>
+</head>
+<body>
+<h1>Typon</h1>
+<div class="sub" id="subtitle">Navigation hub</div>
+
+<div class="grid">
+  <a class="card" href="/">
+    <div class="icon">🗺️</div>
+    <div class="name">Map</div>
+    <div class="desc">Chart, vessels, tidal flow and wind</div>
+  </a>
+  <a class="card" href="/#charts">
+    <div class="icon">📊</div>
+    <div class="name">Charts</div>
+    <div class="desc">Instrument gauges and time series</div>
+  </a>
+  <a class="card" href="/#radar">
+    <div class="icon">🎯</div>
+    <div class="name">Radar</div>
+    <div class="desc">Polar plot of nearby traffic</div>
+  </a>
+  <a class="card" href="/#playback">
+    <div class="icon">⏯️</div>
+    <div class="name">Playback</div>
+    <div class="desc">Replay a saved race from the logs</div>
+    <div class="stat" id="stat-playback">checking…</div>
+  </a>
+  <a class="card" id="link-capture" href="#">
+    <div class="icon">📡</div>
+    <div class="name">Capture Status</div>
+    <div class="desc">Live NMEA feed health and disk space</div>
+    <div class="stat" id="stat-capture">port 8081</div>
+  </a>
+  <a class="card" href="/logs">
+    <div class="icon">🗂️</div>
+    <div class="name">NMEA Logs</div>
+    <div class="desc">Browse and download raw recordings</div>
+    <div class="stat" id="stat-logs">checking…</div>
+  </a>
+</div>
+
+<div class="card-static">
+  <h2>STORAGE</h2>
+  <div class="row"><span class="k">Recordings</span><span class="v" id="v-files">—</span></div>
+  <div class="row"><span class="k">Size on disk</span><span class="v" id="v-bytes">—</span></div>
+  <div class="row"><span class="k">Free space</span><span class="v" id="v-free">—</span></div>
+</div>
+
+<div class="footer" id="footer">Logs are never deleted automatically.</div>
+
+<script>
+// Everything below writes with textContent, never innerHTML: these values come
+// from a fetched JSON document, and the legend-injection trap (P19) applies
+// just as much to a status page as to the map.
+function fmtBytes(n) {
+    if (n === null || n === undefined) return 'unknown';
+    const u = ['B', 'KB', 'MB', 'GB', 'TB'];
+    let i = 0;
+    while (n >= 1024 && i < u.length - 1) { n /= 1024; i++; }
+    return (i <= 1 ? n.toFixed(0) : n.toFixed(1)) + ' ' + u[i];
+}
+
+function setStat(el, text, cls) {
+    el.textContent = text;
+    el.className = 'stat' + (cls ? ' ' + cls : '');
+}
+
+// Storage rows keep their .v styling; only the colour class varies.
+function setValue(el, text, cls) {
+    el.textContent = text;
+    el.className = 'v' + (cls ? ' ' + cls : '');
+}
+
+// The capture status page lives on a separate port on the same host.
+document.getElementById('link-capture').href =
+    location.protocol + '//' + location.hostname + ':8081/';
+
+// no-store, always. A cached count here would claim recordings exist that
+// don't, or hide ones that do — the "looks live and isn't" failure.
+fetch('/api/logs', { cache: 'no-store' })
+    .then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+    .then(d => {
+        document.getElementById('v-files').textContent = String(d.count);
+        document.getElementById('v-bytes').textContent = fmtBytes(d.bytes);
+
+        const free = d.free;
+        const freeEl = document.getElementById('v-free');
+        if (free === null || free === undefined) {
+            setValue(freeEl, 'unknown', 'warn');
+        } else if (free < 1024 ** 3) {
+            setValue(freeEl, fmtBytes(free) + ' — almost full', 'err');
+        } else if (free < 5 * 1024 ** 3) {
+            setValue(freeEl, fmtBytes(free) + ' — getting low', 'warn');
+        } else {
+            setValue(freeEl, fmtBytes(free), 'ok');
+        }
+
+        const n = d.count;
+        setStat(document.getElementById('stat-logs'),
+            n === 1 ? '1 recording' : n + ' recordings', n > 0 ? 'ok' : null);
+        setStat(document.getElementById('stat-playback'),
+            n > 0 ? 'ready' : 'no recordings yet', n > 0 ? 'ok' : 'warn');
+    })
+    .catch(err => {
+        // Say it failed. Never leave a hopeful placeholder sitting there.
+        for (const id of ['stat-logs', 'stat-playback']) {
+            setStat(document.getElementById(id), 'unavailable', 'err');
+        }
+        for (const id of ['v-files', 'v-bytes', 'v-free']) {
+            document.getElementById(id).textContent = '—';
+        }
+        document.getElementById('footer').textContent =
+            'Could not reach the boat server: ' + err.message;
+    });
+
+fetch('/config.json', { cache: 'no-store' })
+    .then(r => r.ok ? r.json() : null)
+    .then(c => {
+        if (c && c.mode === 'boat') {
+            document.getElementById('subtitle').textContent =
+                'Boat mode · local AIS · MMSI ' + c.ownMmsi;
+        }
+    })
+    .catch(() => {});
+</script>
+</body>
+</html>

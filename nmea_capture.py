@@ -68,7 +68,42 @@ _disk_cache = None   # (monotonic_time, result) — see disk_stats()
 
 
 def ts():
-    return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+    """Stored timestamp: UTC, with an explicit Z so it is self-describing.
+
+    Stays UTC on purpose. It is unambiguous, DST-proof, comparable across the
+    whole archive, and it is what nmea-client.js's replay parser expects. The Z
+    is new: without it a line read `2026-09-13 19:03:12` while the filename said
+    `120000` (local), which looked like a 7-hour inconsistency inside one file.
+    Older logs have no Z and are parsed as UTC, which is what they are.
+
+    Display is a separate concern — every UI surface renders these in local
+    time and says so. See local_str().
+    """
+    return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S.%f")[:-3] + "Z"
+
+
+def tzname():
+    """The local zone abbreviation — PDT or PST in San Francisco."""
+    return datetime.now().astimezone().strftime("%Z") or "local"
+
+
+def local_str(dt_or_epoch, fmt="%H:%M:%S"):
+    """Format for humans: local time (PDT/PST here), never UTC."""
+    if isinstance(dt_or_epoch, (int, float)):
+        dt = datetime.fromtimestamp(dt_or_epoch)
+    else:
+        dt = dt_or_epoch
+    return dt.strftime(fmt)
+
+
+def utc_ts_to_local(t):
+    """Turn a stored `ts()` string back into a local-time display string."""
+    try:
+        clean = t.rstrip("Z")
+        dt = datetime.strptime(clean, "%Y-%m-%d %H:%M:%S.%f").replace(tzinfo=timezone.utc)
+        return dt.astimezone().strftime("%H:%M:%S.%f")[:-3]
+    except (ValueError, TypeError):
+        return t  # never lose the line over a formatting problem
 
 
 def make_filename():
@@ -209,7 +244,8 @@ def status_html():
         conn_dot, conn_text = "🔴", "Disconnected"
     recent_lines = ""
     for t, sentence in reversed(stats["recent"]):
-        recent_lines += f"<div class='line'><span class='ts'>{html.escape(t)}</span> {html.escape(sentence)}</div>\n"
+        shown = utc_ts_to_local(t)
+        recent_lines += f"<div class='line'><span class='ts'>{html.escape(shown)}</span> {html.escape(sentence)}</div>\n"
     if not recent_lines:
         recent_lines = "<div class='line dim'>No sentences yet</div>"
 
@@ -264,10 +300,10 @@ h1{{font-size:1.4em;margin-bottom:12px;color:#f5f6fa}}
  {disk_alert_html(disk)}
 </div>
 <div class="card recent">
- <h2>Recent sentences</h2>
+ <h2>Recent sentences <span style="font-weight:400;text-transform:none">({tzname()}, local)</span></h2>
  {recent_lines}
 </div>
-<div class="footer">Auto-refreshes every 5s</div>
+<div class="footer">Auto-refreshes every 5s · times shown in {tzname()} · log files store UTC</div>
 </body>
 </html>"""
 
@@ -297,7 +333,7 @@ def log_sentence(sentence, source_url):
             _outfile.close()
         filename = make_filename()
         _outfile = open(filename, "a", encoding="utf-8")
-        _outfile.write(f"# NMEA capture started {ts()} UTC\n")
+        _outfile.write(f"# NMEA capture started {ts()} (timestamps are UTC)\n")
         _outfile.write(f"# Source: {source_url}\n#\n")
         _outfile.flush()
         stats["current_file"] = filename

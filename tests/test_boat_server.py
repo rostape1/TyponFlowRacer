@@ -443,6 +443,19 @@ if _cap is not None:
         _cap._disk_cache = None
         _first = _cap.disk_stats()
         ok("disk_stats is memoised", _cap.disk_stats() is _first)
+
+        # static/hub.html re-implements the same amber/red thresholds in JS. That
+        # is a hand-maintained mirror (P20's shape): change one and the hub says
+        # 🟢 while the status page says amber, with nothing failing.
+        _hub = (ROOT / "static" / "hub.html").read_text()
+        _warn_gb = _cap.DISK_WARN_BYTES // 1024**3
+        _crit_gb = _cap.DISK_CRIT_BYTES // 1024**3
+        ok("hub.html mirrors DISK_WARN_BYTES",
+           f"{_warn_gb} * 1024 ** 3" in _hub,
+           f"expected '{_warn_gb} * 1024 ** 3' in hub.html")
+        ok("hub.html mirrors DISK_CRIT_BYTES",
+           "1024 ** 3" in _hub and _crit_gb == 1,
+           f"DISK_CRIT_BYTES is {_crit_gb} GB; hub.html hardcodes 1024 ** 3")
     finally:
         shutil.rmtree(_dtmp, ignore_errors=True)
 
