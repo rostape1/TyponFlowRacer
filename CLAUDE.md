@@ -106,7 +106,7 @@ known-good code. Prefer that when you're not at the boat (`P25`). Python changes
 | Port | Owner | Notes |
 |---|---|---|
 | **8080** | `pi/boat_server.py` via `start_boat.sh` | HTTP. The boat server. `PORT` env overrides. |
-| 8081 | `nmea_capture.py` status page | `--web-port`, set explicitly in `startup.sh` |
+| 8081 | `nmea_capture.py` status page | `--web-port`, set explicitly in `startup.sh`. Also the disk-space alert (`P34`) |
 | 8888 | local dev static server, and legacy `main.py` | `python3 -m http.server 8888 --directory static` |
 | 10110 | AIS receiver (TCP, `192.168.47.10`) | Bridged to `/nmea` WebSocket by the boat server |
 | 8443 | *nothing* — historical HTTPS default | Source of a five-file drift bug (`P24`). Only used if you pass `--ssl-cert`. |
@@ -257,6 +257,10 @@ safely. Look up your group's IDs in [docs/pitfalls.md](docs/pitfalls.md), by ID,
 - A pruning score must stay strictly monotonic in distance `P30`
 - The 200 m land buffer must be dropped near the destination or harbors are unreachable `P31`
 
+### Touching NMEA logging or the capture status page
+- The Pi has no RTC, so any duration from wall clock counts the NTP step as elapsed `P33`
+- NMEA logs are race data and are never deleted; the guard is a free-space alert `P34`
+
 ---
 
 ## File Map
@@ -334,8 +338,8 @@ python3 tests/test_boat_server.py  # Pi proxy/cache + JS↔Python parity
 CI runs all four in `deploy.yml`'s `test` job, plus `py_compile` on the Pi/root Python and `bash -n`
 on the boat shell scripts.
 
-**14 of the 32 pitfalls are mechanically enforced** — a test fails if you undo the fix. Those are
-`P01` `P03` `P06` `P07` `P08` `P10` `P11` `P15` `P16` `P18` `P20` `P21` `P22` `P24`. The rest are
+**16 of the 34 pitfalls are mechanically enforced** — a test fails if you undo the fix. Those are
+`P01` `P03` `P06` `P07` `P08` `P10` `P11` `P15` `P16` `P18` `P20` `P21` `P22` `P24` `P33` `P34`. The rest are
 documentation-only: the index is the only thing standing between you and re-introducing them. If you
 fix a doc-only pitfall's code area, consider whether an assertion could move it into the enforced set.
 
@@ -427,6 +431,8 @@ sudo journalctl -u ais-tracker -f
   across gauges: green ≤0.3ft, yellow ≤0.5ft, red above. Higher water → stronger currents and
   earlier slack.
 - **Position data kept permanently** — for post-voyage analysis.
+- **NMEA logs kept permanently too** — no retention sweep; a free-space alert on `:8081`
+  guards the card, and a failing write says "disk", not "disconnected" (`P34`).
 
 ## Key patterns
 

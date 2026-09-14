@@ -25,6 +25,7 @@ Covers the failure modes that are invisible until you are offshore:
 """
 
 import asyncio
+import ast
 import json
 import os
 import re
@@ -280,6 +281,170 @@ for name in ("nmea_2026-04-15_210133.txt", "nmea_2026_04_15.txt"):
 for name in ("nmea_../../etc/passwd", "boat_server.py", "nmea_x.txt.bak",
              "nmea_2026-04-15_210133.txt.tmp"):
     ok(f"log file rejects {name!r}", not bs._LOG_FILE.match(name))
+
+# ---- 5b. /api/logs -------------------------------------------------------
+
+section("/api/logs — the playback picker's index")
+
+if not hasattr(bs, "handle_logs_api"):
+    # The hub/playback change ships separately; without it this route does not
+    # exist yet and these assertions are not applicable.
+    skip("/api/logs assertions", "handle_logs_api not present in boat_server.py")
+else:
+    _logs_tmp = tempfile.mkdtemp()
+    try:
+        _ld = Path(_logs_tmp)
+        (_ld / "nmea_2026-09-13_120000.txt").write_bytes(b"x" * 2048)
+        (_ld / "nmea_2026-05-23_200145.txt").write_bytes(b"y" * 1024)
+        # Must not be advertised: handle_log_file would refuse to serve them, so
+        # listing them would offer the operator a recording they cannot open.
+        (_ld / "notes.txt").write_bytes(b"z")
+        (_ld / "nmea_2026-09-13_120000.txt.tmp").write_bytes(b"z")
+
+        class _LogsRequest:
+            def __init__(self, app):
+                self.app = app
+
+        _resp = asyncio.run(bs.handle_logs_api(_LogsRequest({"log_dir": _ld})))
+        _data = json.loads(_resp.body)
+
+        eq("lists only servable nmea_*.txt files", _data["count"], 2)
+        ok("every listed name passes the serving allowlist",
+           all(bs._LOG_FILE.match(f["name"]) for f in _data["files"]))
+        ok("urls point at the download route",
+           all(f["url"] == "/logs/" + f["name"] for f in _data["files"]))
+        eq("total bytes sums the listed files", _data["bytes"], 3072)
+        ok("newest first", _data["files"][0]["name"] > _data["files"][1]["name"])
+        ok("reports free space", isinstance(_data["free"], int) and _data["free"] > 0)
+        # A cached listing would claim recordings exist that don't, or hide new ones.
+        eq("listing is uncacheable", _resp.headers.get("Cache-Control"), "no-store")
+    finally:
+        shutil.rmtree(_logs_tmp, ignore_errors=True)
+
+section("Log retention — recordings are never auto-deleted")
+
+# nmea_capture.py's KEEP_DAYS sweep was removed deliberately: NMEA logs are
+# irreplaceable race data. The HTTP cache still prunes (P11); the logs must not.
+# Parsed rather than grepped — the file's own comments discuss the deleted
+# sweep by name, and a text search would match the explanation of the fix.
+_cap_path = ROOT / "nmea_capture.py"
+_cap_tree = ast.parse(_cap_path.read_text())
+
+_cap_funcs = {n.name for n in ast.walk(_cap_tree)
+              if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))}
+_cap_consts = {t.id for n in ast.walk(_cap_tree) if isinstance(n, ast.Assign)
+               for t in n.targets if isinstance(t, ast.Name)}
+_cap_calls = {ast.unparse(n.func) for n in ast.walk(_cap_tree) if isinstance(n, ast.Call)}
+
+ok("no age-based log sweep function",
+   not {"cleanup_old_logs", "cleanup_loop"} & _cap_funcs,
+   f"found {sorted({'cleanup_old_logs', 'cleanup_loop'} & _cap_funcs)}")
+ok("no KEEP_DAYS retention constant", "KEEP_DAYS" not in _cap_consts)
+ok("nothing in nmea_capture deletes a file",
+   not {"os.remove", "os.unlink", "shutil.rmtree"} & _cap_calls,
+   f"found {sorted({'os.remove', 'os.unlink', 'shutil.rmtree'} & _cap_calls)}")
+ok("free space is reported instead", "shutil.disk_usage" in _cap_calls)
+
+# The 112d-uptime bug: elapsed time computed as wall clock minus wall clock,
+# across the NTP step that corrects the Pi's clock at boot (it has no RTC).
+ok("uptime is measured monotonically", "time.monotonic" in _cap_calls)
+ok("uptime_seconds exists", "uptime_seconds" in _cap_funcs)
+
+# Asserting time.monotonic is *called somewhere* is not enough — the bug could
+# be reintroduced in status_html() while uptime_seconds() sits unused. There is
+# no wall-clock start timestamp left to subtract, so assert that stays true.
+_cap_subscripts = {ast.unparse(n) for n in ast.walk(_cap_tree)
+                   if isinstance(n, ast.Subscript)}
+ok("no wall-clock start timestamp exists to subtract",
+   not any("start_time" in x for x in _cap_subscripts),
+   f"found {[x for x in _cap_subscripts if 'start_time' in x]}")
+
+_status_fn = next((n for n in ast.walk(_cap_tree)
+                   if isinstance(n, ast.FunctionDef) and n.name == "status_html"), None)
+ok("status_html exists", _status_fn is not None)
+if _status_fn is not None:
+    _status_calls = {ast.unparse(n.func) for n in ast.walk(_status_fn)
+                     if isinstance(n, ast.Call)}
+    ok("status_html gets uptime from uptime_seconds()",
+       "uptime_seconds" in _status_calls)
+    ok("status_html never reads the wall clock",
+       "time.time" not in _status_calls,
+       "status_html calls time.time() — that is the 112-day bug")
+
+# ---- 5d. The disk guard actually guards -----------------------------------
+
+section("Disk alert — the guard that replaced deletion (P34)")
+
+try:
+    import importlib.util as _ilu
+    sys.dont_write_bytecode = True          # P21
+    _spec = _ilu.spec_from_file_location("nmea_capture", _cap_path)
+    _cap = _ilu.module_from_spec(_spec)
+    _spec.loader.exec_module(_cap)
+except (SystemExit, ImportError) as _e:
+    skip("disk alert assertions", f"nmea_capture not importable ({_e})")
+    _cap = None
+
+if _cap is not None:
+    _dtmp = tempfile.mkdtemp()
+    try:
+        _cap.LOG_DIR = _dtmp
+        # A stand-in for months of archive: the bug was dividing THIS by uptime.
+        (Path(_dtmp) / "nmea_2026-05-23_200145.txt").write_bytes(b"x" * (8 * 1024 * 1024))
+
+        # Fresh restart: too small a sample to project from. The old code read
+        # "~0 hours left" next to a green free-space row.
+        _cap.stats["start_monotonic"] = time.monotonic() - 90
+        _cap.stats["bytes_written"] = 250_000
+        _cap._disk_cache = None
+        _d = _cap.disk_stats()
+        ok("no headroom projection before the minimum sample", _d["rate"] is None)
+        eq("and nothing is rendered for it", _cap.format_headroom(_d["free"], _d["rate"]), "")
+
+        # With a real sample the rate must come from bytes this process wrote,
+        # NOT from the size of the log directory.
+        # bytes_written deliberately MUCH smaller than the archive on disk, so
+        # the two candidate numerators give clearly different answers.
+        _cap.stats["start_monotonic"] = time.monotonic() - 3600
+        _cap.stats["bytes_written"] = 500 * 1024
+        _cap._disk_cache = None
+        _d = _cap.disk_stats()
+        _expected = (500 * 1024) / 3600
+        ok("headroom rate is bytes_written/uptime",
+           abs(_d["rate"] - _expected) < _expected * 0.05,
+           f"got {_d['rate']}, want ~{_expected}")
+        ok("headroom rate is NOT the log directory total",
+           _d["rate"] < _d["bytes"] / 3600 * 0.5,
+           "rate looks like it came from the directory size")
+
+        # An archive with no writes this session must not project at all.
+        _cap.stats["bytes_written"] = 0
+        _cap._disk_cache = None
+        ok("no writes this session means no projection",
+           _cap.disk_stats()["rate"] is None)
+
+        # A failing write is a STORAGE fault. Reporting it as "Disconnected"
+        # sends the operator to power-cycle the VHF instead of the card.
+        _cap.stats.update(connected=True, source="ws://t", sentences=1,
+                          current_file=str(Path(_dtmp) / "nmea_2026-05-23_200145.txt"),
+                          write_error="OSError: [Errno 28] No space left on device")
+        _cap._disk_cache = None
+        _html = _cap.status_html()
+        ok("a write failure headlines as a disk fault", "Logging FAILED" in _html)
+        ok("and never simultaneously claims Connected", "🟢 Connected" not in _html)
+        ok("and raises a loud banner", "LOGGING STOPPED" in _html)
+
+        _cap.stats["write_error"] = None
+        _cap._disk_cache = None
+        ok("a healthy write reports Connected again",
+           "🟢 Connected" in _cap.status_html())
+
+        # Memoised: the page self-refreshes every 5s over an unbounded directory.
+        _cap._disk_cache = None
+        _first = _cap.disk_stats()
+        ok("disk_stats is memoised", _cap.disk_stats() is _first)
+    finally:
+        shutil.rmtree(_dtmp, ignore_errors=True)
 
 # ---- 6. DiskCache --------------------------------------------------------
 

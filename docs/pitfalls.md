@@ -16,8 +16,8 @@ re-introduces a bug already paid for.
 > IDs are permanent. Never renumber. New pitfalls take the next unused number, even if an
 > earlier one is retired.
 >
-> **14 of these are mechanically enforced** — `P01` `P03` `P06` `P07` `P08` `P10` `P11` `P15` `P16`
-> `P18` `P20` `P21` `P22` `P24` have a test that fails if the fix is undone. Entries marked
+> **16 of these are mechanically enforced** — `P01` `P03` `P06` `P07` `P08` `P10` `P11` `P15` `P16`
+> `P18` `P20` `P21` `P22` `P24` `P33` `P34` have a test that fails if the fix is undone. Entries marked
 > **`ENFORCED`** name the test. The rest rely on this file being read, so if you touch a doc-only
 > pitfall's code area, ask whether an assertion could promote it.
 >
@@ -194,7 +194,8 @@ mint unlimited entries with junk query params. A full SD card also stops `nmea_c
 logs, so you lose the voyage record as collateral.
 
 `DiskCache.prune()` runs once per SFBOFS cycle: age sweep at `CACHE_MAX_AGE_S`, then oldest-first
-until under `CACHE_MAX_BYTES`. Same shape as `nmea_capture.py:cleanup_old_logs()`.
+until under `CACHE_MAX_BYTES`. Note the contrast with NMEA logs, which are **never** pruned ([P34]):
+cache entries are refetchable, recordings are not.
 
 ## "Pre-warm complete: 0 hours cached" was logged as success [P12]
 
@@ -412,6 +413,67 @@ and lost the wavefront's spread. `bestToDest` is always carried forward regardle
 The 200m land buffer that keeps routes off the shore also makes every harbor and shoreline waypoint
 unreachable. Within `DEST_APPROACH_NM` (1nm) of the destination the buffer is dropped and strict
 `_isLand` is used instead. Monterey harbor was unreachable at 2.8nm before this.
+
+---
+
+## NMEA logging and the capture status page
+
+## Elapsed time must be monotonic — the Pi has no clock [P33]
+
+**`ENFORCED`** — `tests/test_boat_server.py` AST-walks `nmea_capture.py`: no `start_time` subscript
+exists anywhere, and `status_html()` must call `uptime_seconds()` and must not call `time.time()`.
+Verified by mutation: reintroducing the bug fails two assertions.
+
+A Raspberry Pi has no battery-backed RTC. It boots believing whatever `fake-hwclock` last wrote to
+the SD card, then NTP steps the clock — possibly by months — once the network comes up. Anything
+that measures a duration as `time.time()` now minus a `time.time()` captured at startup counts that
+correction as elapsed time.
+
+The status page reported **`112d 16h 12m` uptime for a process 35 minutes old**, after the Pi had
+been unplugged for a week — the gap from the last `fake-hwclock` save (May 23) to the real date
+(Sep 13). Nobody would have noticed the number was fiction, and it invites exactly the wrong
+conclusion: "capture has been running continuously, so the feed is fine."
+
+Use `time.monotonic()` for every duration; wall clock is only for timestamps you intend to display.
+There is deliberately **no wall-clock start timestamp in `stats`** — leaving one there is an
+invitation for the next person to subtract it. The same trap applies to any age-based sweep — see
+[P34].
+
+## NMEA logs are never deleted, and that needs a guard [P34]
+
+**`ENFORCED`** — `tests/test_boat_server.py` asserts `nmea_capture.py` defines no `cleanup_old_logs`
+/ `cleanup_loop`, has no `KEEP_DAYS`, and calls no `os.remove` / `os.unlink` / `shutil.rmtree`; plus
+ten functional assertions on the alert itself (headroom numerator, minimum sample, the write-error
+headline, memoisation).
+
+`nmea_capture.py` used to delete logs older than `KEEP_DAYS = 28`. They are race recordings — the
+only copy of what actually happened, and the input to the playback viewer. Four months of sailing
+data survived only because the sweep ran with the wrong clock ([P33]); once the clock corrected,
+the next hourly pass would have deleted 27 files.
+
+The sweep is gone. Nothing in `nmea_capture.py` deletes a file. **This is the opposite of the HTTP
+cache**, which still prunes hard ([P11]) because every byte in it is refetchable.
+
+"Keep forever" on an SD card is its own hazard, so the guard is an alert, not a deletion: the status
+page shows total log size, free space and a projected headroom in days, going amber under 5 GB and
+red under 1 GB. If the card fills, writes fail and capture stops silently — the alert is the only
+thing standing between the operator and that.
+
+Three things about that alert are load-bearing, and all three were wrong on the first attempt:
+
+- **A failing write is reported as a storage fault, not a link fault.** `_outfile.write()` raising
+  `OSError` used to unwind into `capture_ws()`'s `except (OSError, …)` reconnect handler, so a full
+  card displayed 🔴 **Disconnected** — indistinguishable from a VHF or receiver failure, and the
+  first thing an operator would go and power-cycle. `log_sentence()` now catches it, sets
+  `stats["write_error"]`, and that outranks the connection dot.
+- **The headroom projection divides bytes written by *this process* by its own uptime.** Dividing
+  the log *directory* total instead reported a Pi restarted a minute ago as filling the card at
+  hundreds of MB/s — "~0 hours left" beside a green 🟢 158 GB row. A gauge that cries wolf on every
+  restart is a gauge nobody reads, which defeats the whole point.
+- **Nothing is projected before `HEADROOM_MIN_SAMPLE_S`** (10 min). No number beats a wrong one here.
+
+`disk_stats()` is memoised for 30s: the page self-refreshes every 5s over a directory that now grows
+without bound (~8.8k files/year), in the same process writing the live NMEA stream.
 
 ---
 
