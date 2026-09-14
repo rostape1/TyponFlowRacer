@@ -16,8 +16,8 @@ re-introduces a bug already paid for.
 > IDs are permanent. Never renumber. New pitfalls take the next unused number, even if an
 > earlier one is retired.
 >
-> **18 of these are mechanically enforced** — `P01` `P03` `P06` `P07` `P08` `P10` `P11` `P15` `P16`
-> `P18` `P20` `P21` `P22` `P24` `P33` `P34` `P36` `P37` have a test that fails if the fix is undone. Entries marked
+> **19 of these are mechanically enforced** — `P01` `P03` `P06` `P07` `P08` `P10` `P11` `P15` `P16`
+> `P18` `P20` `P21` `P22` `P24` `P33` `P34` `P36` `P37` `P40` have a test that fails if the fix is undone. Entries marked
 > **`ENFORCED`** name the test. The rest rely on this file being read, so if you touch a doc-only
 > pitfall's code area, ask whether an assertion could promote it.
 >
@@ -597,6 +597,18 @@ damage is done after the Pi is already dead. UDP datagram mode is connectionless
 orphan, no single-client slot. `boat_server.py` runs `nmea_udp_broadcast()` *and*
 `nmea_tcp_broadcast()` simultaneously — the XPort speaks one protocol at a time, so only one can
 ever deliver, and a reverted config keeps working with no redeploy.
+
+**The receiver was switched to UDP broadcast on 2026-09-14 and that is what the boat runs on.**
+Verified: rebooting the Pi now restores the feed in ~12 seconds unattended, where the same reboot
+previously locked the receiver for 20+ minutes and needed a physical power-cycle. Settings and the
+revert procedure: [nmea-hardware.md](nmea-hardware.md). Two XPort settings caused the lockout —
+`Hard Disconnect: No` and `Inactivity Timeout: 0:0` — so nothing ever reaped a dead session; if you
+ever revert to TCP, set the inactivity timeout.
+
+Consequence to keep in mind: with the receiver in UDP mode the TCP client fails **forever by
+design**. Its retry therefore backs off (`retry_delay()`, 5s → 60s) and logs only when the backoff
+step changes. A fixed 5s retry would put ~17k lines a day into `startup.log`, which shares a
+directory with the race recordings and has no rotation (`P11`, `P34`).
 
 Five things that are easy to get wrong here, each of which shipped as a bug in the first draft:
 

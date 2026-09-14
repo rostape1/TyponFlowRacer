@@ -4,6 +4,47 @@ Operating notes for the box that feeds `/nmea`. The code trap it causes is
 [`P40`](pitfalls.md); this file is the *device* half — how to identify it, probe it, and change
 its transport without bricking a race.
 
+## Current state: UDP broadcast (since 2026-09-14)
+
+The receiver is configured to **broadcast NMEA over UDP**, and that is what the boat runs on.
+
+| Setting | Value |
+|---|---|
+| Protocol | **UDP** |
+| Datagram Type | `01` |
+| Local Port | `10110` |
+| Remote Port | `10110` |
+| Remote Host | `192.168.47.255` (subnet broadcast) |
+| Use Broadcast checkbox | unchecked — the address is typed explicitly |
+| Serial (untouched) | 460800 baud, I/F Mode `4C` (8-N-1), Flow `02` (CTS/RTS) |
+
+**Why broadcast rather than unicast to the Pi:** the Pi has two addresses, wired
+`192.168.47.201` and WiFi `192.168.47.231`. Broadcast reaches it on whichever is live, and it also
+lets any future device read the same feed simultaneously — impossible under TCP.
+
+**Verified result.** Rebooting the Pi no longer locks anything out: the feed resumed ~12 seconds
+after a reboot with no intervention. Under TCP the same reboot locked the receiver for 20+ minutes
+and required a physical power-cycle.
+
+**To revert to TCP** (`http://192.168.47.10/` → Connection, blank username *and* password):
+set Protocol back to `TCP` and Remote Host back to `0.0.0.0`, then OK → Apply Settings. About 60
+seconds. No code change and no Pi restart — `boat_server.py` runs both listeners permanently, so
+the TCP client simply starts succeeding again.
+
+**If you do revert to TCP, also set `Inactivity Timeout` to `0 : 30`.** See below.
+
+## Why TCP mode wedged — the two settings that caused it
+
+The Connection page showed, in TCP mode:
+
+- **Hard Disconnect: No**
+- **Inactivity Timeout: `0 : 0`** (disabled)
+
+With neither enabled, the XPort has *nothing* configured to reap a dead session. When a client
+vanishes without a clean close, the single TCP slot stays claimed indefinitely — observed at 20+
+minutes, and its 45s TCP keepalive did not help. That is the whole of `P40` in two radio buttons.
+Setting an inactivity timeout would bound the lockout; UDP removes it.
+
 ## What the receiver actually is
 
 `192.168.47.10:10110` is **not** the SI-TEX MDA-5's own network stack. It is a separate
@@ -27,6 +68,20 @@ neither `tcpConnTable` nor the Lantronix private MIB, so you cannot ask it who h
 
 This is why the Pi now also listens on UDP: datagram mode has no session and no slot, so no
 client's power state can wedge the feed. See `P40`.
+
+Since the switch, the XPort serves **no** TCP listener at all, so `ECONNREFUSED` on 10110 is the
+normal healthy state and means nothing. The Pi's TCP client keeps retrying on a backoff as a
+standing fallback; read `nmea.transport` in `/api/health` to see which transport is actually
+feeding the boat.
+
+## Who reads this box
+
+**Only the Pi.** Confirmed 2026-09-14: the two Raymarine displays take AIS over the NMEA 0183
+wiring, not over Ethernet, and only one of them (`e70366-0700040`, `192.168.47.245`) appears on IP
+at all. Switching the XPort's protocol therefore cannot affect the chartplotters.
+
+Corroborating evidence from the outage: switching the chartplotter off while the Pi was locked out
+changed nothing. Had it been holding the TCP slot, the Pi would have connected immediately.
 
 ## Probing it without being lied to
 

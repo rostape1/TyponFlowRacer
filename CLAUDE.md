@@ -108,7 +108,7 @@ known-good code. Prefer that when you're not at the boat (`P25`). Python changes
 | **8080** | `pi/boat_server.py` via `start_boat.sh` | HTTP. The boat server. `PORT` env overrides. |
 | 8081 | `nmea_capture.py` status page | `--web-port`, set explicitly in `startup.sh`. Also the disk-space alert (`P34`) |
 | 8888 | local dev static server, and legacy `main.py` | `python3 -m http.server 8888 --directory static` |
-| 10110 | AIS receiver (`192.168.47.10`) | **TCP:** the Pi dials out to the receiver. **UDP:** the Pi listens on `0.0.0.0:10110`, accepting only from `--tcp-host`. The receiver speaks one or the other; the Pi runs both (`P40`) |
+| 10110 | AIS receiver (`192.168.47.10`) | **UDP broadcast since 2026-09-14 — this is the live path.** The Pi listens on `0.0.0.0:10110`, accepting only from `--tcp-host`. The TCP client still runs as a fallback and fails by design; `ECONNREFUSED` there is now normal (`P40`) |
 | 8443 | *nothing* — historical HTTPS default | Source of a five-file drift bug (`P24`). Only used if you pass `--ssl-cert`. |
 | 8765 / 8766 | legacy `nmea_ws_proxy.py` standalone | Superseded. Still the last-resort NMEA fallback in `app.js`: **8765 for `ws://`, 8766 for `wss://`**, picked from `location.protocol`. On GitHub Pages (HTTPS) it therefore probes `wss://raspberrypi.local:8766` and logs a benign `ERR_NAME_NOT_RESOLVED` off-boat. |
 
@@ -205,7 +205,7 @@ its freshness. **Audit before changing offline behavior.** Mechanics and rationa
 | Meta JSON | `/data/meta.json` | ✓ | n/a | 60s TTL |
 | **NOAA chart tiles** | filesystem `/tiles/noaa/{z}/{x}/{y}.png` | `download_offline.py` | n/a | **default layer**; ArcGIS REST upstream |
 | Esri Dark Gray / OSM / OpenSeaMap tiles | filesystem `/tiles/{dark,osm,sea}/…` | `download_offline.py` | n/a | z10-15 only (`P15`) |
-| Local NMEA stream | `/nmea` (WebSocket) | n/a | n/a | TCP client **or** UDP listener → WS bridge, 192.168.47.10:10110 (`P40`) |
+| Local NMEA stream | `/nmea` (WebSocket) | n/a | ✓ `/api/health` `nmea.transport` | **UDP broadcast** from 192.168.47.10:10110 → WS bridge; TCP client is the standing fallback (`P40`) |
 | AISstream.io | n/a | n/a | n/a | disabled in boat mode |
 
 ---

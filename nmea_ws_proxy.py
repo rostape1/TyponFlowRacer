@@ -48,6 +48,18 @@ UDP_BUFFER_MAX = 65536
 # sentence from one gets joined to the next datagram from another. Bound how many
 # we will track so an address-spraying source can't grow the dict without limit.
 UDP_MAX_SOURCES = 8
+# Reconnect backoff for the TCP client. Once the receiver is switched to UDP the
+# TCP path fails forever by design, so a fixed 5s retry would spin and log
+# indefinitely. Start responsive (a real outage recovers in 5s) and decay.
+RETRY_BASE_S = 5.0
+RETRY_MAX_S = 60.0
+
+
+def retry_delay(fails: int) -> float:
+    """Seconds to wait before reconnect attempt number `fails` + 1."""
+    if fails <= 1:
+        return RETRY_BASE_S
+    return min(RETRY_MAX_S, RETRY_BASE_S * (2 ** (fails - 1)))
 
 
 def _set_status(status, **fields):
@@ -132,15 +144,18 @@ async def nmea_tcp_broadcast(host, port, clients_iter, send_fn, status=None):
             from "bridge dead" (`P39`, `P40`).
     """
     attempts = 0
+    fails = 0
     _set_status(status, state="starting", last_error=None, last_connect_ts=None,
                 attempts=0)
     while True:
         writer = None
+        failed = True
         try:
             attempts += 1
             _set_status(status, attempts=attempts)
             reader, writer = await asyncio.open_connection(host, port)
             print(f"Connected to NMEA source {host}:{port}")
+            fails = 0
             _set_status(status, state="connected", last_error=None,
                         last_connect_ts=time.time())
             while True:
@@ -155,6 +170,7 @@ async def nmea_tcp_broadcast(host, port, clients_iter, send_fn, status=None):
                 if not text:
                     continue
                 await _fanout(text, clients_iter, send_fn)
+            failed = False
             _set_status(status, state="retrying", last_error=reason)
         except asyncio.CancelledError:
             _set_status(status, state="stopped")
@@ -163,13 +179,14 @@ async def nmea_tcp_broadcast(host, port, clients_iter, send_fn, status=None):
             # ConnectionRefusedError is an OSError. A refusal here is normal and
             # expected: the XPort serves one client at a time, so this is what
             # "someone else has the slot" and "the box is wedged" both look like.
-            print(f"TCP connection failed: {e}, retrying in 5s...")
+            # It is ALSO the steady state once the receiver is switched to UDP,
+            # which is why this path must not log on every retry.
             _set_status(status, state="retrying", last_error=f"{type(e).__name__}: {e}")
         except Exception as e:
             # This loop feeds the WebSocket fan-out AND, through it, the logger.
             # If it dies the boat looks identical to a silent receiver, which is
             # the failure `P39` was written about — so nothing gets to kill it.
-            print(f"NMEA TCP bridge error ({type(e).__name__}: {e}), retrying in 5s...")
+            print(f"NMEA TCP bridge error ({type(e).__name__}: {e}), retrying...")
             _set_status(status, state="retrying", last_error=f"{type(e).__name__}: {e}")
         finally:
             # Against a single-client receiver, reconnecting without closing
@@ -183,7 +200,18 @@ async def nmea_tcp_broadcast(host, port, clients_iter, send_fn, status=None):
                     await writer.wait_closed()
                 except Exception:
                     pass
-        await asyncio.sleep(5)
+        if failed:
+            fails += 1
+        delay = retry_delay(fails)
+        # Log only when the backoff step changes. With the receiver in UDP mode
+        # this loop fails forever by design, and a line every 5s would put ~17k
+        # entries a day into startup.log — which lives in the same directory as
+        # the race recordings and has no rotation (`P11`, `P34`).
+        if failed and delay != retry_delay(fails - 1):
+            print(f"NMEA TCP source unreachable ({fails} attempts): "
+                  f"{(status or {}).get('last_error')} — backing off to {delay:.0f}s")
+        _set_status(status, consecutive_failures=fails, retry_in_s=delay)
+        await asyncio.sleep(delay)
 
 
 class _NmeaDatagramProtocol(asyncio.DatagramProtocol):

@@ -815,12 +815,22 @@ nwp._NmeaDatagramProtocol(_q, allow_from="192.168.47.1").datagram_received(
     b"$GPGGA,x*00\r\n", ("2.168.47.", 5))
 eq("a string allow_from is not treated as a substring filter", _q.items, [])
 
+# Once the receiver is in UDP mode the TCP path fails forever by design. A fixed
+# 5s retry would write ~17k lines a day into startup.log, which shares a
+# directory with the race recordings and has no rotation (P11, P34).
+eq("the first retry is still prompt", nwp.retry_delay(1), 5.0)
+ok("the retry interval grows", nwp.retry_delay(3) > nwp.retry_delay(2),
+   f"{nwp.retry_delay(2)} -> {nwp.retry_delay(3)}")
+eq("and is capped rather than unbounded", nwp.retry_delay(50), nwp.RETRY_MAX_S)
+ok("the cap is short enough to recover promptly", nwp.RETRY_MAX_S <= 120,
+   f"got {nwp.RETRY_MAX_S}")
+
 _q = _FakeQueue(maxsize=2)
 _st_drop = {}
 nwp._NmeaDatagramProtocol(_q, status=_st_drop).datagram_received(
     b"a*1\r\nb*2\r\nc*3\r\nd*4\r\n", ("1.2.3.4", 5))
 eq("a full queue sheds lines instead of raising", len(_q.items), 2)
-eq("and the shed count is reported, not swallowed", _st_drop.get("dropped"), 2)
+eq("the shed count is reported, not swallowed", _st_drop.get("dropped"), 2)
 # Shedding the newest would leave the consumer replaying a stale backlog while
 # health showed lines flowing — the exact "looks live and isn't" shape.
 eq("the OLDEST lines are shed, so the feed stays current", _q.items, ["c*3", "d*4"])
