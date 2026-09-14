@@ -44,7 +44,7 @@ except ImportError:
 
 # Reuse the TCP→broadcast core from the legacy proxy module.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from nmea_ws_proxy import nmea_tcp_broadcast  # noqa: E402
+from nmea_ws_proxy import nmea_tcp_broadcast, nmea_udp_broadcast  # noqa: E402
 
 logging.basicConfig(
     level=logging.INFO,
@@ -657,15 +657,36 @@ async def handle_health(request: web.Request) -> web.Response:
     recording = bool(newest and newest["age_s"] < 120)
 
     # The NMEA source. If the logger is alive but nothing is being written, the
-    # fault is upstream of it, and this is where that shows.
+    # fault is upstream of it, and this is where that shows. `tcp`/`udp` carry
+    # enough to separate the three upstream failures that look identical from
+    # the logger's seat (`P40`): a bridge task that died (`alive: false`), a
+    # receiver refusing the connection (`state: retrying` with a refusal in
+    # `last_error`), and a receiver connected but silent (`state: connected`
+    # with a stale `last_line_age_s`).
     st = request.app.get("nmea_stats") or {}
     last_ts = st.get("last_line_ts")
+    tcp_status = dict(request.app.get("nmea_tcp_status") or {})
+    tcp_status.update(_task_state(request.app.get("nmea_task")))
+    tcp_status["source"] = f'{request.app["tcp_host"]}:{request.app["tcp_port"]}'
+    tcp_status["lines"] = st.get("tcp_lines", 0)
+    udp_port = request.app.get("udp_port")
+    if udp_port:
+        udp_status = dict(request.app.get("nmea_udp_status") or {})
+        udp_status.update(_task_state(request.app.get("nmea_udp_task")))
+        udp_status["port"] = udp_port
+        udp_status["allow_from"] = request.app.get("udp_allow_from")
+        udp_status["lines"] = st.get("udp_lines", 0)
+    else:
+        udp_status = {"alive": False, "error": "disabled"}
     nmea = {
         "source": f'{request.app["tcp_host"]}:{request.app["tcp_port"]}',
         "lines": st.get("lines", 0),
         "last_line": st.get("last_line"),
         "last_line_age_s": int(time.time() - last_ts) if last_ts else None,
         "ws_clients": len(request.app.get("nmea_clients") or ()),
+        "transport": st.get("transport"),
+        "tcp": tcp_status,
+        "udp": udp_status,
     }
 
     return web.json_response(
@@ -1015,35 +1036,85 @@ async def sfbofs_prewarm_loop(app: web.Application):
 
 # ---- App lifecycle -------------------------------------------------------
 
+class _StatsSink:
+    """A fake NMEA client that exists only to be counted.
+
+    One per transport. Identified by type rather than identity so send_to_ws can
+    tell a sink from a real WebSocket without reaching for `.closed`.
+    """
+
+    __slots__ = ("name",)
+
+    def __init__(self, name: str):
+        self.name = name
+
+
+def _task_state(task) -> dict:
+    """Liveness of a background task, for /api/health.
+
+    A bridge task that has died is indistinguishable from a silent receiver
+    unless something reports it — that is the `P39` failure one level up.
+    """
+    if task is None:
+        return {"alive": False, "error": "not started"}
+    if not task.done():
+        return {"alive": True, "error": None}
+    if task.cancelled():
+        return {"alive": False, "error": "cancelled"}
+    exc = task.exception()
+    return {"alive": False, "error": repr(exc) if exc else "returned"}
+
+
 async def on_startup(app: web.Application):
     app["http"] = aiohttp.ClientSession()
     app["nmea_clients"] = set()
-    app["nmea_stats"] = {"lines": 0, "last_line_ts": None, "last_line": None}
+    app["nmea_stats"] = {
+        "lines": 0, "last_line_ts": None, "last_line": None,
+        "transport": None, "tcp_lines": 0, "udp_lines": 0,
+    }
+    app["nmea_tcp_status"] = {}
+    app["nmea_udp_status"] = {}
 
-    # A pseudo-client that only records statistics. nmea_tcp_broadcast calls
+    # Pseudo-clients that only record statistics. The broadcast coroutines call
     # send_fn once per connected client, so counting inside send_to_ws would see
     # nothing whenever no browser is attached — and "is the receiver sending
     # anything at all?" is exactly the question that needs answering when the
-    # logger is alive but writing nothing. This sink is always in the snapshot,
-    # so every line is observed regardless of who else is listening.
-    stats_sink = object()
+    # logger is alive but writing nothing. A sink is always in the snapshot, so
+    # every line is observed regardless of who else is listening. One sink per
+    # transport, so /api/health can say which one is actually feeding the boat.
+    tcp_sink = _StatsSink("tcp")
+    udp_sink = _StatsSink("udp")
 
     async def send_to_ws(client, text: str):
-        if client is stats_sink:
+        if isinstance(client, _StatsSink):
             st = app["nmea_stats"]
             st["lines"] += 1
+            st[f"{client.name}_lines"] += 1
             st["last_line_ts"] = time.time()
             st["last_line"] = text[:120]
+            st["transport"] = client.name
             return
         if not client.closed:
             await client.send_str(text)
 
-    def clients_snapshot():
-        return [stats_sink] + list(app["nmea_clients"])
+    def snapshot_for(sink):
+        return [sink] + list(app["nmea_clients"])
 
     app["nmea_task"] = asyncio.create_task(
-        nmea_tcp_broadcast(app["tcp_host"], app["tcp_port"], clients_snapshot, send_to_ws)
+        nmea_tcp_broadcast(app["tcp_host"], app["tcp_port"],
+                           lambda: snapshot_for(tcp_sink), send_to_ws,
+                           status=app["nmea_tcp_status"])
     )
+    # Both transports run at once on purpose. The XPort's protocol setting is
+    # TCP or UDP, never both, so only one can ever deliver — and if its config
+    # is reverted, or a replacement receiver speaks the other one, the feed
+    # keeps working with no redeploy.
+    if app["udp_port"]:
+        app["nmea_udp_task"] = asyncio.create_task(
+            nmea_udp_broadcast(app["udp_port"], lambda: snapshot_for(udp_sink),
+                               send_to_ws, allow_from=app["udp_allow_from"],
+                               status=app["nmea_udp_status"])
+        )
     app["prewarm_task"] = asyncio.create_task(sfbofs_prewarm_loop(app))
     app["env_prewarm_task"] = asyncio.create_task(env_prewarm_loop(app))
 
@@ -1051,6 +1122,7 @@ async def on_startup(app: web.Application):
 async def on_cleanup(app: web.Application):
     tasks = [t for t in (
         app.get("nmea_task"),
+        app.get("nmea_udp_task"),
         app.get("prewarm_task"),
         app.get("env_prewarm_task"),
     ) if t]
@@ -1076,6 +1148,11 @@ def build_app(args) -> web.Application:
     app["gh_pages_base"] = args.gh_pages_base
     app["tcp_host"] = args.tcp_host
     app["tcp_port"] = args.tcp_port
+    app["udp_port"] = args.udp_port
+    # Default to accepting NMEA only from the configured receiver. Position and
+    # AIS data steer a boat, so an open listener on the boat LAN is not a
+    # neutral default. `--udp-allow-any` is the deliberate escape hatch.
+    app["udp_allow_from"] = None if args.udp_allow_any else args.tcp_host
     app["static_dir"] = static_dir
     app["log_dir"] = Path(args.log_dir).resolve()
     app["ssl_cert"] = args.ssl_cert or ""
@@ -1136,6 +1213,15 @@ def main():
     p.add_argument("--ssl-key", default=None)
     p.add_argument("--tcp-host", default="192.168.47.10")
     p.add_argument("--tcp-port", type=int, default=10110)
+    p.add_argument(
+        "--udp-port", type=int, default=10110,
+        help="UDP port to listen on for NMEA datagrams; 0 disables. Runs "
+             "alongside the TCP client — the receiver speaks one or the other.",
+    )
+    p.add_argument(
+        "--udp-allow-any", action="store_true",
+        help="Accept NMEA UDP from any source, not just --tcp-host.",
+    )
     p.add_argument("--mmsi", type=int, default=338361814)
     p.add_argument("--cache-dir", default="cache")
     p.add_argument("--log-dir", default=str(Path(__file__).resolve().parent.parent / "logs"))
@@ -1162,6 +1248,9 @@ def main():
     app = build_app(args)
     log.info("Boat server starting at %s://0.0.0.0:%d/", scheme, args.port)
     log.info("NMEA bridge → tcp://%s:%d", args.tcp_host, args.tcp_port)
+    if args.udp_port:
+        log.info("NMEA bridge → udp://0.0.0.0:%d (from %s)", args.udp_port,
+                 "any" if args.udp_allow_any else args.tcp_host)
     log.info("Own MMSI: %d", args.mmsi)
     web.run_app(app, host="0.0.0.0", port=args.port, ssl_context=ssl_ctx, access_log=None)
 

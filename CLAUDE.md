@@ -108,7 +108,7 @@ known-good code. Prefer that when you're not at the boat (`P25`). Python changes
 | **8080** | `pi/boat_server.py` via `start_boat.sh` | HTTP. The boat server. `PORT` env overrides. |
 | 8081 | `nmea_capture.py` status page | `--web-port`, set explicitly in `startup.sh`. Also the disk-space alert (`P34`) |
 | 8888 | local dev static server, and legacy `main.py` | `python3 -m http.server 8888 --directory static` |
-| 10110 | AIS receiver (TCP, `192.168.47.10`) | Bridged to `/nmea` WebSocket by the boat server |
+| 10110 | AIS receiver (TCP **or** UDP, `192.168.47.10`) | Bridged to `/nmea` WebSocket by the boat server. The receiver is a Lantronix XPort that speaks one protocol at a time; the Pi listens on both (`P40`) |
 | 8443 | *nothing* — historical HTTPS default | Source of a five-file drift bug (`P24`). Only used if you pass `--ssl-cert`. |
 | 8765 / 8766 | legacy `nmea_ws_proxy.py` standalone | Superseded. Still the last-resort NMEA fallback in `app.js`: **8765 for `ws://`, 8766 for `wss://`**, picked from `location.protocol`. On GitHub Pages (HTTPS) it therefore probes `wss://raspberrypi.local:8766` and logs a benign `ERR_NAME_NOT_RESOLVED` off-boat. |
 
@@ -160,6 +160,7 @@ GitHub Actions (scheduled)        │  GitHub Pages                   │
                           │  GET /api/logs     → log index (JSON)  │
                           │  WS  /nmea         → TCP 192.168.47.10 │
                           │                      :10110 bridge     │
+                          │                      + UDP :10110      │
                           │                                        │
                           │  Background: SFBOFS pre-warm loop      │
                           │  + env pre-warm (wind/tides/currents)  │
@@ -267,6 +268,7 @@ safely. Look up your group's IDs in [docs/pitfalls.md](docs/pitfalls.md), by ID,
 - Own-ship marker needs bulk-coalescing plus a movement deadband or it shakes `P37`
 - `startup.sh` git-pulls itself, so shell/systemd changes land one boot late `P38`
 - A dead logger and a silent NMEA source look identical; `/api/health` separates them `P39`
+- The receiver is a single-client-TCP Lantronix XPort; any power cut can lock the Pi out `P40`
 
 ---
 
@@ -315,7 +317,7 @@ safely. Look up your group's IDs in [docs/pitfalls.md](docs/pitfalls.md), by ID,
 | `pi/requirements.txt` | `aiohttp`, `websockets` |
 | `start_boat.sh` | Foreground launcher, `PORT=8080` default |
 | `nmea_capture.py` | Hourly-rotated NMEA logger into `logs/`, browsable at `/logs` |
-| `nmea_ws_proxy.py` | Legacy standalone TCP→WS proxy (:8765). Superseded, but `nmea_tcp_broadcast()` is still imported by `boat_server.py`. |
+| `nmea_ws_proxy.py` | Legacy standalone TCP→WS proxy (:8765). Superseded, but `nmea_tcp_broadcast()` and `nmea_udp_broadcast()` are still imported by `boat_server.py`. |
 | `download_offline.py` | Manual idempotent tile + asset pre-fetch into `static/tiles/`. `DEFAULT_BOUNDS` is authoritative. |
 
 ### Legacy backend (root, reference / local dev only)
@@ -332,7 +334,7 @@ SQLite schema they use (`vessels`, `positions`, WAL mode) is superseded in the b
 | `tests/test_physics.mjs` | `route-worker.js` polar lookup + apparent wind math, `new Function` sandbox with stubbed `self`. In CI. |
 | `tests/test_staleness.mjs` | SFBOFS staleness gate (`P01`) + download sweep (`P03`): stale-seed deadlock, NOW-vs-+4h aliasing, high-res parity, 49-call request budget. Sandboxed `fetch`, no network. In CI. |
 | `tests/test_invariants.mjs` | Cross-file invariants — the traps that live in the gap between two files. `sw.js` host matching (`P18`) and quota eviction (`P16`) are **functional**: `sw.js` is loaded in a sandbox with a fake Cache API and its real functions called. Tile zoom range (`P15`) and the Pi port/scheme (`P24`) are cross-file source assertions, because the thing under test *is* agreement between two files' literals. In CI. |
-| `tests/test_boat_server.py` | Pi proxy + cache: JS↔Python parity (`P20`, incl. `toFixed` comparison against real `node`), UTC-rollover alias (`P06`), captive portals (`P07`), 404-vs-5xx (`P08`), stale ceilings, single-flight, prune, allowlists. In CI; needs `pip install -r pi/requirements.txt`. |
+| `tests/test_boat_server.py` | Pi proxy + cache: JS↔Python parity (`P20`, incl. `toFixed` comparison against real `node`), UTC-rollover alias (`P06`), captive portals (`P07`), 404-vs-5xx (`P08`), stale ceilings, single-flight, prune, allowlists. Also the NMEA transports (`P40`): UDP reassembly, source filtering, bridge-task liveness in `/api/health`. In CI; needs `pip install -r pi/requirements.txt`. |
 | `tests/test_replay.mjs` | Playback scrub (`nmea-client.js`) in a sandbox with a fake store and controllable clock. The invariant: seeking to N leaves the store identical to playing through to N. Mutation-tested. In CI. |
 | `tests/test_route.mjs` | End-to-end route runs against live SFBOFS + Open-Meteo. Prints ETA/distance/avg/ratio per variant, ~13s for four. **Use this instead of screenshots for router work.** Not in CI (network). |
 | `pi/test_boat_server.sh` | Curl smoke test against a running Pi: proxy byte-parity, local fallback, SSRF rejection, `X-Cache` MISS→HIT, `/nmea` upgrade. Not in CI (live server). |
@@ -348,8 +350,8 @@ python3 tests/test_boat_server.py  # Pi proxy/cache + JS↔Python parity
 CI runs all five in `deploy.yml`'s `test` job, plus `py_compile` on the Pi/root Python and `bash -n`
 on the boat shell scripts.
 
-**18 of the 39 pitfalls are mechanically enforced** — a test fails if you undo the fix. Those are
-`P01` `P03` `P06` `P07` `P08` `P10` `P11` `P15` `P16` `P18` `P20` `P21` `P22` `P24` `P33` `P34` `P36` `P37`. The rest are
+**19 of the 40 pitfalls are mechanically enforced** — a test fails if you undo the fix. Those are
+`P01` `P03` `P06` `P07` `P08` `P10` `P11` `P15` `P16` `P18` `P20` `P21` `P22` `P24` `P33` `P34` `P36` `P37` `P40`. The rest are
 documentation-only: the index is the only thing standing between you and re-introducing them. If you
 fix a doc-only pitfall's code area, consider whether an assertion could move it into the enforced set.
 

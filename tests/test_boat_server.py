@@ -711,6 +711,248 @@ try:
 finally:
     shutil.rmtree(_tmp, ignore_errors=True)
 
+# ---- NMEA transports: UDP listener + bridge liveness (P40) ---------------
+#
+# The receiver's XPort serves TCP to one client at a time and refuses everyone
+# else, so an abrupt Pi power-off can leave the slot claimed by a session nobody
+# owns and lock the Pi out. UDP has no session to orphan. These tests pin the
+# three things that make that switch safe: datagrams reassemble into sentences,
+# only the configured receiver is trusted, and a bridge that dies says so
+# instead of impersonating a silent receiver.
+
+sys.path.insert(0, str(ROOT))
+import socket as _socket  # noqa: E402
+import nmea_ws_proxy as nwp  # noqa: E402
+
+_src_bs = (ROOT / "pi" / "boat_server.py").read_text()
+_tcp_def = re.search(r'"--tcp-port",\s*type=int,\s*default=(\d+)', _src_bs)
+_udp_def = re.search(r'"--udp-port",\s*type=int,\s*default=(\d+)', _src_bs)
+ok("both transports declare a default port", bool(_tcp_def and _udp_def))
+if _tcp_def and _udp_def:
+    # Flipping the XPort from TCP to UDP must not also mean changing a port, or
+    # the config change lands on a closed door and looks like a dead receiver.
+    eq("UDP default port matches the TCP default port",
+       _udp_def.group(1), _tcp_def.group(1))
+
+
+class _FakeQueue:
+    """Queue stand-in recording what the datagram protocol enqueued."""
+
+    def __init__(self, maxsize=0):
+        self.items = []
+        self.maxsize = maxsize
+
+    def put_nowait(self, item):
+        if self.maxsize and len(self.items) >= self.maxsize:
+            raise asyncio.QueueFull
+        self.items.append(item)
+
+
+_q = _FakeQueue()
+nwp._NmeaDatagramProtocol(_q, allow_from="10.0.0.1").datagram_received(
+    b"$GPGGA,1*11\r\n$GPRMC,2*22\r\n", ("10.0.0.1", 5))
+eq("one datagram carrying two sentences yields two lines",
+   _q.items, ["$GPGGA,1*11", "$GPRMC,2*22"])
+
+_q = _FakeQueue()
+_proto = nwp._NmeaDatagramProtocol(_q)
+_proto.datagram_received(b"$GPGGA,partial", ("1.2.3.4", 5))
+eq("a sentence split across datagrams is not emitted early", _q.items, [])
+_proto.datagram_received(b"-rest*7F\r\n", ("1.2.3.4", 5))
+eq("and is emitted once its terminator arrives",
+   _q.items, ["$GPGGA,partial-rest*7F"])
+
+# Position and AIS data steer a boat: an unfiltered UDP listener on the boat LAN
+# would let anything inject a track.
+_q = _FakeQueue()
+nwp._NmeaDatagramProtocol(_q, allow_from="10.0.0.1").datagram_received(
+    b"$GPGGA,spoofed*00\r\n", ("10.0.0.99", 5))
+eq("datagrams from an unexpected source are ignored", _q.items, [])
+
+_q = _FakeQueue()
+_proto = nwp._NmeaDatagramProtocol(_q)
+_proto.datagram_received(b"x" * (nwp.UDP_MAX_BUFFER + 10), ("1.2.3.4", 5))
+eq("an unterminated flood cannot grow the reassembly buffer", len(_proto._buf), 0)
+eq("and emits nothing", _q.items, [])
+
+_q = _FakeQueue(maxsize=2)
+_st_drop = {}
+nwp._NmeaDatagramProtocol(_q, status=_st_drop).datagram_received(
+    b"a*1\r\nb*2\r\nc*3\r\nd*4\r\n", ("1.2.3.4", 5))
+eq("a full queue sheds lines instead of raising", len(_q.items), 2)
+eq("and the shed count is reported, not swallowed", _st_drop.get("dropped"), 2)
+
+
+def _free_udp_port():
+    s = _socket.socket(_socket.AF_INET, _socket.SOCK_DGRAM)
+    s.bind(("127.0.0.1", 0))
+    port = s.getsockname()[1]
+    s.close()
+    return port
+
+
+async def _udp_end_to_end():
+    """Real socket, real datagram — the reassembly unit tests can't prove the
+    listener actually binds and delivers."""
+    port = _free_udp_port()
+    got = []
+
+    async def send_fn(client, text):
+        got.append(text)
+
+    status = {}
+    task = asyncio.create_task(nwp.nmea_udp_broadcast(
+        port, lambda: ["sink"], send_fn, bind_host="127.0.0.1",
+        allow_from="127.0.0.1", status=status))
+    for _ in range(100):
+        await asyncio.sleep(0.02)
+        if status.get("state") == "listening":
+            break
+    tx = _socket.socket(_socket.AF_INET, _socket.SOCK_DGRAM)
+    tx.sendto(b"!AIVDM,1,1,,A,15M,0*7B\r\n", ("127.0.0.1", port))
+    for _ in range(100):
+        await asyncio.sleep(0.02)
+        if got:
+            break
+    tx.close()
+    # Snapshot before cancelling: teardown legitimately moves state to "stopped".
+    state_while_running = status.get("state")
+    task.cancel()
+    try:
+        await task
+    except BaseException:
+        pass
+    return state_while_running, got
+
+
+_udp_state, _udp_got = asyncio.run(_udp_end_to_end())
+eq("the UDP listener binds and reports itself listening", _udp_state, "listening")
+eq("a real datagram reaches the clients", _udp_got, ["!AIVDM,1,1,,A,15M,0*7B"])
+
+
+async def _tcp_survives_unexpected_error():
+    """The bridge feeds the WebSocket fan-out and, through it, the logger. If a
+    non-OSError kills it, the boat looks exactly like a silent receiver."""
+    status = {}
+    attempts = []
+
+    async def boom(host, port):
+        attempts.append(1)
+        raise ValueError("not an OSError")
+
+    async def send_fn(client, text):
+        return None
+
+    orig = asyncio.open_connection
+    asyncio.open_connection = boom
+    try:
+        task = asyncio.create_task(nwp.nmea_tcp_broadcast(
+            "1.2.3.4", 10110, lambda: [], send_fn, status=status))
+        for _ in range(100):
+            await asyncio.sleep(0.02)
+            if status.get("last_error"):
+                break
+        alive = not task.done()
+        task.cancel()
+        try:
+            await task
+        except BaseException:
+            pass
+        return alive, status, len(attempts)
+    finally:
+        asyncio.open_connection = orig
+
+
+_alive, _tcp_status, _tries = asyncio.run(_tcp_survives_unexpected_error())
+ok("an unexpected exception does not kill the TCP bridge", _alive)
+ok("and it is reported rather than swallowed",
+   "ValueError" in (_tcp_status.get("last_error") or ""),
+   f"got {_tcp_status.get('last_error')!r}")
+eq("the bridge is retrying, not dead", _tcp_status.get("state"), "retrying")
+
+
+async def _task_states():
+    async def boom():
+        raise RuntimeError("bridge died")
+
+    async def forever():
+        await asyncio.sleep(60)
+
+    dead = asyncio.create_task(boom())
+    live = asyncio.create_task(forever())
+    await asyncio.sleep(0.05)
+    out = (bs._task_state(dead), bs._task_state(live), bs._task_state(None))
+    live.cancel()
+    try:
+        await live
+    except BaseException:
+        pass
+    return out
+
+
+_dead, _live, _none = asyncio.run(_task_states())
+eq("a crashed bridge task reports itself dead", _dead["alive"], False)
+ok("with the reason attached", "bridge died" in (_dead["error"] or ""),
+   f"got {_dead['error']!r}")
+eq("a running bridge task reports alive", _live["alive"], True)
+eq("a never-started task reports dead", _none["alive"], False)
+
+
+# /api/health must actually surface all of this, or it is unreachable at sea.
+_health_tmp = tempfile.mkdtemp(prefix="ais-health-")
+
+
+class _HealthRequest:
+    def __init__(self, app):
+        self.app = app
+
+
+async def _health_payload():
+    logs = Path(_health_tmp) / "healthlogs"
+    logs.mkdir(parents=True, exist_ok=True)
+
+    async def forever():
+        await asyncio.sleep(60)
+
+    tcp_task = asyncio.create_task(forever())
+    app = {
+        "log_dir": logs,
+        "nmea_stats": {"lines": 7, "last_line_ts": time.time(), "last_line": "$GPGGA,1*11",
+                       "transport": "udp", "tcp_lines": 0, "udp_lines": 7},
+        "nmea_tcp_status": {"state": "retrying", "last_error": "ConnectionRefusedError: [111]"},
+        "nmea_udp_status": {"state": "listening", "last_error": None, "dropped": 0},
+        "nmea_task": tcp_task,
+        "nmea_udp_task": None,
+        "tcp_host": "192.168.47.10",
+        "tcp_port": 10110,
+        "udp_port": 10110,
+        "udp_allow_from": "192.168.47.10",
+        "nmea_clients": set(),
+        "started_monotonic": time.monotonic(),
+    }
+    resp = await bs.handle_health(_HealthRequest(app))
+    tcp_task.cancel()
+    try:
+        await tcp_task
+    except BaseException:
+        pass
+    return json.loads(resp.body)
+
+
+_health = asyncio.run(_health_payload())
+_hn = _health["nmea"]
+eq("health names the transport that is actually feeding", _hn.get("transport"), "udp")
+eq("health keeps the original source field for continuity",
+   _hn.get("source"), "192.168.47.10:10110")
+eq("health reports the TCP refusal reason", _hn["tcp"].get("state"), "retrying")
+ok("including the errno text",
+   "ConnectionRefusedError" in (_hn["tcp"].get("last_error") or ""))
+eq("health reports TCP bridge liveness", _hn["tcp"].get("alive"), True)
+eq("health reports a missing UDP task as dead", _hn["udp"].get("alive"), False)
+eq("health reports the UDP source filter", _hn["udp"].get("allow_from"), "192.168.47.10")
+
+shutil.rmtree(_health_tmp, ignore_errors=True)
+
 # ---- Result --------------------------------------------------------------
 
 print()
