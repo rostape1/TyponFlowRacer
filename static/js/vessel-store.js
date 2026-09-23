@@ -14,11 +14,55 @@ class VesselStore {
         this.persist = persist;
         this.messageCount = 0;
 
+        // Replay mode. Replayed contacts are historical: they must not be
+        // written to localStorage (they would come back on reload as live
+        // traffic), and prune() must not measure their age against the wall
+        // clock (a June race is hours "stale" the instant it is ingested, so
+        // every target would be deleted immediately). Time in replay comes
+        // from the log itself — see `now()`.
+        this.replayMode = false;
+        this._replayClock = null;
+
         // Restore from localStorage if available
         if (persist) this._restore();
 
         // Periodic prune of stale vessels
         this._pruneInterval = setInterval(() => this.prune(), 60000);
+    }
+
+    /** The clock this store reasons about: wall clock live, log time in replay. */
+    now() {
+        return this.replayMode && this._replayClock != null
+            ? this._replayClock : Date.now();
+    }
+
+    /**
+     * Enter or leave replay. Clears the store in BOTH directions: the two modes
+     * use incompatible time bases, so contacts can never legitimately survive
+     * the switch. Clearing on entry only, and trusting the caller to clean up on
+     * exit, is what let a replayed fleet leak onto the live chart.
+     */
+    setReplayMode(on) {
+        this.replayMode = !!on;
+        this._replayClock = null;
+        this.clearAll();
+    }
+
+    /** Advance the replay clock, so staleness is measured in log time. */
+    setReplayClock(ms) {
+        if (Number.isFinite(ms)) this._replayClock = ms;
+    }
+
+    /**
+     * Drop every vessel and track. Used when entering replay, when seeking
+     * (state is rebuilt from the start of the log), and when returning to Live
+     * — otherwise replayed contacts stay on the map as current traffic.
+     */
+    clearAll() {
+        const mmsis = Array.from(this.vessels.keys());
+        this.vessels.clear();
+        this.tracks.clear();
+        return mmsis;
     }
 
     /**
@@ -27,7 +71,11 @@ class VesselStore {
      */
     upsert(msg) {
         const existing = this.vessels.get(msg.mmsi) || {};
-        const merged = { ...existing, ...msg, _lastUpdate: Date.now() };
+        // _reportedAt is set by nmea-store from the sentence's own timestamp, so
+        // in replay this is log time. Falls back to the wall clock for the
+        // cloud-AIS path, which has no per-message timestamp.
+        const seenAt = Number.isFinite(msg._reportedAt) ? msg._reportedAt : this.now();
+        const merged = { ...existing, ...msg, _lastUpdate: seenAt };
         this.vessels.set(msg.mmsi, merged);
         this.messageCount++;
 
@@ -42,7 +90,7 @@ class VesselStore {
             track.points.push({
                 lat: msg.lat,
                 lon: msg.lon,
-                time: Date.now(),
+                time: seenAt,
                 sog: msg.sog || 0,
                 cog: msg.cog || 0,
             });
@@ -77,7 +125,10 @@ class VesselStore {
         const track = this.tracks.get(mmsi);
         if (!track) return [];
 
-        const cutoff = Date.now() - hours * 3600000;
+        // this.now(), not Date.now(): in replay every point is hours old in
+        // wall-clock terms, so the wall clock would return an empty track and
+        // the radar trails would vanish.
+        const cutoff = this.now() - hours * 3600000;
         return track.points.filter(p => p.time >= cutoff);
     }
 
@@ -99,7 +150,8 @@ class VesselStore {
      * Returns array of pruned MMSIs.
      */
     prune() {
-        const cutoff = Date.now() - this.staleMinutes * 60000;
+        const nowMs = this.now();
+        const cutoff = nowMs - this.staleMinutes * 60000;
         const pruned = [];
 
         for (const [mmsi, vessel] of this.vessels) {
@@ -111,13 +163,15 @@ class VesselStore {
         }
 
         // Also trim track history older than 2 hours
-        const trackCutoff = Date.now() - 2 * 3600000;
+        const trackCutoff = nowMs - 2 * 3600000;
         for (const [mmsi, track] of this.tracks) {
             track.points = track.points.filter(p => p.time >= trackCutoff);
             if (track.points.length === 0) this.tracks.delete(mmsi);
         }
 
-        if (this.persist && pruned.length > 0) this._save();
+        // Never persist in replay: a reload would restore historical contacts
+        // and present them as live traffic.
+        if (this.persist && !this.replayMode && pruned.length > 0) this._save();
 
         return pruned;
     }
@@ -175,7 +229,7 @@ class VesselStore {
      * Periodically save to localStorage (call from app on a timer).
      */
     saveIfNeeded() {
-        if (this.persist) this._save();
+        if (this.persist && !this.replayMode) this._save();
     }
 
     destroy() {

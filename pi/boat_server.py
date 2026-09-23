@@ -11,8 +11,9 @@ Runs on the Raspberry Pi on the boat WiFi. Single asyncio process that:
      on the boat WiFi share one fetch and the cache survives flaky satcom.
   4. Reverse-proxies + disk-caches the pre-computed SFBOFS / NDBC / meta JSON
      hosted on GitHub Pages, with a startup-time SFBOFS pre-warm.
-  5. Bridges the local NMEA TCP stream (default 192.168.47.10:10110) to a
-     WebSocket at /nmea for the browser.
+  5. Bridges the local NMEA stream to a WebSocket at /nmea for the browser —
+     an outbound TCP client to 192.168.47.10:10110 *and* a UDP listener on
+     :10110, because the receiver speaks one or the other (`P40`).
 
 Usage:
     python3 pi/boat_server.py                       # HTTP on :8080
@@ -28,6 +29,8 @@ import json
 import logging
 import os
 import re
+import shutil
+import socket
 import ssl
 import sys
 import time
@@ -43,7 +46,7 @@ except ImportError:
 
 # Reuse the TCP→broadcast core from the legacy proxy module.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from nmea_ws_proxy import nmea_tcp_broadcast  # noqa: E402
+from nmea_ws_proxy import nmea_tcp_broadcast, nmea_udp_broadcast  # noqa: E402
 
 logging.basicConfig(
     level=logging.INFO,
@@ -200,8 +203,10 @@ class DiskCache:
     def prune(self, max_age_s: float, max_bytes: int) -> int:
         """Delete over-age entries, then oldest-first until under `max_bytes`. (P11)
 
-        Same shape as nmea_capture.py's cleanup_old_logs(): an age sweep, plus a
-        size cap so nothing can quietly fill the SD card.
+        This applies to the HTTP cache only — cached copies of upstream data
+        that can always be refetched. NMEA logs are the opposite: irreplaceable
+        race recordings, never deleted, guarded by a free-space alert on
+        nmea_capture.py's status page instead.
         """
         now = time.time()
         removed = 0
@@ -498,6 +503,11 @@ async def handle_meta(request: web.Request) -> web.Response:
 _LOG_FILE = re.compile(r"^nmea_[\d_-]+\.txt$")
 
 
+def _tzname() -> str:
+    """Local zone abbreviation (PDT/PST here) for labelling displayed times."""
+    return time.strftime("%Z") or "local"
+
+
 async def handle_logs_index(request: web.Request) -> web.Response:
     log_dir: Path = request.app["log_dir"]
     files = sorted(log_dir.glob("nmea_*.txt"), reverse=True)
@@ -513,8 +523,10 @@ async def handle_logs_index(request: web.Request) -> web.Response:
         try:
             stat = f.stat()
         except OSError:
-            continue  # nmea_capture's hourly cleanup deleted it mid-listing
+            continue  # rotated away mid-listing, or still being written
         size = fmt_size(stat.st_size)
+        # Local time, matching the filenames (which are local) and the capture
+        # status page. Sentence timestamps inside the files are UTC with a Z.
         mtime = time.strftime("%Y-%m-%d %H:%M", time.localtime(stat.st_mtime))
         name = html.escape(f.name)
         rows += (
@@ -545,8 +557,10 @@ tr:last-child td{{border-bottom:none}}
 </head>
 <body>
 <h1>NMEA Logs</h1>
+<p style="color:#8395a7;font-size:0.8em;margin-bottom:12px">Filenames and dates below are local
+time ({_tzname()}). Timestamps inside each file are UTC, marked with a trailing Z.</p>
 <table>
-<thead><tr><th>File</th><th>Modified</th><th>Size</th></tr></thead>
+<thead><tr><th>File</th><th>Modified ({_tzname()})</th><th>Size</th></tr></thead>
 <tbody>{rows}</tbody>
 </table>
 </body>
@@ -565,6 +579,189 @@ async def handle_log_file(request: web.Request) -> web.Response:
     return web.FileResponse(
         path,
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+def _process_alive(needle: str) -> Optional[dict]:
+    """Find a running process whose command line contains `needle`.
+
+    Reads /proc directly rather than shelling out to pgrep: no subprocess, works
+    in the aiohttp event loop, and degrades to None off Linux (so the test suite
+    on macOS just reports unknown rather than failing).
+    """
+    proc = Path("/proc")
+    if not proc.is_dir():
+        return None
+    now = time.time()
+    for entry in proc.iterdir():
+        if not entry.name.isdigit():
+            continue
+        try:
+            cmdline = (entry / "cmdline").read_bytes().replace(b"\0", b" ").decode(
+                "utf-8", "replace")
+        except OSError:
+            continue
+        if needle not in cmdline:
+            continue
+        try:
+            started = entry.stat().st_mtime
+        except OSError:
+            started = None
+        return {
+            "pid": int(entry.name),
+            "cmdline": cmdline.strip()[:200],
+            "age_s": int(now - started) if started else None,
+        }
+    return None
+
+
+async def handle_health(request: web.Request) -> web.Response:
+    """What is actually running on this Pi, answerable over HTTP.
+
+    Exists because the Pi's SSH password was lost on 2026-09-13, which made
+    journalctl unreachable and left "the voyage recorder stopped, why?"
+    undiagnosable. Anything needed to answer that has to be reachable here.
+    """
+    log_dir: Path = request.app["log_dir"]
+
+    logger = _process_alive("nmea_capture.py")
+    newest = None
+    try:
+        files = sorted((f for f in log_dir.glob("nmea_*.txt") if _LOG_FILE.match(f.name)),
+                       key=lambda f: f.stat().st_mtime, reverse=True)
+        if files:
+            st = files[0].stat()
+            newest = {
+                "name": files[0].name,
+                "bytes": st.st_size,
+                "mtime": int(st.st_mtime),
+                # The number that actually matters: is anything being written?
+                "age_s": int(time.time() - st.st_mtime),
+            }
+    except OSError:
+        pass
+
+    try:
+        usage = shutil.disk_usage(log_dir)
+        free, capacity = usage.free, usage.total
+    except OSError:
+        free = capacity = None
+
+    boot_log = None
+    try:
+        text = (log_dir / "startup.log").read_text(errors="replace")
+        boot_log = text.splitlines()[-40:]
+    except OSError:
+        pass
+
+    # "Recording" is the honest bottom line: a live process that is not writing
+    # is not recording, and that distinction is the whole point of this endpoint.
+    recording = bool(newest and newest["age_s"] < 120)
+
+    # The NMEA source. If the logger is alive but nothing is being written, the
+    # fault is upstream of it, and this is where that shows. `tcp`/`udp` carry
+    # enough to separate the upstream failures that look identical from the
+    # logger's seat (`P40`). Read `state` first, then `last_error`:
+    #   dead       — the bridge task itself died; `error` has the exception
+    #   retrying   — with a ConnectionRefusedError: the receiver refused us
+    #              — with "no data for 30s": it accepted, then sent nothing
+    #              — with "receiver closed the connection": it hung up
+    #   listening  — UDP is bound. If `rejected` is climbing, datagrams ARE
+    #                arriving and being refused by the source filter; check
+    #                `rejected_from` against `allow_from`.
+    st = request.app.get("nmea_stats") or {}
+    last_ts = st.get("last_line_ts")
+
+    def _transport_status(raw, task, extra):
+        out = dict(raw or {})
+        out.update(extra)
+        state = _task_state(task)
+        out.update(state)
+        if not state["alive"]:
+            # Otherwise a crashed task keeps advertising "listening", which is
+            # the first field a human scans.
+            out["state"] = "dead"
+        return out
+
+    tcp_status = _transport_status(
+        request.app.get("nmea_tcp_status"), request.app.get("nmea_task"),
+        {"source": f'{request.app["tcp_host"]}:{request.app["tcp_port"]}',
+         "lines": st.get("tcp_lines", 0)})
+    udp_port = request.app.get("udp_port")
+    if udp_port:
+        udp_status = _transport_status(
+            request.app.get("nmea_udp_status"), request.app.get("nmea_udp_task"),
+            {"port": udp_port, "bind": request.app.get("udp_bind"),
+             "allow_from": request.app.get("udp_allow_from"),
+             "lines": st.get("udp_lines", 0)})
+    else:
+        # Not a fault: don't give it the shape of one, or anything keying on
+        # `alive` alarms on a correct configuration.
+        udp_status = {"state": "disabled", "alive": None, "error": None}
+    nmea = {
+        # "source" and "lines" keep their pre-P40 shape for existing readers.
+        # The feed that is actually live is `transport` plus `tcp`/`udp`.
+        "source": f'{request.app["tcp_host"]}:{request.app["tcp_port"]}',
+        "lines": st.get("lines", 0),
+        "last_line": st.get("last_line"),
+        "last_line_age_s": int(time.time() - last_ts) if last_ts else None,
+        "ws_clients": len(request.app.get("nmea_clients") or ()),
+        "transport": st.get("transport"),
+        "tcp": tcp_status,
+        "udp": udp_status,
+    }
+
+    return web.json_response(
+        {
+            "recording": recording,
+            "nmea": nmea,
+            "logger": logger,          # None = not running (or not on Linux)
+            "newest_log": newest,
+            "disk": {"free": free, "capacity": capacity},
+            "server_uptime_s": int(time.monotonic() - request.app["started_monotonic"]),
+            "boot_log_tail": boot_log,
+        },
+        headers={"Cache-Control": "no-store"},
+    )
+
+
+async def handle_logs_api(request: web.Request) -> web.Response:
+    """JSON index of NMEA logs, for the playback picker and the hub page.
+
+    Deliberately uncached: this reports what is on disk right now. A stale
+    listing here would offer the operator a recording that no longer exists,
+    or hide one that does — the "looks live and isn't" failure this repo
+    exists to avoid.
+    """
+    log_dir: Path = request.app["log_dir"]
+    total = 0
+    entries = []
+    for f in sorted(log_dir.glob("nmea_*.txt"), reverse=True):
+        # Only advertise names handle_log_file will actually serve.
+        if not _LOG_FILE.match(f.name):
+            continue
+        try:
+            stat = f.stat()
+        except OSError:
+            continue  # rotated away mid-listing
+        total += stat.st_size
+        entries.append({
+            "name": f.name,
+            "bytes": stat.st_size,
+            "mtime": int(stat.st_mtime),
+            "url": f"/logs/{f.name}",
+        })
+
+    try:
+        usage = shutil.disk_usage(log_dir)
+        free, capacity = usage.free, usage.total
+    except OSError:
+        free = capacity = None
+
+    return web.json_response(
+        {"files": entries, "count": len(entries), "bytes": total,
+         "free": free, "capacity": capacity},
+        headers={"Cache-Control": "no-store"},
     )
 
 
@@ -861,20 +1058,87 @@ async def sfbofs_prewarm_loop(app: web.Application):
 
 # ---- App lifecycle -------------------------------------------------------
 
+class _StatsSink:
+    """A fake NMEA client that exists only to be counted.
+
+    One per transport. `send_to_ws` matches on type rather than identity
+    because there are now two of them, and reads `.name` to attribute the line
+    to tcp or udp.
+    """
+
+    __slots__ = ("name",)
+
+    def __init__(self, name: str):
+        self.name = name
+
+
+def _task_state(task) -> dict:
+    """Liveness of a background task, for /api/health.
+
+    A bridge task that has died is indistinguishable from a silent receiver
+    unless something reports it — that is the `P39` failure one level up.
+    """
+    if task is None:
+        return {"alive": False, "error": "not started"}
+    if not task.done():
+        return {"alive": True, "error": None}
+    if task.cancelled():
+        return {"alive": False, "error": "cancelled"}
+    exc = task.exception()
+    return {"alive": False, "error": repr(exc) if exc else "returned"}
+
+
 async def on_startup(app: web.Application):
     app["http"] = aiohttp.ClientSession()
     app["nmea_clients"] = set()
+    app["nmea_stats"] = {
+        "lines": 0, "last_line_ts": None, "last_line": None,
+        "transport": None, "tcp_lines": 0, "udp_lines": 0,
+    }
+    app["nmea_tcp_status"] = {}
+    app["nmea_udp_status"] = {}
 
-    async def send_to_ws(client: web.WebSocketResponse, text: str):
+    # Pseudo-clients that only record statistics. The broadcast coroutines call
+    # send_fn once per connected client, so counting inside send_to_ws would see
+    # nothing whenever no browser is attached — and "is the receiver sending
+    # anything at all?" is exactly the question that needs answering when the
+    # logger is alive but writing nothing. A sink is always in the snapshot, so
+    # every line is observed regardless of who else is listening. One sink per
+    # transport, so /api/health can say which one is actually feeding the boat.
+    tcp_sink = _StatsSink("tcp")
+    udp_sink = _StatsSink("udp")
+
+    async def send_to_ws(client, text: str):
+        if isinstance(client, _StatsSink):
+            st = app["nmea_stats"]
+            st["lines"] += 1
+            st[f"{client.name}_lines"] += 1
+            st["last_line_ts"] = time.time()
+            st["last_line"] = text[:120]
+            st["transport"] = client.name
+            return
         if not client.closed:
             await client.send_str(text)
 
-    def clients_snapshot():
-        return list(app["nmea_clients"])
+    def snapshot_for(sink):
+        return [sink] + list(app["nmea_clients"])
 
     app["nmea_task"] = asyncio.create_task(
-        nmea_tcp_broadcast(app["tcp_host"], app["tcp_port"], clients_snapshot, send_to_ws)
+        nmea_tcp_broadcast(app["tcp_host"], app["tcp_port"],
+                           lambda: snapshot_for(tcp_sink), send_to_ws,
+                           status=app["nmea_tcp_status"])
     )
+    # Both transports run at once on purpose. The XPort's protocol setting is
+    # TCP or UDP, never both, so only one can ever deliver — and if its config
+    # is reverted, or a replacement receiver speaks the other one, the feed
+    # keeps working with no redeploy.
+    if app["udp_port"]:
+        app["nmea_udp_task"] = asyncio.create_task(
+            nmea_udp_broadcast(app["udp_port"], lambda: snapshot_for(udp_sink),
+                               send_to_ws, bind_host=app["udp_bind"],
+                               allow_from=app["udp_allow_from"],
+                               status=app["nmea_udp_status"])
+        )
     app["prewarm_task"] = asyncio.create_task(sfbofs_prewarm_loop(app))
     app["env_prewarm_task"] = asyncio.create_task(env_prewarm_loop(app))
 
@@ -882,6 +1146,7 @@ async def on_startup(app: web.Application):
 async def on_cleanup(app: web.Application):
     tasks = [t for t in (
         app.get("nmea_task"),
+        app.get("nmea_udp_task"),
         app.get("prewarm_task"),
         app.get("env_prewarm_task"),
     ) if t]
@@ -895,18 +1160,69 @@ async def on_cleanup(app: web.Application):
         await app["http"].close()
 
 
+# Suffixes that must be revalidated on every load. The boat's UI is served with
+# unversioned URLs (`js/app.js`, not `js/app.<hash>.js`), and aiohttp's static
+# handler sets only ETag and Last-Modified. With no Cache-Control at all a
+# browser applies *heuristic* caching and may reuse its copy without asking —
+# which shipped a deploy that looked live and wasn't: the Pi had the new code,
+# Chrome ran the old one, and the new UI was simply missing with nothing in the
+# console. `no-cache` still stores the file, it just forces an ETag
+# revalidation, which is a 304 on the boat LAN.
+#
+# Deliberately NOT applied to images or chart tiles: those are large, effectively
+# immutable, and must stay cacheable for offline use.
+_REVALIDATE_SUFFIXES = (".html", ".js", ".css", ".webmanifest", ".json")
+
+
+@web.middleware
+async def revalidate_static(request: web.Request, handler):
+    resp = await handler(request)
+    # Never override a handler that set its own policy (the API routes use
+    # no-store, which is stricter).
+    if resp.headers.get("Cache-Control"):
+        return resp
+    path = request.path.lower()
+    if path in ("/", "/hub") or path.endswith(_REVALIDATE_SUFFIXES):
+        resp.headers["Cache-Control"] = "no-cache"
+    return resp
+
+
 def build_app(args) -> web.Application:
     static_dir = Path(args.static_dir).resolve()
     if not static_dir.exists():
         raise SystemExit(f"static dir not found: {static_dir}")
 
-    app = web.Application(client_max_size=1024 * 1024)
+    app = web.Application(client_max_size=1024 * 1024,
+                          middlewares=[revalidate_static])
     app["cache"] = DiskCache(Path(args.cache_dir).resolve())
     # url -> Future, so concurrent requests for one URL share a single fetch.
     app["inflight"] = {}
     app["gh_pages_base"] = args.gh_pages_base
     app["tcp_host"] = args.tcp_host
     app["tcp_port"] = args.tcp_port
+    app["udp_port"] = args.udp_port
+    app["udp_bind"] = args.udp_bind
+    # Default to accepting NMEA only from the configured receiver. Position and
+    # AIS data steer a boat, so an open listener on the boat LAN is not a
+    # neutral default. `--udp-allow-any` is the deliberate escape hatch.
+    #
+    # Resolve to literal IPs here: the filter compares against a datagram's
+    # source address, which is always a dotted quad, so leaving a hostname in
+    # place would reject the entire feed while /api/health still read
+    # "listening" — a silent total loss from a plausible config change.
+    if args.udp_allow_any:
+        app["udp_allow_from"] = None
+    else:
+        try:
+            app["udp_allow_from"] = sorted({
+                ai[4][0] for ai in socket.getaddrinfo(args.tcp_host, None,
+                                                      socket.AF_INET)
+            })
+        except OSError as e:
+            log.error("Cannot resolve --tcp-host %r for the UDP source filter "
+                      "(%s); UDP will accept nothing until this is fixed",
+                      args.tcp_host, e)
+            app["udp_allow_from"] = []
     app["static_dir"] = static_dir
     app["log_dir"] = Path(args.log_dir).resolve()
     app["ssl_cert"] = args.ssl_cert or ""
@@ -927,6 +1243,8 @@ def build_app(args) -> web.Application:
     app.router.add_get("/certs/server.crt", handle_cert)
     app.router.add_get("/logs", handle_logs_index)
     app.router.add_get("/logs/{filename}", handle_log_file)
+    app.router.add_get("/api/logs", handle_logs_api)
+    app.router.add_get("/api/health", handle_health)
     app.router.add_get("/api/noaa/{tail:.*}", handle_proxy_noaa)
     app.router.add_get("/api/open-meteo/{tail:.*}", handle_proxy_open_meteo)
     app.router.add_get("/data/meta.json", handle_meta)
@@ -943,9 +1261,16 @@ def build_app(args) -> web.Application:
     async def handle_root(_request):
         return web.FileResponse(static_dir / "index.html")
     app.router.add_get("/", handle_root)
+
+    # Navigation hub. The map stays at "/" so nothing about the existing
+    # bookmark changes; /hub is the index of everything else.
+    async def handle_hub(_request):
+        return web.FileResponse(static_dir / "hub.html")
+    app.router.add_get("/hub", handle_hub)
     # Static site last — catches everything else (JS, CSS, images, manifest, sw.js).
     app.router.add_static("/", static_dir, show_index=False, follow_symlinks=False)
 
+    app["started_monotonic"] = time.monotonic()   # monotonic, not wall clock (P33)
     app.on_startup.append(on_startup)
     app.on_cleanup.append(on_cleanup)
     return app
@@ -958,6 +1283,20 @@ def main():
     p.add_argument("--ssl-key", default=None)
     p.add_argument("--tcp-host", default="192.168.47.10")
     p.add_argument("--tcp-port", type=int, default=10110)
+    p.add_argument(
+        "--udp-port", type=int, default=10110,
+        help="UDP port to listen on for NMEA datagrams; 0 disables. Runs "
+             "alongside the TCP client — the receiver speaks one or the other.",
+    )
+    p.add_argument(
+        "--udp-allow-any", action="store_true",
+        help="Accept NMEA UDP from any source, not just --tcp-host.",
+    )
+    p.add_argument(
+        "--udp-bind", default="0.0.0.0",
+        help="Address the UDP listener binds. Narrow this when the Pi joins "
+             "marina or hotspot WiFi.",
+    )
     p.add_argument("--mmsi", type=int, default=338361814)
     p.add_argument("--cache-dir", default="cache")
     p.add_argument("--log-dir", default=str(Path(__file__).resolve().parent.parent / "logs"))
@@ -984,6 +1323,9 @@ def main():
     app = build_app(args)
     log.info("Boat server starting at %s://0.0.0.0:%d/", scheme, args.port)
     log.info("NMEA bridge → tcp://%s:%d", args.tcp_host, args.tcp_port)
+    if args.udp_port:
+        log.info("NMEA bridge → udp://0.0.0.0:%d (from %s)", args.udp_port,
+                 "any" if args.udp_allow_any else args.tcp_host)
     log.info("Own MMSI: %d", args.mmsi)
     web.run_app(app, host="0.0.0.0", port=args.port, ssl_context=ssl_ctx, access_log=None)
 

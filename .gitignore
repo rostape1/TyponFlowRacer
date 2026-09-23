@@ -49,3 +49,8 @@ wind_radar.html
 
 # Route test harness disk cache
 tests/.cache/
+
+# Pi reverse-proxy disk cache — created by running boat_server.py locally.
+# Leading slash anchors it to the repo root: an unanchored `cache/` would also
+# swallow any nested directory of that name (P23).
+/cache/

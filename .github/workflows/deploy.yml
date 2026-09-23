@@ -40,6 +40,9 @@ jobs:
       - name: Run cross-file invariant tests
         run: node tests/test_invariants.mjs
 
+      - name: Run replay/scrub tests
+        run: node tests/test_replay.mjs
+
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'

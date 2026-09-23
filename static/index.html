@@ -29,6 +29,22 @@
     <div id="map"></div>
 
     <!-- Offline banner -->
+    <!-- Environmental layers are present-day, not from the recording. SFBOFS
+         keeps only the newest run, so a past current field simply does not exist.
+         Rather than draw today's tide over a historical track, switch the layers
+         off and say why. -->
+    <div id="replay-env-banner" class="replay-env-banner hidden">
+        Tide, current and wind layers are OFF during replay — they would show
+        <strong>today's</strong> conditions, not the recording's
+    </div>
+
+    <!-- No live NMEA feed. An empty chart with no explanation is the "looks fine,
+         isn't" failure this app exists to avoid: say so, and offer the way out. -->
+    <div id="nofeed-banner" class="nofeed-banner hidden">
+        <span>NO LIVE NMEA FEED — not connected to the boat's receiver</span>
+        <button id="nofeed-replay-btn">Replay a recording</button>
+    </div>
+
     <div id="offline-banner" class="offline-banner hidden">
         OFFLINE — using cached data
         <span id="offline-cache-age"></span>
@@ -77,6 +93,7 @@
         <button id="vessels-toggle" title="Toggle vessel list">Vessels: OFF</button>
         <button id="labels-toggle" class="labels-off" title="Toggle competitor labels">Labels: OFF</button>
         <button id="route-toggle" class="route-off" title="Plan optimal route">Route</button>
+        <button id="replay-toggle" class="replay-off" title="Replay a saved recording">Replay</button>
     </div>
 
     <!-- Forecast quick buttons (mobile only, replaces timeline scroll) -->
@@ -198,14 +215,6 @@
                 </label>
             </div>
             <div id="nmea-replay-controls" class="nmea-replay-controls hidden">
-                <button id="replay-pause" class="replay-btn">⏸</button>
-                <select id="replay-speed">
-                    <option value="1">1x</option>
-                    <option value="2">2x</option>
-                    <option value="5">5x</option>
-                    <option value="10">10x</option>
-                    <option value="0">Max</option>
-                </select>
                 <span id="replay-progress">0%</span>
             </div>
         </div>
@@ -351,8 +360,37 @@
         </div>
     </div>
 
+    <!-- Playback transport. Global, not inside a view: replay drives the Map,
+         Charts and Radar through the same store, so the scrubber has to stay
+         reachable while you are watching any of them. -->
+    <div id="replay-bar" class="hidden">
+        <select id="replay-log-select" title="Recording to replay (names are local date/time)">
+            <option value="">Select a recording…</option>
+        </select>
+        <button id="replay-restart" class="replay-btn" title="Jump back to the start">⏮</button>
+        <button id="replay-pause" class="replay-btn replay-play-btn" title="Play/pause">⏸ Pause</button>
+        <select id="replay-speed" title="Playback speed">
+            <option value="1">1x</option>
+            <option value="2">2x</option>
+            <option value="5">5x</option>
+            <option value="10">10x</option>
+            <option value="30">30x</option>
+            <option value="60">60x</option>
+            <option value="0">Max</option>
+        </select>
+        <input type="range" id="replay-scrub" min="0" max="0" value="0" step="1"
+               title="Scrub through the recording" />
+        <span id="replay-clock" title="Time in the recording (local)">--:--:--</span>
+        <button id="replay-live" class="replay-btn replay-live" title="Leave replay and reconnect to the live NMEA feed">Exit to Live</button>
+    </div>
+
     <!-- Try local Leaflet first, fall back to CDN -->
     <script>
+        // A module that fails to load must not vanish silently. The chain still
+        // resolves so the rest of the app boots, but the failure is recorded and
+        // logged — otherwise a missing js/nmea-client.js produces an app where
+        // Replay simply does nothing, with an empty console to debug from.
+        window.__bootFailures = [];
         function loadScript(src, fallback) {
             return new Promise((resolve) => {
                 const s = document.createElement('script');
@@ -363,8 +401,16 @@
                         const f = document.createElement('script');
                         f.src = fallback;
                         f.onload = resolve;
+                        f.onerror = () => {
+                            window.__bootFailures.push(src + ' (and fallback ' + fallback + ')');
+                            console.error('[boot] FAILED to load', src, 'and its fallback', fallback);
+                            resolve();
+                        };
                         document.head.appendChild(f);
                     } else {
+                        window.__bootFailures.push(src);
+                        console.error('[boot] FAILED to load', src,
+                            '— features depending on it will silently do nothing');
                         resolve();
                     }
                 };

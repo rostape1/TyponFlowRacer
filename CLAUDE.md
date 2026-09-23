@@ -106,9 +106,9 @@ known-good code. Prefer that when you're not at the boat (`P25`). Python changes
 | Port | Owner | Notes |
 |---|---|---|
 | **8080** | `pi/boat_server.py` via `start_boat.sh` | HTTP. The boat server. `PORT` env overrides. |
-| 8081 | `nmea_capture.py` status page | `--web-port`, set explicitly in `startup.sh` |
+| 8081 | `nmea_capture.py` status page | `--web-port`, set explicitly in `startup.sh`. Also the disk-space alert (`P34`) |
 | 8888 | local dev static server, and legacy `main.py` | `python3 -m http.server 8888 --directory static` |
-| 10110 | AIS receiver (TCP, `192.168.47.10`) | Bridged to `/nmea` WebSocket by the boat server |
+| 10110 | AIS receiver (`192.168.47.10`) | **UDP broadcast since 2026-09-14 — this is the live path.** The Pi listens on `0.0.0.0:10110`, accepting only from `--tcp-host`. The TCP client still runs as a fallback and fails by design; `ECONNREFUSED` there is now normal (`P40`) |
 | 8443 | *nothing* — historical HTTPS default | Source of a five-file drift bug (`P24`). Only used if you pass `--ssl-cert`. |
 | 8765 / 8766 | legacy `nmea_ws_proxy.py` standalone | Superseded. Still the last-resort NMEA fallback in `app.js`: **8765 for `ws://`, 8766 for `wss://`**, picked from `location.protocol`. On GitHub Pages (HTTPS) it therefore probes `wss://raspberrypi.local:8766` and logs a benign `ERR_NAME_NOT_RESOLVED` off-boat. |
 
@@ -155,9 +155,12 @@ GitHub Actions (scheduled)        │  GitHub Pages                   │
                           │  GET /api/open-meteo/* disk cache      │
                           │  GET /data/*       → GH Pages + cache  │
                           │                      + local fallback  │
+                          │  GET /hub          → navigation hub    │
                           │  GET /logs         → NMEA log browser  │
+                          │  GET /api/logs     → log index (JSON)  │
                           │  WS  /nmea         → TCP 192.168.47.10 │
                           │                      :10110 bridge     │
+                          │                      + UDP :10110      │
                           │                                        │
                           │  Background: SFBOFS pre-warm loop      │
                           │  + env pre-warm (wind/tides/currents)  │
@@ -202,7 +205,7 @@ its freshness. **Audit before changing offline behavior.** Mechanics and rationa
 | Meta JSON | `/data/meta.json` | ✓ | n/a | 60s TTL |
 | **NOAA chart tiles** | filesystem `/tiles/noaa/{z}/{x}/{y}.png` | `download_offline.py` | n/a | **default layer**; ArcGIS REST upstream |
 | Esri Dark Gray / OSM / OpenSeaMap tiles | filesystem `/tiles/{dark,osm,sea}/…` | `download_offline.py` | n/a | z10-15 only (`P15`) |
-| Local NMEA stream | `/nmea` (WebSocket) | n/a | n/a | TCP→WS bridge to 192.168.47.10:10110 |
+| Local NMEA stream | `/nmea` (WebSocket) | n/a | ✓ `/api/health` `nmea.transport` | **UDP broadcast** from 192.168.47.10:10110 → WS bridge; TCP client is the standing fallback (`P40`) |
 | AISstream.io | n/a | n/a | n/a | disabled in boat mode |
 
 ---
@@ -257,6 +260,19 @@ safely. Look up your group's IDs in [docs/pitfalls.md](docs/pitfalls.md), by ID,
 - A pruning score must stay strictly monotonic in distance `P30`
 - The 200 m land buffer must be dropped near the destination or harbors are unreachable `P31`
 
+### Touching NMEA logging, the capture status page or playback
+- The Pi has no RTC, so any duration from wall clock counts the NTP step as elapsed `P33`
+- NMEA logs are race data and are never deleted; the guard is a free-space alert `P34`
+- The replay transport measures the visible bottom bars; `offsetParent` is null when fixed `P35`
+- A closed WebSocket's handlers fire late and clobbered replay status mid-playback `P36`
+- Own-ship marker needs bulk-coalescing plus a movement deadband or it shakes `P37`
+- `startup.sh` git-pulls itself, so shell/systemd changes land one boot late `P38`
+- A dead logger and a silent NMEA source look identical; `/api/health` separates them `P39`
+- The receiver is a single-client-TCP Lantronix XPort; any power cut can lock the Pi out `P40`
+
+### Touching static serving, the browser cache or the boot script chain
+- Unversioned JS with no `Cache-Control` let Chrome run last week's app against today's Pi `P41`
+
 ---
 
 ## File Map
@@ -275,8 +291,9 @@ safely. Look up your group's IDs in [docs/pitfalls.md](docs/pitfalls.md), by ID,
 
 | File | Purpose |
 |------|---------|
-| `index.html` | Single page: tab bar (Map/Charts/Radar), map, side panel, legends, timeline, modals |
-| `js/app.js` (~2500 lines) | Leaflet map, vessel markers, popups, CPA/TCPA, search, forecast UI, offline pre-fetch, config bootstrap, tile-layer selection |
+| `index.html` | Single page: tab bar (Map/Charts/Radar), map, side panel, legends, timeline, modals, playback transport |
+| `hub.html` | Navigation hub at `/hub` — links every view plus live storage figures from `/api/logs` |
+| `js/app.js` (~3300 lines) | Leaflet map, vessel markers, popups, CPA/TCPA, search, forecast UI, offline pre-fetch, config bootstrap, tile-layer selection |
 | `js/aisstream.js` | Browser WebSocket to AISstream.io → internal vessel format |
 | `js/vessel-store.js` | In-memory vessel DB, track history, localStorage persistence |
 | `js/data-loader.js` | NOAA CO-OPS tides/currents/water levels + Open-Meteo wind, client-side interpolation, SFBOFS staleness gate |
@@ -297,13 +314,13 @@ safely. Look up your group's IDs in [docs/pitfalls.md](docs/pitfalls.md), by ID,
 
 | File | Purpose |
 |------|---------|
-| `pi/boat_server.py` | **The boat server.** aiohttp: serves `static/`, reverse-proxies + disk-caches NOAA/Open-Meteo/GH-Pages, bridges NMEA TCP→WS at `/nmea`, synthesizes `/config.json`, runs both pre-warm loops. HTTP :8080. |
+| `pi/boat_server.py` | **The boat server.** aiohttp: serves `static/`, reverse-proxies + disk-caches NOAA/Open-Meteo/GH-Pages, bridges NMEA (TCP client **and** UDP listener) → WS at `/nmea`, synthesizes `/config.json`, runs both pre-warm loops. HTTP :8080. |
 | `pi/startup.sh` | systemd entrypoint: `git reset --hard origin/boat-mode`, start `nmea_capture.py`, exec `start_boat.sh` |
 | `pi/ais-tracker.service` | systemd unit, runs as `rostape1`, `Restart=on-failure` |
 | `pi/requirements.txt` | `aiohttp`, `websockets` |
 | `start_boat.sh` | Foreground launcher, `PORT=8080` default |
 | `nmea_capture.py` | Hourly-rotated NMEA logger into `logs/`, browsable at `/logs` |
-| `nmea_ws_proxy.py` | Legacy standalone TCP→WS proxy (:8765). Superseded, but `nmea_tcp_broadcast()` is still imported by `boat_server.py`. |
+| `nmea_ws_proxy.py` | Legacy standalone TCP→WS proxy (:8765). Superseded, but `nmea_tcp_broadcast()` and `nmea_udp_broadcast()` are still imported by `boat_server.py`. |
 | `download_offline.py` | Manual idempotent tile + asset pre-fetch into `static/tiles/`. `DEFAULT_BOUNDS` is authoritative. |
 
 ### Legacy backend (root, reference / local dev only)
@@ -320,7 +337,8 @@ SQLite schema they use (`vessels`, `positions`, WAL mode) is superseded in the b
 | `tests/test_physics.mjs` | `route-worker.js` polar lookup + apparent wind math, `new Function` sandbox with stubbed `self`. In CI. |
 | `tests/test_staleness.mjs` | SFBOFS staleness gate (`P01`) + download sweep (`P03`): stale-seed deadlock, NOW-vs-+4h aliasing, high-res parity, 49-call request budget. Sandboxed `fetch`, no network. In CI. |
 | `tests/test_invariants.mjs` | Cross-file invariants — the traps that live in the gap between two files. `sw.js` host matching (`P18`) and quota eviction (`P16`) are **functional**: `sw.js` is loaded in a sandbox with a fake Cache API and its real functions called. Tile zoom range (`P15`) and the Pi port/scheme (`P24`) are cross-file source assertions, because the thing under test *is* agreement between two files' literals. In CI. |
-| `tests/test_boat_server.py` | Pi proxy + cache: JS↔Python parity (`P20`, incl. `toFixed` comparison against real `node`), UTC-rollover alias (`P06`), captive portals (`P07`), 404-vs-5xx (`P08`), stale ceilings, single-flight, prune, allowlists. In CI; needs `pip install -r pi/requirements.txt`. |
+| `tests/test_boat_server.py` | Pi proxy + cache: JS↔Python parity (`P20`, incl. `toFixed` comparison against real `node`), UTC-rollover alias (`P06`), captive portals (`P07`), 404-vs-5xx (`P08`), stale ceilings, single-flight, prune, allowlists. Also the NMEA transports (`P40`): UDP reassembly, source filtering, bridge-task liveness in `/api/health`. In CI; needs `pip install -r pi/requirements.txt`. |
+| `tests/test_replay.mjs` | Playback scrub (`nmea-client.js`) in a sandbox with a fake store and controllable clock. The invariant: seeking to N leaves the store identical to playing through to N. Mutation-tested. In CI. |
 | `tests/test_route.mjs` | End-to-end route runs against live SFBOFS + Open-Meteo. Prints ETA/distance/avg/ratio per variant, ~13s for four. **Use this instead of screenshots for router work.** Not in CI (network). |
 | `pi/test_boat_server.sh` | Curl smoke test against a running Pi: proxy byte-parity, local fallback, SSRF rejection, `X-Cache` MISS→HIT, `/nmea` upgrade. Not in CI (live server). |
 
@@ -328,18 +346,20 @@ SQLite schema they use (`vessels`, `positions`, WAL mode) is superseded in the b
 node tests/test_physics.mjs        # polar + apparent wind
 node tests/test_staleness.mjs      # staleness gate + download sweep
 node tests/test_invariants.mjs     # cross-file invariants (sw.js, zoom range, ports)
+node tests/test_replay.mjs         # playback seek/scrub invariant
 python3 tests/test_boat_server.py  # Pi proxy/cache + JS↔Python parity
 ```
 
-CI runs all four in `deploy.yml`'s `test` job, plus `py_compile` on the Pi/root Python and `bash -n`
+CI runs all five in `deploy.yml`'s `test` job, plus `py_compile` on the Pi/root Python and `bash -n`
 on the boat shell scripts.
 
-**14 of the 32 pitfalls are mechanically enforced** — a test fails if you undo the fix. Those are
-`P01` `P03` `P06` `P07` `P08` `P10` `P11` `P15` `P16` `P18` `P20` `P21` `P22` `P24`. The rest are
+**20 of the 41 pitfalls are mechanically enforced** — a test fails if you undo the fix. Those are
+`P01` `P03` `P06` `P07` `P08` `P10` `P11` `P15` `P16` `P18` `P20` `P21` `P22` `P24` `P33` `P34` `P36` `P37` `P40` `P41`. The rest are
 documentation-only: the index is the only thing standing between you and re-introducing them. If you
 fix a doc-only pitfall's code area, consider whether an assertion could move it into the enforced set.
 
-Code that implements a guarded pitfall **cites its ID in a comment** (`grep -rn 'P0[0-9]' pi/ static/js/`),
+Code that implements a guarded pitfall **cites its ID in a comment**
+(`grep -rnE 'P[0-4][0-9]' pi/ static/js/ nmea_ws_proxy.py` — a `P0[0-9]` pattern silently misses everything past P09),
 so the trap is discoverable from the code, not only from this file.
 
 ## Data and services
@@ -427,6 +447,14 @@ sudo journalctl -u ais-tracker -f
   across gauges: green ≤0.3ft, yellow ≤0.5ft, red above. Higher water → stronger currents and
   earlier slack.
 - **Position data kept permanently** — for post-voyage analysis.
+- **NMEA logs kept permanently too** — no retention sweep; a free-space alert on `:8081`
+  guards the card, and a failing write says "disk", not "disconnected" (`P34`).
+
+- **Navigation hub** at `/hub` — links every view; map stays at `/`.
+- **Race playback** — pick a Pi recording, scrub to any moment; drives Map, Charts and Radar alike.
+  Rolls into the next recording by itself when one runs out, but only if it is genuinely contiguous —
+  a distant successor stops playback and says how far away it is.
+  Details: [docs/logging-and-playback.md](docs/logging-and-playback.md).
 
 ## Key patterns
 
@@ -484,6 +512,8 @@ new topic doc gets a row in the map below.
 | **Critical pitfalls** — solved traps, full writeups, retrieve by ID | [docs/pitfalls.md](docs/pitfalls.md) |
 | **Offline caching** — both layers, TTLs, stale-on-error, the date alias, SW eviction | [docs/offline-cache.md](docs/offline-cache.md) |
 | **Route optimizer** — isochrone search, wind frame, pruning, polars, variants | [docs/router.md](docs/router.md) |
+| **Logging, hub and playback** — retention, the disk alert, the transport, seek semantics | [docs/logging-and-playback.md](docs/logging-and-playback.md) |
+| **NMEA receiver hardware** — the XPort, why a refusal is ambiguous, safe probing, TCP↔UDP | [docs/nmea-hardware.md](docs/nmea-hardware.md) |
 | Land mask — TIGER/Line polygons, water/land detection | [docs/land-mask.md](docs/land-mask.md) |
 | Router open work / next session notes | [docs/router-next-session.md](docs/router-next-session.md) |
 | **Pre-ship review gate** — the 5 passes, pitfall injection, adversarial verification | [.claude/skills/pre-ship-review/SKILL.md](.claude/skills/pre-ship-review/SKILL.md) |

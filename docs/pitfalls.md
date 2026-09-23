@@ -16,8 +16,8 @@ re-introduces a bug already paid for.
 > IDs are permanent. Never renumber. New pitfalls take the next unused number, even if an
 > earlier one is retired.
 >
-> **14 of these are mechanically enforced** — `P01` `P03` `P06` `P07` `P08` `P10` `P11` `P15` `P16`
-> `P18` `P20` `P21` `P22` `P24` have a test that fails if the fix is undone. Entries marked
+> **20 of these are mechanically enforced** — `P01` `P03` `P06` `P07` `P08` `P10` `P11` `P15` `P16`
+> `P18` `P20` `P21` `P22` `P24` `P33` `P34` `P36` `P37` `P40` `P41` have a test that fails if the fix is undone. Entries marked
 > **`ENFORCED`** name the test. The rest rely on this file being read, so if you touch a doc-only
 > pitfall's code area, ask whether an assertion could promote it.
 >
@@ -194,7 +194,8 @@ mint unlimited entries with junk query params. A full SD card also stops `nmea_c
 logs, so you lose the voyage record as collateral.
 
 `DiskCache.prune()` runs once per SFBOFS cycle: age sweep at `CACHE_MAX_AGE_S`, then oldest-first
-until under `CACHE_MAX_BYTES`. Same shape as `nmea_capture.py:cleanup_old_logs()`.
+until under `CACHE_MAX_BYTES`. Note the contrast with NMEA logs, which are **never** pruned ([P34]):
+cache entries are refetchable, recordings are not.
 
 ## "Pre-warm complete: 0 hours cached" was logged as success [P12]
 
@@ -412,6 +413,267 @@ and lost the wavefront's spread. `bestToDest` is always carried forward regardle
 The 200m land buffer that keeps routes off the shore also makes every harbor and shoreline waypoint
 unreachable. Within `DEST_APPROACH_NM` (1nm) of the destination the buffer is dropped and strict
 `_isLand` is used instead. Monterey harbor was unreachable at 2.8nm before this.
+
+---
+
+## NMEA logging, the capture status page and playback
+
+## Elapsed time must be monotonic — the Pi has no clock [P33]
+
+**`ENFORCED`** — `tests/test_boat_server.py` AST-walks `nmea_capture.py`: no `start_time` subscript
+exists anywhere, and `status_html()` must call `uptime_seconds()` and must not call `time.time()`.
+Verified by mutation: reintroducing the bug fails two assertions.
+
+A Raspberry Pi has no battery-backed RTC. It boots believing whatever `fake-hwclock` last wrote to
+the SD card, then NTP steps the clock — possibly by months — once the network comes up. Anything
+that measures a duration as `time.time()` now minus a `time.time()` captured at startup counts that
+correction as elapsed time.
+
+The status page reported **`112d 16h 12m` uptime for a process 35 minutes old**, after the Pi had
+been unplugged for a week — the gap from the last `fake-hwclock` save (May 23) to the real date
+(Sep 13). Nobody would have noticed the number was fiction, and it invites exactly the wrong
+conclusion: "capture has been running continuously, so the feed is fine."
+
+Use `time.monotonic()` for every duration; wall clock is only for timestamps you intend to display.
+There is deliberately **no wall-clock start timestamp in `stats`** — leaving one there is an
+invitation for the next person to subtract it. The same trap applies to any age-based sweep — see
+[P34].
+
+## NMEA logs are never deleted, and that needs a guard [P34]
+
+**`ENFORCED`** — `tests/test_boat_server.py` asserts `nmea_capture.py` defines no `cleanup_old_logs`
+/ `cleanup_loop`, has no `KEEP_DAYS`, and calls no `os.remove` / `os.unlink` / `shutil.rmtree`; plus
+ten functional assertions on the alert itself (headroom numerator, minimum sample, the write-error
+headline, memoisation).
+
+`nmea_capture.py` used to delete logs older than `KEEP_DAYS = 28`. They are race recordings — the
+only copy of what actually happened, and the input to the playback viewer. Four months of sailing
+data survived only because the sweep ran with the wrong clock ([P33]); once the clock corrected,
+the next hourly pass would have deleted 27 files.
+
+The sweep is gone. Nothing in `nmea_capture.py` deletes a file. **This is the opposite of the HTTP
+cache**, which still prunes hard ([P11]) because every byte in it is refetchable.
+
+"Keep forever" on an SD card is its own hazard, so the guard is an alert, not a deletion: the status
+page shows total log size, free space and a projected headroom in days, going amber under 5 GB and
+red under 1 GB. If the card fills, writes fail and capture stops silently — the alert is the only
+thing standing between the operator and that.
+
+Three things about that alert are load-bearing, and all three were wrong on the first attempt:
+
+- **A failing write is reported as a storage fault, not a link fault.** `_outfile.write()` raising
+  `OSError` used to unwind into `capture_ws()`'s `except (OSError, …)` reconnect handler, so a full
+  card displayed 🔴 **Disconnected** — indistinguishable from a VHF or receiver failure, and the
+  first thing an operator would go and power-cycle. `log_sentence()` now catches it, sets
+  `stats["write_error"]`, and that outranks the connection dot.
+- **The headroom projection divides bytes written by *this process* by its own uptime.** Dividing
+  the log *directory* total instead reported a Pi restarted a minute ago as filling the card at
+  hundreds of MB/s — "~0 hours left" beside a green 🟢 158 GB row. A gauge that cries wolf on every
+  restart is a gauge nobody reads, which defeats the whole point.
+- **Nothing is projected before `HEADROOM_MIN_SAMPLE_S`** (10 min). No number beats a wrong one here.
+
+`disk_stats()` is memoised for 30s: the page self-refreshes every 5s over a directory that now grows
+without bound (~8.8k files/year), in the same process writing the live NMEA stream.
+
+## The transport bar is positioned against measured bars, not a fixed offset [P35]
+
+The bottom of the map is a stack of independently-toggled fixed elements — `layers-tray`,
+`timeline-strip`, `status-bar`, `forecast-quick-btns` — and which are visible depends on the active
+tab and the viewport. A hardcoded `bottom:` for `#replay-bar` overlapped the Vessels/Labels/Route
+buttons on desktop and the layer toggles on mobile.
+
+`positionReplayBar()` in `app.js` measures the topmost visible bar and sets `bottom` from it. Two
+traps if you rewrite it:
+
+- **`offsetParent` is `null` for `position: fixed` elements**, by spec, even when fully visible.
+  Using it as the visibility test skips every bar and collapses the transport onto the status bar.
+  Test with `getComputedStyle(el).display === 'none'` instead.
+- The mobile stack collapses via the hamburger **without firing `resize`**, so a `ResizeObserver` on
+  those bars is what keeps it correct, not the window event alone.
+
+## A closed WebSocket's handlers fire late and clobber replay state [P36]
+
+**`ENFORCED`** — `tests/test_replay.mjs`: a stale socket's `onclose` must not change status, and its
+`onmessage` must not ingest into a running replay.
+
+`startReplay()` calls `disconnect()`, which closes the live socket. But `close()` is asynchronous:
+the socket's `onclose` fires *afterwards*, and the handlers were bound to `this`, so it set the
+client status to `'disconnected'` **while the recording was playing**. The header read
+"Disconnected" over a visibly advancing scrubber, which is what made the transport look broken —
+the user reported "there was no play button" because nothing on screen said playback was running.
+
+`onmessage` was the more dangerous half: a late-arriving live sentence would ingest into the middle
+of a replay, mixing present-day instrument data into a historical picture.
+
+Fix: `_doConnect()` captures the socket in a local and every handler checks
+`this.ws === sock && !this._stopped` before acting. Do not "simplify" that back to `this.ws`.
+
+## The own-ship marker needs a deadband, or it shakes [P37]
+
+**`ENFORCED`** — `tests/test_replay.mjs` covers the coalescing half (one bulk span per playback
+frame); the deadband itself is doc-only.
+
+Two compounding causes, both of which have to stay fixed:
+
+1. **Coalescing.** `nmea-store` dispatches `'ais'` synchronously per sentence, and its listener
+   calls `updateMarker()` + `updatePanel()` (a full `innerHTML` rebuild of up to 50 cards). Replay
+   ingests in bulk, so every replay ingest — the per-frame batch **and** a seek — runs inside
+   `beginBulk()`/`endBulk()`, which coalesces to one `'ais-batch'` event. Without it a scrub froze
+   the tab for minutes and normal playback redrew hundreds of times a second.
+2. **A deadband on own position.** GPS arrives at ~10 Hz and a boat at the dock has a couple of
+   metres of noise; its AIS position is coarser and disagrees. Redrawing on every event made the
+   icon visibly shake. `ownMarkerNeedsUpdate()` holds the marker unless it moved >2 m
+   (`OWN_MOVE_DEG`), turned >2° (`OWN_TURN_DEG`), and at least 200 ms has passed.
+
+The deadband is not cosmetic: a jittering own-ship icon on a navigation display is actively
+misleading about your own position. If you raise the thresholds, check a moving boat still tracks
+smoothly — at 6 kn the marker updates ~1.5×/s, which is the intended floor.
+
+## A shell script that git-pulls itself deploys one boot late [P38]
+
+`pi/startup.sh` does `git reset --hard origin/boat-mode` and is *itself* under
+that reset. bash reads a script incrementally as it executes, so the running
+instance keeps following the version it started with. Python files are read when
+their process starts — which happens *after* the pull — so they DO get the new
+code immediately.
+
+Net effect: after one power-cycle, `boat_server.py` was on the new commit
+(`/api/health` existed) while `startup.sh` was still the old one (no boot log, no
+logger supervision, SSH key not installed). It looks like a partial or corrupted
+deploy and is neither.
+
+**Anything you change in `startup.sh`, `start_boat.sh`, or the systemd unit takes
+effect on the boot *after* the one that pulls it.** Two power-cycles, or verify
+with something the new shell code produces — `logs/startup.log` existing is the
+cheap tell.
+
+## "The logger is dead" and "the logger has nothing to log" look identical [P39]
+
+On 2026-09-13 recording stopped and the first conclusion was that
+`nmea_capture.py` had crashed: `:8081` was refusing connections and the log file
+had frozen. It had not crashed — it was running, connected, and receiving zero
+sentences, because the NMEA source had stopped sending.
+
+The two states are indistinguishable from outside unless something reports the
+*feed*, not just the process and the file. `/api/health` therefore reports
+`nmea.lines`, `nmea.last_line_age_s` and the source `host:port` alongside logger
+liveness, and `recording` is computed from whether the newest log is actually
+growing — not from whether a process exists.
+
+Note the subtlety in how those line counts are collected: `nmea_tcp_broadcast`
+invokes `send_fn` once per connected client, so counting inside the send path
+sees nothing when no browser is attached — precisely the situation you are
+debugging. A stats-only pseudo-client sits permanently in the client snapshot so
+every line is observed regardless.
+
+Also: the receiver answering ARP proves its network interface is powered, and
+nothing more. An MDA-5 with the instrument bus off is present on the LAN and
+silent on TCP.
+
+---
+
+## A single-client TCP feed lets any power cut lock the Pi out [P40]
+
+**`ENFORCED`** — `tests/test_boat_server.py` asserts `on_startup` really starts both transports,
+that the UDP source filter defaults closed and resolves hostnames, that reassembly is per-source
+and bounded, and that shedding drops the oldest line. `tests/test_replay.mjs` asserts AIS
+sentences are checksum-validated. Verified by mutation: each fix reverted fails the suite.
+
+The NMEA source at `192.168.47.10:10110` is a **Lantronix XPort** serial-to-Ethernet bridge with
+its own power switch — not the MDA-5's own network stack. It serves TCP to **one client at a
+time** and answers everyone else with `ECONNREFUSED`, so a refusal means *either* "another client
+holds the slot" *or* "the box isn't listening", and nothing observable from outside separates
+them. Device identification, safe probing and the config procedure live in
+[nmea-hardware.md](nmea-hardware.md) — read it before touching the receiver.
+
+On 2026-09-13/14 this cost ~10 hours of recording. The Pi logged `ECONNREFUSED` every 5 seconds
+for hours while every layer we own — bridge task, logger, disk, server — was healthy. An abrupt
+Pi power-off sends no FIN, so a session the Pi no longer owns can stay claimed on the receiver,
+and the Pi is then locked out for an unbounded time. That directly violates a hard requirement:
+the boat's Pi gets shut down whenever nobody is aboard.
+
+**The fix is the transport, not the retry logic.** No amount of Pi-side code helps, because the
+damage is done after the Pi is already dead. UDP datagram mode is connectionless: no session to
+orphan, no single-client slot. `boat_server.py` runs `nmea_udp_broadcast()` *and*
+`nmea_tcp_broadcast()` simultaneously — the XPort speaks one protocol at a time, so only one can
+ever deliver, and a reverted config keeps working with no redeploy.
+
+**The receiver was switched to UDP broadcast on 2026-09-14 and that is what the boat runs on.**
+Verified: rebooting the Pi now restores the feed in ~12 seconds unattended, where the same reboot
+previously locked the receiver for 20+ minutes and needed a physical power-cycle. Settings and the
+revert procedure: [nmea-hardware.md](nmea-hardware.md). Two XPort settings caused the lockout —
+`Hard Disconnect: No` and `Inactivity Timeout: 0:0` — so nothing ever reaped a dead session; if you
+ever revert to TCP, set the inactivity timeout.
+
+Consequence to keep in mind: with the receiver in UDP mode the TCP client fails **forever by
+design**. Its retry therefore backs off (`retry_delay()`, 5s → 60s) and logs only when the backoff
+step changes. A fixed 5s retry would put ~17k lines a day into `startup.log`, which shares a
+directory with the race recordings and has no rotation (`P11`, `P34`).
+
+Five things that are easy to get wrong here, each of which shipped as a bug in the first draft:
+
+- **A datagram is not a line.** One packet may carry several sentences or split one across two, so
+  a remainder is carried between packets — **per source address**, or two senders splice into each
+  other. Bound only the *remainder*, after splitting: bounding the whole buffer discards the
+  complete sentences in front of it and resyncs mid-sentence, manufacturing the very splice you
+  are trying to avoid.
+- **Lossy framing means AIS must be checksum-validated.** `nmea-parser.js` used to return `!`
+  sentences unvalidated, which was safe only because TCP framing made splices impossible. Over UDP
+  one dropped datagram yields a syntactically perfect AIVDM carrying garbage, which decodes to a
+  vessel with an arbitrary MMSI at an arbitrary position — on the map, the radar, in CPA/TCPA, and
+  permanently in the race log.
+- **An open UDP listener on the boat LAN is not a neutral default.** Position and AIS data steer a
+  boat. Accept only from `--tcp-host`, **resolved to literal IPs** — a hostname compared against a
+  datagram's dotted-quad source matches nothing and silently discards the entire feed. Count
+  rejections into `/api/health`: "refusing every datagram" and "receiver is silent" otherwise read
+  identically, which is the `P39` failure all over again.
+- **Shed the oldest line, never the newest.** A full queue of stale positions walks own-ship
+  through a 40-second-old track while health shows lines flowing and `last_line_age_s` near zero.
+- **No `SO_REUSEADDR` on the UDP socket.** UDP has no `TIME_WAIT`, so it buys nothing; on Linux it
+  lets a second process bind the same port, after which each datagram reaches only one of them and
+  both report "listening". A hard `EADDRINUSE` is the better outcome.
+
+Finally, the TCP path must **close its socket before reconnecting**. `asyncio.open_connection`
+returns a writer; discarding it leaves the old socket ESTABLISHED because the event loop still
+holds the transport, so after a 30-second read timeout the Pi reconnects while its own previous
+session is still open and is refused by its own receiver — this lockout with no power cut
+involved.
+
+---
+
+## Unversioned static URLs with no Cache-Control ship a deploy that never arrives [P41]
+
+**`ENFORCED`** — `tests/test_boat_server.py` asserts `revalidate_static` sets `no-cache` on
+`.html/.js/.css`, leaves tiles and images cacheable, and never downgrades a handler's own
+`no-store`. Verified by mutation: removing the header fails four assertions.
+
+On 2026-09-14 the Replay button "did nothing" on the Pi. Everything checked out — the Pi was
+serving the current `app.js` (verified by SHA), `/api/logs` returned 18 recordings, and a *fresh*
+headless browser drove the whole flow correctly. Chrome was running an `app.js` from before the
+replay feature existed. `Cmd+Shift+R` fixed it instantly.
+
+`static/index.html` loads every module with an **unversioned** URL (`js/app.js`, not
+`js/app.<hash>.js`), and aiohttp's `add_static` sets only `ETag` and `Last-Modified`. **With no
+`Cache-Control` at all, a browser applies heuristic caching** — it may reuse its stored copy
+without revalidating, for an interval it chooses. So the Pi had the new code and the browser ran
+the old one, with nothing in the console to say so.
+
+`revalidate_static` now sets `Cache-Control: no-cache` on `.html`, `.js`, `.css`, `.webmanifest`,
+`.json`, and on `/` and `/hub`. `no-cache` still *stores* the file — it forces an ETag
+revalidation, which is a 304 on the boat LAN. **Chart tiles and images are deliberately excluded**:
+they are large, effectively immutable, and must stay cacheable for offline use.
+
+Two things follow from this:
+
+- When a UI change "isn't there", check what the *browser* is running before you check the server.
+  CLAUDE.md's browser rule says this already; this is the failure it was written for.
+- `APP_BUILD` in `static/js/app.js` is a **hand-edited** constant and has been stale for dozens of
+  commits, so the hash in the status bar cannot be used to tell what is deployed. Either wire it to
+  the real commit at deploy time or delete it — a version indicator that lies is worse than none.
+
+Same family: `loadScript()` in `index.html` used to swallow `onerror` and resolve, so a module that
+failed to load produced an app where the dependent feature silently did nothing. Failures now log
+and are recorded in `window.__bootFailures`.
 
 ---
 

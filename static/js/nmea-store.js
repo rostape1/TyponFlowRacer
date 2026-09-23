@@ -46,7 +46,33 @@ class NmeaStore extends _EventEmitter {
         this._positionDirty = false;
         this._ownMmsi = 338361814;
 
+        // Bulk mode. During a replay seek, tens of thousands of sentences are
+        // ingested in one synchronous loop; dispatching 'ais' per sentence
+        // drives a Leaflet marker update and a full vessel-panel innerHTML
+        // rebuild each time, which freezes the tab for minutes. In bulk mode
+        // AIS decoding still runs for every sentence (multi-part messages need
+        // it) but only the latest state per MMSI is kept, and endBulk()
+        // dispatches one 'ais-batch' event with all of them.
+        this._bulk = false;
+        this._bulkAis = new Map();
+
         this._startUpdateLoop();
+    }
+
+    beginBulk() {
+        this._bulk = true;
+        this._bulkAis.clear();
+    }
+
+    endBulk() {
+        this._bulk = false;
+        const vessels = Array.from(this._bulkAis.values());
+        this._bulkAis.clear();
+        this.dispatchEvent(new CustomEvent('ais-batch', { detail: vessels }));
+        // Instrument state is coalesced behind dirty flags, but the update loop
+        // cannot have run during a synchronous ingest, so flush it here too.
+        this._dirty = true;
+        this._positionDirty = true;
     }
 
     reset() {
@@ -71,7 +97,12 @@ class NmeaStore extends _EventEmitter {
                 if (parsed.sentence.startsWith('!AIVDO') || vessel.mmsi === this._ownMmsi) {
                     vessel.is_own_vessel = true;
                 }
-                this.dispatchEvent(new CustomEvent('ais', { detail: vessel }));
+                // The time this report was actually made. In replay that is the
+                // log's own timestamp, not now — stamping Date.now() made a
+                // June race look like current traffic.
+                vessel._reportedAt = t;
+                if (this._bulk) this._bulkAis.set(vessel.mmsi, vessel);
+                else this.dispatchEvent(new CustomEvent('ais', { detail: vessel }));
             }
             return;
         }

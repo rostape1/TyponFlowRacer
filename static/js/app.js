@@ -279,8 +279,15 @@ function createVesselIcon(vessel) {
         arrows += `<g class="own-arrow-wind" stroke="#aa46be" fill="#aa46be" stroke-width="1.5" stroke-dasharray="4 2" opacity="0.8">${arrowAt(windDeg, windLen)}</g>`;
     }
 
+    const rings = `
+        <circle class="own-ring-outer" cx="${cx}" cy="${cy}" r="26" fill="none"
+                stroke="${color}" stroke-width="1.5" opacity="0.35"/>
+        <circle class="own-ring-inner" cx="${cx}" cy="${cy}" r="19" fill="none"
+                stroke="${color}" stroke-width="2" opacity="0.85"/>`;
+
     const svg = `<svg width="${ownSize}" height="${ownSize}" viewBox="0 0 ${ownSize} ${ownSize}" xmlns="http://www.w3.org/2000/svg">
         ${arrows}
+        ${rings}
         <g transform="translate(${cx}, ${cy}) rotate(${boatRotation}) translate(-12, -12)">
             <path d="M12 2 L6 20 L12 16 L18 20 Z" fill="${color}" stroke="rgba(0,0,0,0.5)" stroke-width="1"/>
         </g>
@@ -678,6 +685,15 @@ function updateMarker(v) {
                 if (vessel) e.target.getPopup().setContent(buildPopupHtml(vessel));
                 loadSpeedChart(mmsi);
             });
+
+        if (v.mmsi === OWN_MMSI) {
+            marker.bindTooltip(v.name || OWN_NAME || 'OWN', {
+                permanent: true,
+                direction: 'right',
+                offset: [16, 0],
+                className: 'own-vessel-label',
+            });
+        }
         if (!isHidden) marker.addTo(map);
         markers.set(v.mmsi, marker);
     }
@@ -944,15 +960,35 @@ function connectAISStream() {
 setInterval(() => {
     vesselStore.saveIfNeeded();
     const pruned = vesselStore.prune();
-    for (const mmsi of pruned) {
-        vessels.delete(mmsi);
-        const m = markers.get(mmsi);
-        if (m) { map.removeLayer(m); markers.delete(mmsi); }
-        const t = trackLines.get(mmsi);
-        if (t) { map.removeLayer(t.line); trackLines.delete(mmsi); }
-    }
+    for (const mmsi of pruned) removeVesselFromMap(mmsi);
     if (pruned.length > 0) updatePanel();
 }, 30000);
+
+/** Drop one vessel's marker, track line and map-layer state. */
+function removeVesselFromMap(mmsi) {
+    vessels.delete(mmsi);
+    const m = markers.get(mmsi);
+    if (m) { map.removeLayer(m); markers.delete(mmsi); }
+    const t = trackLines.get(mmsi);
+    if (t) { map.removeLayer(t.line); trackLines.delete(mmsi); }
+}
+
+/**
+ * Clear every AIS contact from the store AND the map.
+ *
+ * vesselStore.clearAll() only empties the data structures; the Leaflet markers
+ * and track polylines live in app.js and have to be removed here too. Without
+ * this, entering replay / seeking / returning to Live left the previous
+ * contacts drawn on the chart — a replayed race presenting as live traffic.
+ */
+function clearAllVessels() {
+    for (const mmsi of vesselStore.clearAll()) removeVesselFromMap(mmsi);
+    // Anything still tracked locally (own-ship, cloud AIS) goes too.
+    for (const mmsi of Array.from(vessels.keys())) removeVesselFromMap(mmsi);
+    updatePanel();
+    if (window._radarView && window._radarView.render) window._radarView.render();
+}
+window._clearAllVessels = clearAllVessels;
 
 // --- Panel toggle ---
 const _isMobile = window.innerWidth <= 600;
@@ -2718,6 +2754,23 @@ if (nmeaStore && nmeaClient) {
         });
     });
 
+    // Deep links from the hub page: /#charts, /#radar, /#playback. Playback
+    // opens over the map, since that is what you watch a race on.
+    function applyHash() {
+        const hash = (location.hash || '').replace('#', '');
+        if (!hash) return;
+        const tabFor = { map: 'map-view', charts: 'charts-view', radar: 'radar-view',
+                         playback: 'map-view' };
+        const targetId = tabFor[hash];
+        if (!targetId) return;
+        const btn = document.querySelector(`.tab-btn[data-tab="${targetId}"]`);
+        if (btn) btn.click();
+        if (hash === 'playback' && window._openPlayback) window._openPlayback();
+    }
+    window.addEventListener('hashchange', applyHash);
+    // Run after the rest of this block has defined _openPlayback.
+    setTimeout(applyHash, 0);
+
     // Initialize charts view
     if (sailingCharts) sailingCharts.init();
 
@@ -2736,11 +2789,33 @@ if (nmeaStore && nmeaClient) {
             else if (status === 'replaying') nmeaStatusEl.textContent = `Replay: ${rate}/s`;
             else if (status === 'replay-paused') nmeaStatusEl.textContent = 'Replay: Paused';
             else if (status === 'replay-done') nmeaStatusEl.textContent = 'Replay: Done';
+            else if (status === 'replay-empty') nmeaStatusEl.textContent = 'Replay: empty recording';
             else nmeaStatusEl.textContent = 'NMEA: Off';
         }
     });
 
     // NMEA own position → map + competitor labels
+    //
+    // The own marker is synthesised from GPS, which arrives at ~10 Hz and is
+    // coalesced to one event per animation frame. Redrawing on every one made
+    // the icon shake: a boat at the dock has a couple of metres of GPS noise,
+    // and at 60 fps (or a fast replay) that reads as violent jitter. So hold the
+    // marker still unless it has actually moved or turned.
+    const OWN_MOVE_DEG = 2e-5;      // ~2 m — below this it is noise, not motion
+    const OWN_TURN_DEG = 2;         // heading/COG change worth redrawing for
+    const OWN_MIN_INTERVAL_MS = 200;
+    let _lastOwnRender = null;
+
+    function ownMarkerNeedsUpdate(lat, lon, hdg, now) {
+        if (!_lastOwnRender) return true;
+        if (now - _lastOwnRender.t < OWN_MIN_INTERVAL_MS) return false;
+        const moved = Math.abs(lat - _lastOwnRender.lat) > OWN_MOVE_DEG
+                   || Math.abs(lon - _lastOwnRender.lon) > OWN_MOVE_DEG;
+        const turned = hdg != null && _lastOwnRender.hdg != null
+                    && Math.abs(hdg - _lastOwnRender.hdg) > OWN_TURN_DEG;
+        return moved || turned;
+    }
+
     nmeaStore.addEventListener('position', (e) => {
         nmeaOwnPosition = e.detail;
         if (e.detail.lat && e.detail.lon) {
@@ -2754,8 +2829,13 @@ if (nmeaStore && nmeaClient) {
                 ship_category: 'Sailing/Pleasure',
             };
             vesselStore.upsert(v);
-            updateMarker(v);
             ownVessel = v;
+            const hdg = s.heading != null ? s.heading : s.cog;
+            const now = performance.now();
+            if (ownMarkerNeedsUpdate(e.detail.lat, e.detail.lon, hdg, now)) {
+                _lastOwnRender = { lat: e.detail.lat, lon: e.detail.lon, hdg, t: now };
+                updateMarker(v);
+            }
         }
     });
 
@@ -2775,6 +2855,29 @@ if (nmeaStore && nmeaClient) {
                 ownVessel = merged;
             }
         }
+    });
+
+    // Coalesced AIS from a replay seek. One event carries the latest state per
+    // MMSI, so the panel is rebuilt once instead of once per sentence — a scrub
+    // through a busy log used to fire tens of thousands of innerHTML rebuilds
+    // and freeze the tab for minutes.
+    nmeaStore.addEventListener('ais-batch', (e) => {
+        const list = e.detail || [];
+        for (const v of list) {
+            if (!v || !v.mmsi) continue;
+            vesselStore.upsert(v);
+            const merged = vesselStore.get(v.mmsi);
+            if (merged && merged.lat != null) {
+                vessels.set(merged.mmsi, merged);
+                updateMarker(merged);
+                if (merged.is_own_vessel || merged.mmsi === OWN_MMSI) {
+                    ownPosition = { lat: merged.lat, lon: merged.lon };
+                    window.ownPosition = ownPosition;
+                    ownVessel = merged;
+                }
+            }
+        }
+        if (list.length) updatePanel();
     });
 
     // WebSocket connect button
@@ -2851,46 +2954,481 @@ if (nmeaStore && nmeaClient) {
         } catch (e) { /* silently fail */ }
     }, 2000);
 
-    // File replay
+    // --- Playback transport -------------------------------------------
+    // Replay feeds the same nmea-store as the live WebSocket, so the Map,
+    // Charts and Radar all animate from a recording without knowing where the
+    // sentences came from. This block is only the transport UI.
     const fileInput = document.getElementById('nmea-file-input');
     const replayControls = document.getElementById('nmea-replay-controls');
+    const replayBar = document.getElementById('replay-bar');
+    const replayLogSel = document.getElementById('replay-log-select');
+    const replayRestartBtn = document.getElementById('replay-restart');
     const replayPauseBtn = document.getElementById('replay-pause');
     const replaySpeedSel = document.getElementById('replay-speed');
+    const replayScrub = document.getElementById('replay-scrub');
+    const replayClock = document.getElementById('replay-clock');
+    const replayLiveBtn = document.getElementById('replay-live');
     const replayProgressEl = document.getElementById('replay-progress');
+
+    let replayUiTimer = null;
+    let scrubbing = false;
+
+    // The raw /api/logs array, kept so auto-advance can work out which recording
+    // continues the current one. The <option> list alone is not enough: it is
+    // ordered newest-first, so "the next option" is an hour earlier.
+    let replayLogFiles = [];
+
+    // Sticky message shown in place of the clock once a recording has ended and
+    // playback is not continuing. Cleared whenever playback resumes.
+    let replayEndNote = null;
+
+    // Replay resets and seeks must clear the map's AIS layer, not just the NMEA
+    // store — otherwise a replayed race's contacts stay drawn on the chart, and
+    // survive into Live. And staleness/tracks must be measured in log time.
+    nmeaClient.onReplayReset = () => clearAllVessels();
+    nmeaClient.onReplayClock = (ms) => vesselStore.setReplayClock(ms);
+
+    // Local time. Log files store UTC (with a Z); every display converts.
+    const _tzLabel = (() => {
+        try {
+            return new Intl.DateTimeFormat([], { timeZoneName: 'short' })
+                .formatToParts(new Date())
+                .find(p => p.type === 'timeZoneName').value;
+        } catch (e) { return 'local'; }
+    })();
+    const clockText = (ms) => Number.isFinite(ms)
+        ? new Date(ms).toLocaleTimeString([], { hour12: false })
+        : '--:--:--';
+    if (replayClock) replayClock.title = `Time in the recording (${_tzLabel})`;
+
+    function syncReplayUi() {
+        const p = nmeaClient.getReplayProgress();
+        if (!p) return;
+        if (replayScrub && !scrubbing) {
+            replayScrub.max = String(p.total);
+            replayScrub.value = String(p.current);
+        }
+        if (replayProgressEl) replayProgressEl.textContent = p.pct + '%';
+        if (replayClock && !scrubbing) {
+            // A sticky end-of-recording note outranks the clock. Without this the
+            // 250 ms timer below would overwrite "end — next is 3d later" before
+            // it could be read.
+            if (replayEndNote) {
+                replayClock.textContent = replayEndNote;
+            } else {
+                const r = nmeaClient.getReplayTimeRange();
+                replayClock.textContent = r ? clockText(r.current) : '--:--:--';
+            }
+        }
+        if (replayPauseBtn) {
+            replayPauseBtn.textContent = nmeaClient._replayPaused ? '▶ Play' : '⏸ Pause';
+        }
+    }
+
+    // Pan to own position once, as soon as the recording reveals it. A log can
+    // run for thousands of lines before the first fix, so poll briefly rather
+    // than sampling once and giving up.
+    function _recenterOnOwnWhenFound() {
+        let tries = 0;
+        const timer = setInterval(() => {
+            if (++tries > 60) { clearInterval(timer); return; }
+            const p = window.ownPosition;
+            if (p && p.lat && p.lon) {
+                clearInterval(timer);
+                map.setView([p.lat, p.lon], Math.max(map.getZoom(), 13));
+                if (replayClock) replayClock.title = 'Time in the recording (local)';
+            }
+        }, 500);
+    }
+
+    function startReplayUiSync() {
+        if (replayUiTimer) clearInterval(replayUiTimer);
+        replayUiTimer = setInterval(syncReplayUi, 250);
+        syncReplayUi();
+    }
+
+    function stopReplayUiSync() {
+        if (replayUiTimer) { clearInterval(replayUiTimer); replayUiTimer = null; }
+    }
+
+    // Sit directly above whatever bottom furniture is currently on screen.
+    // The map-only bars (layers tray, timeline) are hidden on Charts and Radar,
+    // so a fixed offset would either overlap the buttons on the map or float
+    // in mid-air everywhere else.
+    const REPLAY_BAR_STACK = ['layers-tray', 'timeline-strip', 'forecast-quick-btns', 'status-bar'];
+
+    function positionReplayBar() {
+        if (!replayBar || replayBar.classList.contains('hidden')) return;
+        let topmost = window.innerHeight;
+        for (const id of REPLAY_BAR_STACK) {
+            const el = document.getElementById(id);
+            if (!el) continue;
+            // Three ways these bars go away, and only one is display:none:
+            //  - tab switch sets inline display:none
+            //  - the mobile hamburger adds .hidden, which is a transform +
+            //    opacity:0 — display stays flex and the box keeps its size, so
+            //    neither a display test nor a ResizeObserver can see it
+            //  - opacity 0 generally
+            const cs = getComputedStyle(el);
+            if (cs.display === 'none') continue;
+            if (el.classList.contains('hidden')) continue;
+            if (parseFloat(cs.opacity) === 0) continue;
+            const r = el.getBoundingClientRect();
+            if (r.height > 0) topmost = Math.min(topmost, r.top);
+        }
+        replayBar.style.bottom = (window.innerHeight - topmost + 8) + 'px';
+    }
+    window.addEventListener('resize', positionReplayBar);
+    // The hamburger collapse is a CSS transform, invisible to both the resize
+    // event and the ResizeObserver, so hook the button itself.
+    const _layersBtn = document.getElementById('layers-btn');
+    if (_layersBtn) _layersBtn.addEventListener('click', () => setTimeout(positionReplayBar, 320));
+    document.querySelectorAll('.tab-btn').forEach(b =>
+        b.addEventListener('click', () => setTimeout(positionReplayBar, 0)));
+    // The mobile bottom stack collapses and expands via the hamburger without
+    // firing a resize, and the tray grows a row when the layer toggles wrap.
+    // Observe it directly rather than hoping for a window event.
+    if (typeof ResizeObserver !== 'undefined') {
+        const ro = new ResizeObserver(() => positionReplayBar());
+        for (const id of REPLAY_BAR_STACK) {
+            const el = document.getElementById(id);
+            if (el) ro.observe(el);
+        }
+    }
+
+    function beginReplay(lineCount) {
+        scrubbing = false;
+        replayEndNote = null;
+        // A zero-byte file (the rotation just created one) or a raw dump with no
+        // ISO timestamps cannot be replayed. Previously the bar appeared, read
+        // NaN%, and sat there — indistinguishable from a working replay of an
+        // empty stretch of water.
+        if (!lineCount || !nmeaClient.getReplayTimeRange()) {
+            if (replayBar) replayBar.classList.remove('hidden');
+            positionReplayBar();
+            if (replayClock) replayClock.textContent = 'empty';
+            if (replayScrub) { replayScrub.max = '0'; replayScrub.value = '0'; }
+            if (replayProgressEl) replayProgressEl.textContent = '—';
+            stopReplayUiSync();
+            console.warn('[playback] recording has no usable timestamps; not starting');
+            return;
+        }
+        // Historical contacts must never be written to localStorage, or they come
+        // back on the next page load as live traffic.
+        vesselStore.setReplayMode(true);
+        clearAllVessels();
+        suspendEnvLayersForReplay();
+        if (replayBar) replayBar.classList.remove('hidden');
+        positionReplayBar();
+        if (replayControls) replayControls.classList.remove('hidden');
+        if (replayScrub) { replayScrub.max = String(lineCount); replayScrub.value = '0'; }
+        nmeaClient.startReplay(parseInt(replaySpeedSel && replaySpeedSel.value) || 1);
+        // Max (value 0) survives startReplay's `speed || 1` coercion only if set
+        // explicitly afterwards, or the dropdown says Max while playing at 1x.
+        if (replaySpeedSel) nmeaClient.setReplaySpeed(parseInt(replaySpeedSel.value));
+        startReplayUiSync();
+        _recenterOnOwnWhenFound();
+    }
+
+    // Populate the recording list from the Pi. Uncached on purpose, and an
+    // outright failure is shown rather than leaving an empty-looking picker
+    // that implies there are no recordings.
+    const PLACEHOLDER = 'Select a recording…';
+
+    // Refetched on every open, not cached for the session. Sail for three hours,
+    // come back to Playback, and the recordings you actually want are the ones
+    // written while the page was open — a once-per-load list would never show them.
+    function loadLogList() {
+        if (!replayLogSel) return Promise.resolve();
+        const keep = replayLogSel.value;
+        return fetch('/api/logs', { cache: 'no-store' })
+            .then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+            .then(d => {
+                replayLogFiles = d.files || [];
+                replayLogSel.textContent = '';
+                const ph = document.createElement('option');
+                ph.value = '';
+                ph.textContent = d.files.length ? PLACEHOLDER : 'No recordings on the Pi';
+                replayLogSel.appendChild(ph);
+                for (const f of d.files) {
+                    const opt = document.createElement('option');
+                    opt.value = f.url;
+                    const mb = (f.bytes / 1048576).toFixed(1);
+                    opt.textContent = `${f.name.replace(/^nmea_|\.txt$/g, '')} (${mb} MB)`;
+                    replayLogSel.appendChild(opt);
+                }
+                // Keep the current selection if it is still on the Pi.
+                if (keep) replayLogSel.value = keep;
+            })
+            .catch(err => {
+                // Rebuild the placeholder so a later success is not still labelled
+                // broken, and say plainly that the list failed.
+                replayLogSel.textContent = '';
+                const ph = document.createElement('option');
+                ph.value = '';
+                ph.textContent = 'Recording list unavailable';
+                replayLogSel.appendChild(ph);
+                console.error('[playback] could not list logs:', err);
+            });
+    }
+
+    // --- auto-advance ---------------------------------------------------
+    // Race recordings are hourly files, so watching a three-hour race used to mean
+    // reaching for the picker twice. When a recording runs out, roll straight into
+    // the one that continues it.
+    //
+    // "Continues it" is doing real work here. It must never chain into an
+    // unrelated day's sailing, which would look perfectly continuous on the map —
+    // so a successor that is not close in time stops playback and says how far
+    // away it is. NmeaClient.nextContiguousLog owns that judgement and is tested.
+
+    /** "3d", "2h 15m", "4m" — rough by design, it only has to convey distance. */
+    function humanGap(ms) {
+        const s = Math.round(Math.abs(ms) / 1000);
+        if (s < 60) return `${s}s`;
+        const m = Math.round(s / 60);
+        if (m < 60) return `${m}m`;
+        const h = Math.floor(m / 60);
+        if (h < 24) return m % 60 ? `${h}h ${m % 60}m` : `${h}h`;
+        return `${Math.floor(h / 24)}d`;
+    }
+
+    function endReplayWithNote(note) {
+        replayEndNote = note;
+        syncReplayUi();
+    }
+
+    /**
+     * Roll into the recording that continues the one that just finished.
+     *
+     * The list is refetched first, deliberately: start watching the 22:00 file
+     * while 23:00 is still being written and the list fetched on open does not
+     * contain the file we now want. Capture the current URL before the refetch —
+     * a failed refetch rebuilds the picker with a placeholder and blanks .value.
+     */
+    function advanceToNextRecording() {
+        if (!replayLogSel) return;
+        const currentUrl = replayLogSel.value;
+        // No URL means a local file opened from disk, or nothing selected. Neither
+        // has a "next" on the Pi.
+        if (!currentUrl) return;
+
+        const range = nmeaClient.getReplayTimeRange();
+        const endTs = range ? range.end : null;
+
+        loadLogList().then(() => {
+            const r = NmeaClient.nextContiguousLog(replayLogFiles, currentUrl, endTs);
+            if (!r.ok) {
+                if (r.reason === 'gap') {
+                    endReplayWithNote(`end — next is ${humanGap(r.gapMs)} later`);
+                    console.info('[playback] not advancing: next recording is',
+                        humanGap(r.gapMs), 'later —', r.file.name);
+                } else {
+                    endReplayWithNote('end of recording');
+                }
+                return;
+            }
+            replayEndNote = null;
+            replayLogSel.value = r.file.url;
+            if (replayClock) replayClock.textContent = 'loading…';
+            console.info('[playback] auto-advancing to', r.file.name,
+                `(gap ${humanGap(r.gapMs)})`);
+            nmeaClient.loadUrl(r.file.url, beginReplay, (err) => {
+                endReplayWithNote('load failed');
+                console.error('[playback] could not load next recording:', err);
+            });
+        });
+    }
+
+    // Only a recording genuinely running out advances. Dragging the scrubber to
+    // the end also finishes the replay, and launching the next hour because of
+    // that would be startling rather than helpful.
+    nmeaClient.onReplayEnd = (reason) => {
+        if (reason !== 'end') return;
+        advanceToNextRecording();
+    };
+
+    // --- environmental layers during replay ---------------------------
+    // The overlays are driven by forecastMinutes off Date.now() and know nothing
+    // about the replay clock, so during replay they draw TODAY's tide, current
+    // and wind under a historical track. SFBOFS keeps only its newest run, so a
+    // past current field cannot be fetched at all. Switch them off and say why,
+    // rather than let someone conclude something about a gate that wasn't there.
+    const ENV_TOGGLE_IDS = ['flow-toggle', 'wind-toggle', 'tide-toggle'];
+    const envBanner = document.getElementById('replay-env-banner');
+    let _envStateBeforeReplay = null;
+
+    function suspendEnvLayersForReplay() {
+        if (_envStateBeforeReplay) return;           // already suspended
+        _envStateBeforeReplay = {
+            flow: !!(typeof tidalFlow !== 'undefined' && tidalFlow && tidalFlow.animating),
+            wind: !!(typeof windOverlay !== 'undefined' && windOverlay && windOverlay.animating),
+            tide: !!(typeof tideMarkersVisible !== 'undefined' && tideMarkersVisible),
+        };
+        // Drive the real handlers rather than reimplementing their teardown.
+        if (_envStateBeforeReplay.flow) document.getElementById('flow-toggle').click();
+        if (_envStateBeforeReplay.wind) document.getElementById('wind-toggle').click();
+        if (_envStateBeforeReplay.tide) document.getElementById('tide-toggle').click();
+        for (const id of ENV_TOGGLE_IDS) {
+            const b = document.getElementById(id);
+            if (b) { b.disabled = true; b.title = 'Unavailable during replay — would show present-day conditions'; }
+        }
+        if (envBanner) envBanner.classList.remove('hidden');
+    }
+
+    function restoreEnvLayersAfterReplay() {
+        if (!_envStateBeforeReplay) return;
+        for (const id of ENV_TOGGLE_IDS) {
+            const b = document.getElementById(id);
+            if (b) { b.disabled = false; b.title = ''; }
+        }
+        if (_envStateBeforeReplay.flow) document.getElementById('flow-toggle').click();
+        if (_envStateBeforeReplay.wind) document.getElementById('wind-toggle').click();
+        if (_envStateBeforeReplay.tide) document.getElementById('tide-toggle').click();
+        _envStateBeforeReplay = null;
+        if (envBanner) envBanner.classList.add('hidden');
+    }
+
+    // --- "no live feed" banner ----------------------------------------
+    // Live mode with nothing arriving looks identical to a working app in an
+    // empty stretch of water. Say which it is, and offer the way out.
+    const nofeedBanner = document.getElementById('nofeed-banner');
+    const NOFEED_GRACE_MS = 12000;
+    let _liveSince = null;
+
+    function updateNoFeedBanner() {
+        if (!nofeedBanner) return;
+        const st = nmeaClient._status;
+        const replaying = st && st.startsWith('replay');
+        // Only meaningful in live mode: during replay an empty map is just an
+        // empty part of the recording.
+        if (replaying) { nofeedBanner.classList.add('hidden'); _liveSince = null; return; }
+        if (_liveSince == null) _liveSince = Date.now();
+        const noData = nmeaClient._sentenceCount === 0;
+        const graceOver = Date.now() - _liveSince > NOFEED_GRACE_MS;
+        nofeedBanner.classList.toggle('hidden', !(noData && graceOver));
+    }
+    setInterval(updateNoFeedBanner, 2000);
+
+    const nofeedReplayBtn = document.getElementById('nofeed-replay-btn');
+    if (nofeedReplayBtn) {
+        nofeedReplayBtn.addEventListener('click', () => window._openPlayback());
+    }
+
+    // Entry point used by the #playback hash, the hub link, and the Replay button.
+    window._openPlayback = function () {
+        if (replayBar) replayBar.classList.remove('hidden');
+        positionReplayBar();
+        loadLogList();
+        const btn = document.getElementById('replay-toggle');
+        if (btn) { btn.classList.remove('replay-off'); btn.textContent = 'Replay: ON'; }
+    };
+
+    // Hide the transport without touching playback state, so the button is a
+    // real toggle. Leaving replay entirely is what "Exit to Live" is for.
+    function closePlaybackBar() {
+        if (replayBar) replayBar.classList.add('hidden');
+        const btn = document.getElementById('replay-toggle');
+        if (btn) { btn.classList.add('replay-off'); btn.textContent = 'Replay'; }
+    }
+
+    const replayToggleBtn = document.getElementById('replay-toggle');
+    if (replayToggleBtn) {
+        replayToggleBtn.addEventListener('click', () => {
+            if (replayBar && replayBar.classList.contains('hidden')) window._openPlayback();
+            else closePlaybackBar();
+        });
+    }
+
+    if (replayLogSel) {
+        replayLogSel.addEventListener('change', () => {
+            const url = replayLogSel.value;
+            if (!url) return;
+            if (replayClock) replayClock.textContent = 'loading…';
+            nmeaClient.loadUrl(url, beginReplay, (err) => {
+                if (replayClock) replayClock.textContent = 'load failed';
+                console.error('[playback] could not load recording:', err);
+            });
+        });
+    }
 
     if (fileInput) {
         fileInput.addEventListener('change', (e) => {
             const file = e.target.files[0];
             if (!file) return;
-            nmeaClient.loadFile(file, (lineCount) => {
-                if (replayControls) replayControls.classList.remove('hidden');
-                nmeaClient.startReplay(parseInt(replaySpeedSel && replaySpeedSel.value) || 1);
-                // Update progress
-                const progressTimer = setInterval(() => {
-                    const p = nmeaClient.getReplayProgress();
-                    if (!p) { clearInterval(progressTimer); return; }
-                    if (replayProgressEl) replayProgressEl.textContent = p.pct + '%';
-                    if (p.pct >= 100) clearInterval(progressTimer);
-                }, 250);
-            });
+            nmeaClient.loadFile(file, beginReplay);
         });
     }
 
     if (replayPauseBtn) {
         replayPauseBtn.addEventListener('click', () => {
-            if (nmeaClient._replayPaused) {
-                nmeaClient.resumeReplay();
-                replayPauseBtn.textContent = '⏸';
-            } else {
-                nmeaClient.pauseReplay();
-                replayPauseBtn.textContent = '▶';
-            }
+            if (nmeaClient._replayPaused) nmeaClient.resumeReplay();
+            else nmeaClient.pauseReplay();
+            syncReplayUi();
+        });
+    }
+
+    if (replayRestartBtn) {
+        replayRestartBtn.addEventListener('click', () => {
+            replayEndNote = null;
+            nmeaClient.seek(0);
+            syncReplayUi();
         });
     }
 
     if (replaySpeedSel) {
         replaySpeedSel.addEventListener('change', () => {
             nmeaClient.setReplaySpeed(parseInt(replaySpeedSel.value));
+        });
+    }
+
+    if (replayScrub) {
+        // Preview the time while dragging; only seek on release. Each seek
+        // re-ingests from the start of the log, so seeking on every input
+        // event would rebuild state dozens of times per drag.
+        replayScrub.addEventListener('input', () => {
+            scrubbing = true;
+            const r = nmeaClient.getReplayTimeRange();
+            const p = nmeaClient.getReplayProgress();
+            if (r && p && p.total) {
+                const frac = parseInt(replayScrub.value) / p.total;
+                replayClock.textContent = clockText(r.start + frac * (r.end - r.start));
+            }
+        });
+        replayScrub.addEventListener('change', () => {
+            replayEndNote = null;
+            nmeaClient.seek(parseInt(replayScrub.value));
+            scrubbing = false;
+            syncReplayUi();
+        });
+        // `change` is not guaranteed: a touch-cancel, or the bar being hidden
+        // mid-drag, leaves `scrubbing` latched true — and syncReplayUi() then
+        // stops updating the clock and scrubber while playback runs on
+        // underneath. A frozen clock over a moving replay is the house failure.
+        for (const ev of ['pointerup', 'pointercancel', 'blur', 'touchend', 'touchcancel']) {
+            replayScrub.addEventListener(ev, () => { scrubbing = false; });
+        }
+    }
+
+    if (replayLiveBtn) {
+        replayLiveBtn.addEventListener('click', () => {
+            nmeaClient.stopReplay();
+            stopReplayUiSync();
+            replayEndNote = null;
+            closePlaybackBar();
+            if (replayControls) replayControls.classList.add('hidden');
+            if (replayLogSel) replayLogSel.value = '';
+            // Order matters: leave replay mode (which clears the store) and wipe
+            // the map layer BEFORE reconnecting, so no replayed contact survives
+            // into the live picture.
+            vesselStore.setReplayMode(false);
+            clearAllVessels();
+            restoreEnvLayersAfterReplay();
+            _liveSince = Date.now();
+            if (location.hash === '#playback') {
+                history.replaceState(null, '', location.pathname + location.search);
+            }
+            nmeaClient.connect(autoConnectUrl);
         });
     }
 }
