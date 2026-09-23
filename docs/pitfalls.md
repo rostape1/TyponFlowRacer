@@ -677,6 +677,59 @@ and are recorded in `window.__bootFailures`.
 
 ---
 
+## The Pi's clock invents log filenames, and nothing looks wrong [P42]
+
+**`ENFORCED`** — `tests/test_log_clock.py` pins the GPS-derived log clock: two-reading adoption,
+checksum and fix-status rejection, rotation on a clock step, and the `_noclock` marker. Verified by
+mutation with seven deliberate bugs.
+
+On 2026-09-23 a recording named `nmea_2026-09-17_080000.txt` — read as 08:00 Thursday — turned out
+to hold 09:52 **Saturday the 19th**. A survey of the archive found **52 of 76 files mis-stamped**,
+by between 6 minutes and **115 hours**.
+
+The mechanism is `P33`'s, with a worse consequence. The Pi has no RTC. At sea there is no internet,
+so NTP never runs and `fake-hwclock` restores whatever time the Pi had at its last shutdown — the
+clock is then behind by however long it was powered off, and the deficit **accumulates across
+boots**. Observed offsets climbed 6.6h → 18.4h → 26.9h → 35.1h → 49.9h → 65.6h → 115.3h.
+
+**Why nobody noticed for ten days: the filename and the line prefixes agree with each other.** Both
+come from `datetime.now()`, so an internally consistent file carries a completely invented date.
+Every cross-check inside the log passes. The only ground truth is the GPS time in `$..RMC`, straight
+off the satellites — `$GPGGA` will not do, it carries time but no date, and this bus has no `$ZDA`.
+
+Three things this broke:
+
+- Finding a race by filename. The whole point of the naming convention.
+- The playback clock, which reads the line prefixes.
+- **Playback's auto-advance gap check**, which compares filename times to decide whether two
+  recordings are contiguous. Across a clock jump it reads a 2-day gap as 14 minutes and cheerfully
+  chains them. The guard was defeated by its input, not by its logic.
+
+`nmea_capture.py` now keeps its own clock: `observe_gps_time()` derives an offset from
+checksum-validated, valid-fix RMCs, requires **two agreeing readings** before adopting one (a single
+corrupt sentence must not redate a recording), and `ts()`/`make_filename()` read `clock_now()`
+rather than the system clock. An offset change **rotates the file** — one file must never hold two
+clocks, or replay sees time run backwards. With no fix yet, logging continues but the filename gets
+`_noclock`, the header says the times are unverified, and the `:8081` status page goes red.
+
+`tools/fix_log_times.py` repairs the existing archive: it measures the offset per file, splits where
+the clock stepped mid-recording, shifts every prefix and renames to GPS truth. It never modifies its
+input (`P34`) and never guesses — a file with no fix goes to `no-gps/` unresolved. Verified on the
+real archive: 21.8 M lines in, 21.8 M out, worst residual drift 0.000 s.
+
+`pi/ais-set-clock.sh` plus `--set-system-clock` optionally steps the *system* clock too, fixing what
+the offset cannot reach (file mtimes, `boat_server.py`'s own log lines, `/api/logs` ordering). It is
+off by default and needs a one-time sudoers entry; the logs are correct without it.
+
+**Do not "simplify" this back to `datetime.now()`.** And note the corrected filenames land at odd
+minutes past the hour (`..._095204`) because the original rotation boundaries were aligned to the
+wrong clock. That is truthful, not a new bug.
+
+The permanent fix is hardware: a DS3231 RTC on the I²C header, so the Pi boots knowing the time
+with neither GPS nor internet.
+
+---
+
 ## Adding a pitfall
 
 Writeup goes here under a new `## <one-line title> [Pnn]` heading with the next unused number.

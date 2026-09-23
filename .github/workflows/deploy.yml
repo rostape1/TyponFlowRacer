@@ -53,11 +53,14 @@ jobs:
       - name: Run boat server tests
         run: python3 tests/test_boat_server.py
 
+      - name: Run log clock tests
+        run: python3 tests/test_log_clock.py
+
       - name: Byte-compile the Pi server and root scripts
-        run: python3 -m py_compile pi/boat_server.py nmea_capture.py nmea_ws_proxy.py download_offline.py
+        run: python3 -m py_compile pi/boat_server.py nmea_capture.py nmea_ws_proxy.py download_offline.py tools/fix_log_times.py
 
       - name: Syntax-check the boat shell scripts
-        run: bash -n start_boat.sh play_logs.sh pi/startup.sh pi/test_boat_server.sh
+        run: bash -n start_boat.sh play_logs.sh pi/startup.sh pi/test_boat_server.sh pi/ais-set-clock.sh
 
   deploy:
     needs: test

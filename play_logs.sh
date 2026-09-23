@@ -19,6 +19,10 @@ set -e
 DIR="$(cd "$(dirname "$0")" && pwd)"
 
 PORT=${PORT:-8080}
+# The CORRECTED archive. ~/Documents/typon-nmea-logs-raw/ holds the untouched
+# originals pulled off the Pi; tools/fix_log_times.py turns those into this one.
+# Serving the raw copy would show invented dates for anything recorded before the
+# GPS log clock shipped — see P42.
 LOG_DIR=${LOG_DIR:-$HOME/Documents/typon-nmea-logs}
 
 if [ ! -d "$LOG_DIR" ]; then
