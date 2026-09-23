@@ -2973,6 +2973,15 @@ if (nmeaStore && nmeaClient) {
     let replayUiTimer = null;
     let scrubbing = false;
 
+    // The raw /api/logs array, kept so auto-advance can work out which recording
+    // continues the current one. The <option> list alone is not enough: it is
+    // ordered newest-first, so "the next option" is an hour earlier.
+    let replayLogFiles = [];
+
+    // Sticky message shown in place of the clock once a recording has ended and
+    // playback is not continuing. Cleared whenever playback resumes.
+    let replayEndNote = null;
+
     // Replay resets and seeks must clear the map's AIS layer, not just the NMEA
     // store — otherwise a replayed race's contacts stay drawn on the chart, and
     // survive into Live. And staleness/tracks must be measured in log time.
@@ -3001,8 +3010,15 @@ if (nmeaStore && nmeaClient) {
         }
         if (replayProgressEl) replayProgressEl.textContent = p.pct + '%';
         if (replayClock && !scrubbing) {
-            const r = nmeaClient.getReplayTimeRange();
-            replayClock.textContent = r ? clockText(r.current) : '--:--:--';
+            // A sticky end-of-recording note outranks the clock. Without this the
+            // 250 ms timer below would overwrite "end — next is 3d later" before
+            // it could be read.
+            if (replayEndNote) {
+                replayClock.textContent = replayEndNote;
+            } else {
+                const r = nmeaClient.getReplayTimeRange();
+                replayClock.textContent = r ? clockText(r.current) : '--:--:--';
+            }
         }
         if (replayPauseBtn) {
             replayPauseBtn.textContent = nmeaClient._replayPaused ? '▶ Play' : '⏸ Pause';
@@ -3082,6 +3098,7 @@ if (nmeaStore && nmeaClient) {
 
     function beginReplay(lineCount) {
         scrubbing = false;
+        replayEndNote = null;
         // A zero-byte file (the rotation just created one) or a raw dump with no
         // ISO timestamps cannot be replayed. Previously the bar appeared, read
         // NaN%, and sat there — indistinguishable from a working replay of an
@@ -3127,6 +3144,7 @@ if (nmeaStore && nmeaClient) {
         return fetch('/api/logs', { cache: 'no-store' })
             .then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
             .then(d => {
+                replayLogFiles = d.files || [];
                 replayLogSel.textContent = '';
                 const ph = document.createElement('option');
                 ph.value = '';
@@ -3153,6 +3171,82 @@ if (nmeaStore && nmeaClient) {
                 console.error('[playback] could not list logs:', err);
             });
     }
+
+    // --- auto-advance ---------------------------------------------------
+    // Race recordings are hourly files, so watching a three-hour race used to mean
+    // reaching for the picker twice. When a recording runs out, roll straight into
+    // the one that continues it.
+    //
+    // "Continues it" is doing real work here. It must never chain into an
+    // unrelated day's sailing, which would look perfectly continuous on the map —
+    // so a successor that is not close in time stops playback and says how far
+    // away it is. NmeaClient.nextContiguousLog owns that judgement and is tested.
+
+    /** "3d", "2h 15m", "4m" — rough by design, it only has to convey distance. */
+    function humanGap(ms) {
+        const s = Math.round(Math.abs(ms) / 1000);
+        if (s < 60) return `${s}s`;
+        const m = Math.round(s / 60);
+        if (m < 60) return `${m}m`;
+        const h = Math.floor(m / 60);
+        if (h < 24) return m % 60 ? `${h}h ${m % 60}m` : `${h}h`;
+        return `${Math.floor(h / 24)}d`;
+    }
+
+    function endReplayWithNote(note) {
+        replayEndNote = note;
+        syncReplayUi();
+    }
+
+    /**
+     * Roll into the recording that continues the one that just finished.
+     *
+     * The list is refetched first, deliberately: start watching the 22:00 file
+     * while 23:00 is still being written and the list fetched on open does not
+     * contain the file we now want. Capture the current URL before the refetch —
+     * a failed refetch rebuilds the picker with a placeholder and blanks .value.
+     */
+    function advanceToNextRecording() {
+        if (!replayLogSel) return;
+        const currentUrl = replayLogSel.value;
+        // No URL means a local file opened from disk, or nothing selected. Neither
+        // has a "next" on the Pi.
+        if (!currentUrl) return;
+
+        const range = nmeaClient.getReplayTimeRange();
+        const endTs = range ? range.end : null;
+
+        loadLogList().then(() => {
+            const r = NmeaClient.nextContiguousLog(replayLogFiles, currentUrl, endTs);
+            if (!r.ok) {
+                if (r.reason === 'gap') {
+                    endReplayWithNote(`end — next is ${humanGap(r.gapMs)} later`);
+                    console.info('[playback] not advancing: next recording is',
+                        humanGap(r.gapMs), 'later —', r.file.name);
+                } else {
+                    endReplayWithNote('end of recording');
+                }
+                return;
+            }
+            replayEndNote = null;
+            replayLogSel.value = r.file.url;
+            if (replayClock) replayClock.textContent = 'loading…';
+            console.info('[playback] auto-advancing to', r.file.name,
+                `(gap ${humanGap(r.gapMs)})`);
+            nmeaClient.loadUrl(r.file.url, beginReplay, (err) => {
+                endReplayWithNote('load failed');
+                console.error('[playback] could not load next recording:', err);
+            });
+        });
+    }
+
+    // Only a recording genuinely running out advances. Dragging the scrubber to
+    // the end also finishes the replay, and launching the next hour because of
+    // that would be startling rather than helpful.
+    nmeaClient.onReplayEnd = (reason) => {
+        if (reason !== 'end') return;
+        advanceToNextRecording();
+    };
 
     // --- environmental layers during replay ---------------------------
     // The overlays are driven by forecastMinutes off Date.now() and know nothing
@@ -3275,7 +3369,11 @@ if (nmeaStore && nmeaClient) {
     }
 
     if (replayRestartBtn) {
-        replayRestartBtn.addEventListener('click', () => { nmeaClient.seek(0); syncReplayUi(); });
+        replayRestartBtn.addEventListener('click', () => {
+            replayEndNote = null;
+            nmeaClient.seek(0);
+            syncReplayUi();
+        });
     }
 
     if (replaySpeedSel) {
@@ -3298,6 +3396,7 @@ if (nmeaStore && nmeaClient) {
             }
         });
         replayScrub.addEventListener('change', () => {
+            replayEndNote = null;
             nmeaClient.seek(parseInt(replayScrub.value));
             scrubbing = false;
             syncReplayUi();
@@ -3315,6 +3414,7 @@ if (nmeaStore && nmeaClient) {
         replayLiveBtn.addEventListener('click', () => {
             nmeaClient.stopReplay();
             stopReplayUiSync();
+            replayEndNote = null;
             closePlaybackBar();
             if (replayControls) replayControls.classList.add('hidden');
             if (replayLogSel) replayLogSel.value = '';

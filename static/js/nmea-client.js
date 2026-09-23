@@ -100,10 +100,18 @@ class NmeaClient {
         this._reconnectTimer = setTimeout(() => this._doConnect(wsUrl), 5000);
     }
 
-    /** The one place the replay reaches its end, so cleanup cannot diverge. */
-    _finishReplay() {
+    /**
+     * The one place the replay reaches its end, so cleanup cannot diverge.
+     *
+     * `reason` distinguishes playback genuinely running out ('end') from the user
+     * dragging the scrubber to the end ('seek'). Auto-advance must only follow the
+     * first: having the next hour launch itself because you scrubbed to the end is
+     * not a feature.
+     */
+    _finishReplay(reason) {
         this._stopRateCounter();
         this._setStatus('replay-done');
+        if (this.onReplayEnd) this.onReplayEnd(reason || 'end');
     }
 
     _stopRateCounter() {
@@ -121,6 +129,79 @@ class NmeaClient {
     }
 
     // --- File Replay ---
+
+    /**
+     * How far apart two recordings may be and still count as one continuous run.
+     *
+     * Generous enough to cover a capture restart (the logger respawns on a 10s
+     * backoff, and a Pi reboot takes well under a minute), tight enough that a
+     * different day's sailing is never treated as a continuation.
+     */
+    static get MAX_LOG_GAP_MS() { return 15 * 60 * 1000; }
+
+    /**
+     * Epoch ms for a log filename, e.g. 'nmea_2026-09-17_110000.txt'.
+     *
+     * Filenames are **local** time — see docs/logging-and-playback.md, "store UTC,
+     * display local". Sentences inside carry UTC with a trailing Z; the filename is
+     * the local half of that rule, so it is built from local date components here.
+     * Returns null for anything unparseable, never NaN: NaN is not null, so it
+     * slips through null checks and then compares false against every threshold.
+     */
+    static logStartTime(name) {
+        const m = /(\d{4})-(\d{2})-(\d{2})[_T](\d{2})(\d{2})(\d{2})/.exec(String(name || ''));
+        if (!m) return null;
+        const y = +m[1], mo = +m[2], d = +m[3], h = +m[4], mi = +m[5], s = +m[6];
+        const dt = new Date(y, mo - 1, d, h, mi, s, 0);
+        // A shape-valid but impossible date (2026-13-45) silently rolls over into a
+        // real one, so reject anything the Date did not preserve exactly.
+        if (dt.getFullYear() !== y || dt.getMonth() !== mo - 1 || dt.getDate() !== d ||
+            dt.getHours() !== h || dt.getMinutes() !== mi || dt.getSeconds() !== s) return null;
+        const t = dt.getTime();
+        return Number.isFinite(t) ? t : null;
+    }
+
+    /**
+     * The recording that continues `currentUrl`, if there is one.
+     *
+     * `files` is /api/logs' array ({name, url, bytes}), which arrives **newest
+     * first**. Nothing here trusts that order: "the next option in the picker" is
+     * an hour *earlier*, so stepping through the list as given plays a race
+     * backwards. Sort by the filename's own timestamp instead.
+     *
+     * Contiguity is measured against the current log's **actual last sentence**,
+     * not an assumed hour, because the logger does not only rotate on the hour — a
+     * restart produces nmea_..._021420.txt right after nmea_..._020000.txt, and
+     * "next = +1h" rejects a pair that is in truth one second apart.
+     *
+     * Returns {ok:true, file, gapMs} or {ok:false, reason, file?, gapMs?} where
+     * reason is 'end' (nothing newer), 'gap' (a successor exists but too far off —
+     * reported so the UI can say how far), or 'unknown' (the current recording is
+     * not in the list, or has no usable end timestamp). A rejected successor must
+     * never play: rolling a Saturday race into an unrelated Tuesday delivery would
+     * look perfectly continuous and be wrong.
+     */
+    static nextContiguousLog(files, currentUrl, currentEndTs, maxGapMs = NmeaClient.MAX_LOG_GAP_MS) {
+        const list = (files || [])
+            .map(f => ({ file: f, ts: NmeaClient.logStartTime(f && f.name) }))
+            .filter(e => e.ts !== null)
+            .sort((a, b) => a.ts - b.ts);
+
+        const curIdx = list.findIndex(e => e.file.url === currentUrl);
+        if (curIdx < 0 || !Number.isFinite(currentEndTs)) return { ok: false, reason: 'unknown' };
+
+        const next = list[curIdx + 1];
+        if (!next) return { ok: false, reason: 'end' };
+
+        // Symmetric tolerance: a small negative gap means the files overlap by a
+        // few seconds, which is still one continuous run. A large one either way
+        // is not.
+        const gapMs = next.ts - currentEndTs;
+        if (gapMs > maxGapMs || gapMs < -maxGapMs) {
+            return { ok: false, reason: 'gap', file: next.file, gapMs };
+        }
+        return { ok: true, file: next.file, gapMs };
+    }
 
     loadFile(file, callback) {
         const reader = new FileReader();
@@ -232,7 +313,7 @@ class NmeaClient {
     _replayTick() {
         if (this._replayPaused) return;
         if (this._replayIdx >= this._replayLines.length) {
-            this._finishReplay();
+            this._finishReplay('end');
             return;
         }
 
@@ -267,7 +348,7 @@ class NmeaClient {
         this._publishReplayClock();
 
         if (this._replayIdx >= this._replayLines.length) {
-            this._finishReplay();
+            this._finishReplay('end');
             return;
         }
 
@@ -329,7 +410,7 @@ class NmeaClient {
         } else if (target >= this._replayLines.length) {
             // Dragging the scrubber to max is trivially easy, and used to leave
             // the status on 'replaying' with the rate counter still ticking.
-            this._finishReplay();
+            this._finishReplay('seek');
         }
     }
 

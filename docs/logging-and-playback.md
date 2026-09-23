@@ -147,7 +147,7 @@ in after leaving, so do not remove it.
 | Recording picker | Populated from `/api/logs`; shows name and size. Names are **local** date/time |
 | ⏮ | `seek(0)` |
 | ▶ Play / ⏸ Pause | Labelled deliberately: a bare glyph read as decoration and users could not find it |
-| Speed | 1x, 2x, 5x, 10x, 60x, Max. `Max` is speed `0`, and `beginReplay` must call `setReplaySpeed` after `startReplay` or `speed \|\| 1` silently coerces Max to 1x |
+| Speed | 1x, 2x, 5x, 10x, 30x, 60x, Max. `Max` is speed `0`, and `beginReplay` must call `setReplaySpeed` after `startReplay` or `speed \|\| 1` silently coerces Max to 1x |
 | Scrubber | Seeks on release, not on drag — see below |
 | Clock | The recording's own time, rendered **local** (PDT/PST) |
 | Exit to Live | Leaves replay entirely: clears the store and the map, reconnects the live WebSocket |
@@ -204,6 +204,57 @@ every recording already on disk, with no new external data source. It is ground 
 a model.
 
 (Both are future work. Nothing below the `$IIVDR` row is implemented.)
+
+### Auto-advance into the next recording
+
+Recordings rotate hourly, so a three-hour race is three files and used to mean reaching for the
+picker twice. When playback runs out, it rolls into the recording that continues the current one.
+
+Three things make this safe rather than merely convenient.
+
+**It never trusts the picker's order.** `/api/logs` returns **newest first**, so the `<option>`
+below the current one is an hour *earlier*. "Advance to the next item in the list" plays a race
+backwards. `NmeaClient.nextContiguousLog()` sorts by the filename's own timestamp instead and
+ignores list order entirely.
+
+**It measures against the log's real last sentence, not an assumed hour.** The logger does not only
+rotate on the hour — it also restarts, which produces `nmea_2026-09-18_021420.txt` directly after
+`nmea_2026-09-18_020000.txt`. "Next = +1 h" rejects a pair that is in truth seconds apart. So the
+gap is `successor's filename time − current log's last sentence timestamp`, and must be within
+`NmeaClient.MAX_LOG_GAP_MS` (15 min). The tolerance is **symmetric**: real files overlap by a minute
+or so when a restart happens mid-second, and that is still one continuous run.
+
+Filenames are local, sentences are UTC — the "store UTC, display local" rule above — so
+`logStartTime()` builds its epoch from local date components. It returns `null`, never `NaN`, for
+anything unparseable: `NaN` is not `null`, so it survives null checks and then compares false
+against every threshold.
+
+**A successor that is too far away stops playback and says so.** The clock reads
+`end — next is 4d later` rather than silently chaining a Saturday race into an unrelated Tuesday
+delivery, which would look perfectly continuous on the map. That message is sticky
+(`replayEndNote` in `app.js`) because `syncReplayUi` runs on a 250 ms timer and would otherwise
+overwrite it before it could be read.
+
+Two deliberate non-triggers:
+
+- **Scrubbing to the end does not advance.** `_finishReplay(reason)` is reached both by playback
+  running out (`'end'`) and by dragging the scrubber to max (`'seek'`); only the former advances.
+  Having the next hour launch itself because you dragged the slider is startling, not helpful.
+- **A local file opened from disk never advances** — there is no list to step through.
+
+The recording list is **refetched before each advance**. Start watching the 22:00 file while 23:00
+is still being written and the list fetched when the bar opened does not contain the file you now
+want. The current URL is captured *before* that refetch, because a failed refetch rebuilds the
+picker with a placeholder and blanks `.value`.
+
+At the boundary the store resets, so competitor tracks and trails restart and rebuild over the next
+few seconds. That is the honest option: carrying tracks across would be wiped by the first scrub
+anyway, since the scrubber only ever spans the current file.
+
+`tests/test_replay.mjs` covers the selector directly — newest-first ordering, the mid-hour restart,
+the threshold either side, unparseable names, an unknown current file, and scrub-to-end not
+advancing. Mutation-tested with six deliberate bugs, including "trust the list order" and "parse the
+filename as UTC".
 
 ### Why seeking re-reads the log
 

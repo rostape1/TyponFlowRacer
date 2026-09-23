@@ -578,6 +578,177 @@ console.log('vessel-store replay isolation:');
         `clearAll must return the removed MMSIs, got ${JSON.stringify(removed)}`);
 }
 
+// --- auto-advance: picking the next recording ----------------------------
+// The picker is populated straight from /api/logs, which returns NEWEST FIRST.
+// So the option *below* the current one is an hour EARLIER, and "play the next
+// file" implemented as "step down the list" plays the race backwards. Hence
+// nextContiguousLog sorts by the filename's own timestamp and never trusts the
+// list order.
+console.log('auto-advance / nextContiguousLog:');
+
+/** Build an /api/logs-shaped entry. */
+function logFile(name) {
+    return { name, url: `/logs/${name}`, bytes: 1 };
+}
+
+/** Local-time epoch for a log filename, computed independently of the impl. */
+function localTs(y, mo, d, h, mi, s) {
+    return new Date(y, mo - 1, d, h, mi, s, 0).getTime();
+}
+
+{
+    const ts = NmeaClient.logStartTime('nmea_2026-09-17_110000.txt');
+    assert(ts === localTs(2026, 9, 17, 11, 0, 0),
+        'a log filename must be read as LOCAL time — the doc\'s rule is store UTC, display local, ' +
+        `and filenames are the local half; got ${ts}`);
+    assert(NmeaClient.logStartTime('notalog.txt') === null,
+        'an unparseable name must return null rather than NaN, which compares false everywhere');
+    assert(NmeaClient.logStartTime('nmea_2026-13-45_110000.txt') === null,
+        'an impossible date must return null, not a rolled-over Date');
+}
+
+{
+    // Real ordering from the Pi: newest first.
+    const files = [
+        logFile('nmea_2026-09-18_020000.txt'),
+        logFile('nmea_2026-09-18_010000.txt'),
+        logFile('nmea_2026-09-18_000000.txt'),
+    ];
+    // Playing the 00:00 file, whose last sentence lands one second before 01:00.
+    const endTs = localTs(2026, 9, 18, 0, 59, 59);
+    const r = NmeaClient.nextContiguousLog(files, '/logs/nmea_2026-09-18_000000.txt', endTs);
+    assert(r.ok === true, `should advance, got ${JSON.stringify(r)}`);
+    assert(r.file.name === 'nmea_2026-09-18_010000.txt',
+        `must advance FORWARD in time to 01:00, not down the newest-first list; got ${r.file && r.file.name}`);
+}
+
+{
+    // A capture restart mid-hour: 02:00 rotated, died at 02:14:19, restarted at
+    // 02:14:20. "next = +1 hour" rejects this; comparing against the log's real
+    // last sentence accepts it.
+    const files = [
+        logFile('nmea_2026-09-18_021420.txt'),
+        logFile('nmea_2026-09-18_020000.txt'),
+    ];
+    const endTs = localTs(2026, 9, 18, 2, 14, 19);
+    const r = NmeaClient.nextContiguousLog(files, '/logs/nmea_2026-09-18_020000.txt', endTs);
+    assert(r.ok === true, `a mid-hour restart is contiguous, got ${JSON.stringify(r)}`);
+    assert(r.file.name === 'nmea_2026-09-18_021420.txt', 'and is the file to advance to');
+    assert(r.gapMs === 1000, `gap should be 1s, got ${r.gapMs}`);
+}
+
+{
+    // The case that must NOT auto-play: a successor exists, days later. Rolling
+    // a Saturday race into an unrelated Tuesday delivery would look continuous
+    // and be wrong — the exact failure class this repo is built around.
+    const files = [
+        logFile('nmea_2026-09-22_220000.txt'),
+        logFile('nmea_2026-09-18_020000.txt'),
+    ];
+    const endTs = localTs(2026, 9, 18, 2, 59, 59);
+    const r = NmeaClient.nextContiguousLog(files, '/logs/nmea_2026-09-18_020000.txt', endTs);
+    assert(r.ok === false, 'a multi-day gap must not auto-advance');
+    assert(r.reason === 'gap', `reason should be 'gap', got '${r.reason}'`);
+    assert(r.file.name === 'nmea_2026-09-22_220000.txt',
+        'the rejected successor is still reported, so the UI can say how far away it is');
+    assert(r.gapMs > 4 * 24 * 3600 * 1000, `gap should be >4 days, got ${r.gapMs}`);
+}
+
+{
+    // Exactly on the threshold is contiguous; one millisecond past it is not.
+    const files = [logFile('nmea_2026-09-18_030000.txt'), logFile('nmea_2026-09-18_020000.txt')];
+    const cur = '/logs/nmea_2026-09-18_020000.txt';
+    const start = localTs(2026, 9, 18, 3, 0, 0);
+    const atLimit = NmeaClient.nextContiguousLog(files, cur, start - NmeaClient.MAX_LOG_GAP_MS);
+    assert(atLimit.ok === true, 'a gap exactly at MAX_LOG_GAP_MS is contiguous');
+    const pastLimit = NmeaClient.nextContiguousLog(files, cur, start - NmeaClient.MAX_LOG_GAP_MS - 1);
+    assert(pastLimit.ok === false, 'one millisecond past the limit is not');
+}
+
+{
+    const files = [logFile('nmea_2026-09-18_020000.txt'), logFile('nmea_2026-09-18_010000.txt')];
+    const r = NmeaClient.nextContiguousLog(
+        files, '/logs/nmea_2026-09-18_020000.txt', localTs(2026, 9, 18, 2, 59, 59));
+    assert(r.ok === false && r.reason === 'end',
+        `the newest recording has no successor, got ${JSON.stringify(r)}`);
+}
+
+{
+    // A local file opened from disk is not in the Pi's list, and a list that
+    // failed to load is empty. Neither may guess at a successor.
+    const files = [logFile('nmea_2026-09-18_020000.txt')];
+    const r = NmeaClient.nextContiguousLog(files, '/logs/nmea_2026-09-18_010000.txt', 1);
+    assert(r.ok === false && r.reason === 'unknown',
+        `an unknown current file must not advance, got ${JSON.stringify(r)}`);
+    const r2 = NmeaClient.nextContiguousLog([], '/logs/x.txt', 1);
+    assert(r2.ok === false, 'an empty list must not advance');
+    const r3 = NmeaClient.nextContiguousLog(files, '/logs/nmea_2026-09-18_020000.txt', null);
+    assert(r3.ok === false && r3.reason === 'unknown',
+        'with no usable end timestamp, contiguity is unknowable — do not guess');
+}
+
+{
+    // Junk in the directory must not become the successor, nor block the real one.
+    const files = [
+        logFile('nmea_2026-09-18_020000.txt'),
+        logFile('README.txt'),
+        logFile('nmea_2026-09-18_010000.txt'),
+    ];
+    const r = NmeaClient.nextContiguousLog(
+        files, '/logs/nmea_2026-09-18_010000.txt', localTs(2026, 9, 18, 1, 59, 59));
+    assert(r.ok === true && r.file.name === 'nmea_2026-09-18_020000.txt',
+        `unparseable names must be skipped, got ${JSON.stringify(r)}`);
+}
+
+// --- auto-advance: what counts as "ran out" ------------------------------
+// _finishReplay is reached two ways: playback genuinely running out, and the
+// user dragging the scrubber to the end. Only the first may advance — having
+// the next hour launch itself because you scrubbed to the end is not a feature.
+console.log('auto-advance / end reason:');
+
+{
+    const store = makeStore();
+    const c = new NmeaClient(store);
+    const seen = [];
+    c.onReplayEnd = (reason) => seen.push(reason);
+    nowMs = 0;
+    c.loadText(LOG);
+    c.startReplay(1);
+    nowMs = LOG_N * 1000;          // well past the last sentence
+    c._replayTick();
+    assert(c._status === 'replay-done', `should have finished, got '${c._status}'`);
+    assert(JSON.stringify(seen) === JSON.stringify(['end']),
+        `natural completion must report 'end', got ${JSON.stringify(seen)}`);
+}
+
+{
+    const store = makeStore();
+    const c = new NmeaClient(store);
+    const seen = [];
+    c.onReplayEnd = (reason) => seen.push(reason);
+    nowMs = 0;
+    c.loadText(LOG);
+    c.startReplay(1);
+    c.seek(LOG_N);
+    assert(c._status === 'replay-done', `scrubbing to the end still finishes, got '${c._status}'`);
+    assert(JSON.stringify(seen) === JSON.stringify(['seek']),
+        `scrubbing to the end must report 'seek', not 'end', got ${JSON.stringify(seen)}`);
+}
+
+{
+    // No listener attached must not throw — the callback is optional, as with
+    // onReplayReset and onReplayClock.
+    const store = makeStore();
+    const c = new NmeaClient(store);
+    nowMs = 0;
+    c.loadText(LOG);
+    c.startReplay(1);
+    nowMs = LOG_N * 1000;
+    let threw = false;
+    try { c._replayTick(); } catch (e) { threw = true; }
+    assert(!threw, 'finishing with no onReplayEnd listener must not throw');
+}
+
 // --- AIS sentences must be checksum-validated (P40) ----------------------
 // Over TCP, framing guaranteed one sentence per line and an unvalidated AIS
 // path was merely untidy. Over UDP a single dropped datagram splices the tail

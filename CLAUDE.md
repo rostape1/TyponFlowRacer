@@ -452,6 +452,8 @@ sudo journalctl -u ais-tracker -f
 
 - **Navigation hub** at `/hub` — links every view; map stays at `/`.
 - **Race playback** — pick a Pi recording, scrub to any moment; drives Map, Charts and Radar alike.
+  Rolls into the next recording by itself when one runs out, but only if it is genuinely contiguous —
+  a distant successor stops playback and says how far away it is.
   Details: [docs/logging-and-playback.md](docs/logging-and-playback.md).
 
 ## Key patterns
