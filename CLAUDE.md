@@ -269,6 +269,7 @@ safely. Look up your group's IDs in [docs/pitfalls.md](docs/pitfalls.md), by ID,
 - `startup.sh` git-pulls itself, so shell/systemd changes land one boot late `P38`
 - A dead logger and a silent NMEA source look identical; `/api/health` separates them `P39`
 - The receiver is a single-client-TCP Lantronix XPort; any power cut can lock the Pi out `P40`
+- The Pi's clock invented the dates on 52 of 76 recordings; GPS time in `$..RMC` is truth `P42`
 
 ### Touching static serving, the browser cache or the boot script chain
 - Unversioned JS with no `Cache-Control` let Chrome run last week's app against today's Pi `P41`
@@ -320,9 +321,11 @@ safely. Look up your group's IDs in [docs/pitfalls.md](docs/pitfalls.md), by ID,
 | `pi/requirements.txt` | `aiohttp`, `websockets` |
 | `start_boat.sh` | Foreground launcher, `PORT=8080` default |
 | `play_logs.sh` | Replay recordings on a **Mac**: runs `boat_server.py` against `~/Documents/typon-nmea-logs`. A static server cannot do this — `/api/logs` and `/logs/` are `boat_server.py` routes, and without them auto-advance has no list to step through |
-| `nmea_capture.py` | Hourly-rotated NMEA logger into `logs/`, browsable at `/logs` |
+| `nmea_capture.py` | Hourly-rotated NMEA logger into `logs/`, browsable at `/logs`. Timestamps come from a **GPS-derived clock**, never the Pi's own (`P42`) |
+| `pi/ais-set-clock.sh` | Root helper to step the *system* clock onto GPS time. Optional, needs a one-time sudoers entry; logs are correct without it (`P42`) |
 | `nmea_ws_proxy.py` | Legacy standalone TCP→WS proxy (:8765). Superseded, but `nmea_tcp_broadcast()` and `nmea_udp_broadcast()` are still imported by `boat_server.py`. |
 | `download_offline.py` | Manual idempotent tile + asset pre-fetch into `static/tiles/`. `DEFAULT_BOUNDS` is authoritative. |
+| `tools/fix_log_times.py` | Repairs recordings mis-dated by the Pi's clock: shifts prefixes, splits mid-file clock steps, renames to GPS truth. Never modifies its input (`P42`) |
 
 ### Legacy backend (root, reference / local dev only)
 
@@ -340,6 +343,7 @@ SQLite schema they use (`vessels`, `positions`, WAL mode) is superseded in the b
 | `tests/test_invariants.mjs` | Cross-file invariants — the traps that live in the gap between two files. `sw.js` host matching (`P18`) and quota eviction (`P16`) are **functional**: `sw.js` is loaded in a sandbox with a fake Cache API and its real functions called. Tile zoom range (`P15`) and the Pi port/scheme (`P24`) are cross-file source assertions, because the thing under test *is* agreement between two files' literals. In CI. |
 | `tests/test_boat_server.py` | Pi proxy + cache: JS↔Python parity (`P20`, incl. `toFixed` comparison against real `node`), UTC-rollover alias (`P06`), captive portals (`P07`), 404-vs-5xx (`P08`), stale ceilings, single-flight, prune, allowlists. Also the NMEA transports (`P40`): UDP reassembly, source filtering, bridge-task liveness in `/api/health`. In CI; needs `pip install -r pi/requirements.txt`. |
 | `tests/test_replay.mjs` | Playback scrub (`nmea-client.js`) in a sandbox with a fake store and controllable clock. The invariant: seeking to N leaves the store identical to playing through to N. Mutation-tested. In CI. |
+| `tests/test_log_clock.py` | The GPS-derived log clock (`P42`): checksum + fix-status rejection, two-reading adoption, rotation on a clock step, the `_noclock` marker, and the optional system-clock push. Mutation-tested with seven bugs. In CI. |
 | `tests/test_route.mjs` | End-to-end route runs against live SFBOFS + Open-Meteo. Prints ETA/distance/avg/ratio per variant, ~13s for four. **Use this instead of screenshots for router work.** Not in CI (network). |
 | `pi/test_boat_server.sh` | Curl smoke test against a running Pi: proxy byte-parity, local fallback, SSRF rejection, `X-Cache` MISS→HIT, `/nmea` upgrade. Not in CI (live server). |
 
@@ -349,13 +353,14 @@ node tests/test_staleness.mjs      # staleness gate + download sweep
 node tests/test_invariants.mjs     # cross-file invariants (sw.js, zoom range, ports)
 node tests/test_replay.mjs         # playback seek/scrub invariant
 python3 tests/test_boat_server.py  # Pi proxy/cache + JS↔Python parity
+python3 tests/test_log_clock.py    # GPS-derived log clock
 ```
 
-CI runs all five in `deploy.yml`'s `test` job, plus `py_compile` on the Pi/root Python and `bash -n`
+CI runs all six in `deploy.yml`'s `test` job, plus `py_compile` on the Pi/root Python and `bash -n`
 on the boat shell scripts.
 
-**20 of the 41 pitfalls are mechanically enforced** — a test fails if you undo the fix. Those are
-`P01` `P03` `P06` `P07` `P08` `P10` `P11` `P15` `P16` `P18` `P20` `P21` `P22` `P24` `P33` `P34` `P36` `P37` `P40` `P41`. The rest are
+**21 of the 42 pitfalls are mechanically enforced** — a test fails if you undo the fix. Those are
+`P01` `P03` `P06` `P07` `P08` `P10` `P11` `P15` `P16` `P18` `P20` `P21` `P22` `P24` `P33` `P34` `P36` `P37` `P40` `P41` `P42`. The rest are
 documentation-only: the index is the only thing standing between you and re-introducing them. If you
 fix a doc-only pitfall's code area, consider whether an assertion could move it into the enforced set.
 

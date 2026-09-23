@@ -19,6 +19,7 @@ import html
 import os
 import shutil
 import ssl
+import subprocess
 import threading
 import time
 import urllib.parse
@@ -67,8 +68,214 @@ _outfile = None
 _disk_cache = None   # (monotonic_time, result) — see disk_stats()
 
 
-def ts():
+# --- the log clock ---------------------------------------------------------
+# The Pi has no RTC. With no internet at sea NTP never runs, so fake-hwclock
+# restores whatever time the Pi had at its last shutdown and the clock stays
+# behind by however long it was powered off — cumulatively, across boots.
+#
+# On 2026-09-23 a survey found 52 of 76 recordings mis-stamped, by up to 115
+# hours. Nothing looked broken, because the filename and the line prefixes came
+# from the same wrong clock and therefore agreed with each other. The GPS time
+# inside $..RMC was the only ground truth in the file.
+#
+# So the logger keeps its own clock, derived from GPS, and never trusts the
+# system clock for anything it writes. This deliberately does NOT touch the
+# system clock (that needs root — see --set-system-clock); it only corrects what
+# goes into the logs, which is what makes a filename findable.
+#
+# P33 still applies with full force: this offset must never be used to measure a
+# duration. uptime_seconds() stays on time.monotonic().
+
+# How far the system clock may drift from GPS before we treat it as a different
+# clock and rotate. Two seconds is comfortably above jitter between a sentence
+# arriving and being stamped, and far below any real clock error.
+CLOCK_STEP_TOLERANCE_S = 2.0
+
+_gps_offset = None      # seconds to ADD to system time to get truth; None = unknown
+_gps_pending = None     # candidate offset awaiting a second, agreeing reading
+
+
+def reset_gps_clock():
+    """Drop all clock state. For tests."""
+    global _gps_offset, _gps_pending
+    _gps_offset = None
+    _gps_pending = None
+
+
+def nmea_checksum_ok(sentence):
+    """True if the sentence's trailing *HH checksum matches its body.
+
+    Unvalidated sentences must never be allowed to move the clock. Over UDP a
+    dropped datagram splices the tail of one sentence onto the head of another
+    (P40), and a spliced RMC is structurally perfect — it would parse to an
+    arbitrary date and step the log clock to it.
+    """
+    if not sentence or sentence[0] not in "$!":
+        return False
+    star = sentence.rfind("*")
+    if star < 1 or star + 3 > len(sentence.rstrip()):
+        return False
+    declared = sentence[star + 1:star + 3]
+    try:
+        want = int(declared, 16)
+    except ValueError:
+        return False
+    got = 0
+    for ch in sentence[1:star]:
+        got ^= ord(ch)
+    return got == want
+
+
+def parse_rmc_utc(sentence):
+    """Epoch seconds from an $..RMC, or None if it cannot be trusted.
+
+    Rejects: a bad checksum, a status other than 'A' (an invalid fix may carry
+    the receiver's own uninitialised clock), missing fields, and an impossible
+    date or time. RMC is the only sentence the boat emits that carries a *date*
+    as well as a time — GGA and GLL have time only — so it is the only usable
+    clock source. There is no ZDA on this bus.
+    """
+    if not sentence or "RMC" not in sentence[:7]:
+        return None
+    if not nmea_checksum_ok(sentence):
+        return None
+    parts = sentence.split(",")
+    if len(parts) < 10:
+        return None
+    hhmmss, status, ddmmyy = parts[1], parts[2], parts[9]
+    if status != "A":
+        return None
+    if len(hhmmss) < 6 or len(ddmmyy) != 6:
+        return None
+    try:
+        dt = datetime(
+            2000 + int(ddmmyy[4:6]), int(ddmmyy[2:4]), int(ddmmyy[0:2]),
+            int(hhmmss[0:2]), int(hhmmss[2:4]), int(hhmmss[4:6]),
+            tzinfo=timezone.utc,
+        )
+    except ValueError:
+        return None      # impossible date or time — do not roll it over
+    return dt.timestamp()
+
+
+def observe_gps_time(sentence, now=None):
+    """Feed a sentence to the clock. True if the offset changed (caller rotates).
+
+    Adoption needs **two consecutive agreeing readings**. One reading is not
+    enough: a single corrupt sentence that happens to pass the checksum would
+    otherwise redate the whole recording.
+
+    A change of more than CLOCK_STEP_TOLERANCE_S is treated as a different clock
+    and reported, so log_sentence can start a new file. That matters: if NTP
+    finally reaches the Pi mid-recording, or the first fix arrives minutes in, a
+    single file would otherwise contain two clocks — which breaks the replay
+    parser and makes playback's auto-advance gap check meaningless.
+    """
+    global _gps_offset, _gps_pending
+    gps = parse_rmc_utc(sentence)
+    if gps is None:
+        return False
+    sys_now = time.time() if now is None else now
+    measured = gps - sys_now
+
+    # Already settled and still agreeing: nothing to do. Returning True here
+    # would rotate the log file once per second.
+    if _gps_offset is not None and abs(measured - _gps_offset) <= CLOCK_STEP_TOLERANCE_S:
+        _gps_pending = None
+        return False
+
+    if _gps_pending is not None and abs(measured - _gps_pending) <= CLOCK_STEP_TOLERANCE_S:
+        _gps_offset = measured
+        _gps_pending = None
+        return True
+
+    _gps_pending = measured
+    return False
+
+
+def clock_state():
+    """What the log clock is doing, for the header line and the status page."""
+    if _gps_offset is None:
+        return {"source": "system", "offset_s": None}
+    return {"source": "gps", "offset_s": _gps_offset}
+
+
+def clock_now(now=None):
+    """The best available UTC time, GPS-derived when we have a fix.
+
+    Falls back to the system clock rather than refusing: losing sentences is
+    worse than stamping them with an unverified time. Every artifact written
+    under the fallback is marked, so it can never be silently mistaken for good
+    data — see make_filename().
+    """
+    sys_now = time.time() if now is None else now
+    return datetime.fromtimestamp(sys_now + (_gps_offset or 0.0), timezone.utc)
+
+
+# Where the privileged helper lives if it has been installed. Setting the system
+# clock needs CAP_SYS_TIME and this process runs as `rostape1`, so the step has
+# to go through sudo. Optional by design: without it the GPS offset above still
+# makes every log correct, which is the part that matters.
+SET_CLOCK_HELPER = "/usr/local/sbin/ais-set-clock"
+
+# Off by default: stepping the system clock needs a one-time privileged setup on
+# the Pi, and the logs are already correct without it. --set-system-clock turns
+# it on once that setup exists.
+SET_SYSTEM_CLOCK = False
+
+_clock_push = {"tried": False, "ok": None, "detail": "not attempted"}
+
+
+def push_clock_to_system(offset_s, helper=SET_CLOCK_HELPER, runner=None):
+    """Try once to step the system clock onto GPS truth. Never fatal.
+
+    Correcting the system clock as well as the log clock fixes the things the
+    offset cannot reach: file mtimes, boat_server.py's own log lines, and
+    /api/logs' sort order. But it is strictly a bonus — if the helper or its
+    sudoers entry is missing we say so once and carry on, because the logs are
+    already right.
+
+    Attempted once per process. Re-stepping on every reading would fight NTP if
+    the Pi later gets internet, and a clock that jitters is worse than one that
+    is merely wrong.
+    """
+    if _clock_push["tried"]:
+        return _clock_push["ok"]
+    _clock_push["tried"] = True
+
+    if abs(offset_s) <= CLOCK_STEP_TOLERANCE_S:
+        _clock_push.update(ok=None, detail="system clock already correct")
+        return None
+    if not os.path.exists(helper):
+        _clock_push.update(
+            ok=False,
+            detail=f"helper {helper} not installed — see docs/logging-and-playback.md")
+        print(f"[clock] {_clock_push['detail']}")
+        return False
+
+    target = datetime.fromtimestamp(time.time() + offset_s, timezone.utc)
+    cmd = ["sudo", "-n", helper, target.strftime("%Y-%m-%d %H:%M:%S")]
+    try:
+        run = runner or (lambda c: subprocess.run(
+            c, capture_output=True, text=True, timeout=10))
+        res = run(cmd)
+        if res.returncode == 0:
+            _clock_push.update(ok=True, detail=f"system clock stepped {offset_s / 3600:+.2f}h")
+        else:
+            _clock_push.update(
+                ok=False,
+                detail=f"helper failed rc={res.returncode}: {(res.stderr or '').strip()[:120]}")
+    except (OSError, subprocess.SubprocessError) as e:
+        _clock_push.update(ok=False, detail=f"{type(e).__name__}: {e}")
+    print(f"[clock] {_clock_push['detail']}")
+    return _clock_push["ok"]
+
+
+def ts(now=None):
     """Stored timestamp: UTC, with an explicit Z so it is self-describing.
+
+    Reads the **GPS-derived** clock, not the system clock — see clock_now(). The
+    Pi's own clock invented dates for 52 of 76 recordings before this existed.
 
     Stays UTC on purpose. It is unambiguous, DST-proof, comparable across the
     whole archive, and it is what nmea-client.js's replay parser expects. The Z
@@ -79,7 +286,7 @@ def ts():
     Display is a separate concern — every UI surface renders these in local
     time and says so. See local_str().
     """
-    return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S.%f")[:-3] + "Z"
+    return clock_now(now).strftime("%Y-%m-%d %H:%M:%S.%f")[:-3] + "Z"
 
 
 def tzname():
@@ -106,8 +313,17 @@ def utc_ts_to_local(t):
         return t  # never lose the line over a formatting problem
 
 
-def make_filename():
-    return os.path.join(LOG_DIR, f"nmea_{datetime.now().strftime('%Y-%m-%d_%H%M%S')}.txt")
+def make_filename(now=None):
+    """Log path, named in LOCAL time from the GPS-derived clock.
+
+    `_noclock` is appended when there is no GPS fix yet, so a recording written
+    under an unverified system clock is identifiable from its name alone. Before
+    this marker existed, 52 of 76 files carried invented dates and looked
+    completely normal — which is why the marker matters more than the name does.
+    """
+    dt = clock_now(now).astimezone()
+    suffix = "" if _gps_offset is not None else "_noclock"
+    return os.path.join(LOG_DIR, f"nmea_{dt.strftime('%Y-%m-%d_%H%M%S')}{suffix}.txt")
 
 
 def format_bytes(n):
@@ -249,6 +465,23 @@ def status_html():
     if not recent_lines:
         recent_lines = "<div class='line dim'>No sentences yet</div>"
 
+    # The clock panel. A wrong log clock is invisible in the data — filenames and
+    # line stamps agree with each other because they share the bad clock — so it
+    # has to be stated here or it recurs silently.
+    cs = clock_state()
+    if cs["source"] == "gps":
+        clock_dot, clock_level = "🟢", "ok"
+        clock_text = "GPS"
+        clock_note = f"offset {cs['offset_s'] / 3600:+.2f}h vs system clock"
+    else:
+        clock_dot, clock_level = "🔴", "critical"
+        clock_text = "system (UNVERIFIED)"
+        clock_note = "no GPS fix yet — filenames marked _noclock"
+    clock_alert = "" if cs["source"] == "gps" else (
+        "<div class='alert crit'>No GPS fix, so log timestamps come from the Pi's own "
+        "clock, which has no battery backup and is routinely days wrong. Files written "
+        "now are named <code>_noclock</code> and their dates cannot be trusted.</div>")
+
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -289,6 +522,12 @@ h1{{font-size:1.4em;margin-bottom:12px;color:#f5f6fa}}
  <div class="row"><span class="label">Uptime</span><span class="value">{uptime}</span></div>
 </div>
 <div class="card">
+ <div class="row"><span class="label">Log clock</span><span class="value conn {clock_level}">{clock_dot} {clock_text}</span></div>
+ <div class="row"><span class="label">&nbsp;</span><span class="value" style="font-size:0.8em">{html.escape(clock_note)}</span></div>
+ <div class="row"><span class="label">System clock</span><span class="value" style="font-size:0.8em">{html.escape(_clock_push['detail'])}</span></div>
+ {clock_alert}
+</div>
+<div class="card">
  <div class="row"><span class="label">Sentences</span><span class="value big">{stats['sentences']:,}</span></div>
  <div class="row"><span class="label">Log files</span><span class="value">{disk['files']}</span></div>
  <div class="row"><span class="label">Current file</span><span class="value" style="font-size:0.8em">{html.escape(os.path.basename(stats['current_file']))}</span></div>
@@ -324,23 +563,40 @@ def start_web_server(bind, port):
     server.serve_forever()
 
 
-def log_sentence(sentence, source_url):
+def log_sentence(sentence, source_url, now=None):
     global _current_hour, _outfile
-    now = datetime.now()
-    hour = now.strftime("%Y-%m-%d_%H")
-    if hour != _current_hour:
+
+    # Feed the clock BEFORE stamping, so this very sentence lands in the right
+    # file with the right time. A change of clock forces a rotation: one file
+    # must never contain two clocks, or the replay parser sees time run
+    # backwards and playback's auto-advance compares meaningless gaps.
+    clock_changed = observe_gps_time(sentence, now=now)
+
+    if clock_changed and SET_SYSTEM_CLOCK:
+        push_clock_to_system(clock_state()["offset_s"])
+
+    stamp_dt = clock_now(now)
+    hour = stamp_dt.astimezone().strftime("%Y-%m-%d_%H")
+    if hour != _current_hour or clock_changed or _outfile is None:
         if _outfile:
             _outfile.close()
-        filename = make_filename()
+        filename = make_filename(now)
         _outfile = open(filename, "a", encoding="utf-8")
-        _outfile.write(f"# NMEA capture started {ts()} (timestamps are UTC)\n")
+        st = clock_state()
+        if st["source"] == "gps":
+            _outfile.write(
+                f"# clock: gps (offset {st['offset_s'] / 3600:+.2f}h from system clock)\n")
+        else:
+            _outfile.write(
+                "# clock: system — NO GPS FIX YET, these timestamps are UNVERIFIED\n")
+        _outfile.write(f"# NMEA capture started {ts(now)} (timestamps are UTC)\n")
         _outfile.write(f"# Source: {source_url}\n#\n")
         _outfile.flush()
         stats["current_file"] = filename
         _current_hour = hour
-        print(f"Logging to {filename}")
+        print(f"Logging to {filename} [clock: {st['source']}]")
 
-    timestamp = ts()
+    timestamp = ts(now)
     entry = f"{timestamp}  {sentence}\n"
 
     # Catch the write failure HERE rather than letting it unwind into
@@ -406,7 +662,15 @@ def main():
     parser.add_argument("--web-port", type=int, default=8081,
                         help="Status page HTTP port (default: 8081; 8080 is the boat server)")
     parser.add_argument("--bind", default="0.0.0.0", help="Status page bind address (default: 0.0.0.0)")
+    parser.add_argument(
+        "--set-system-clock", action="store_true",
+        help="Also step the SYSTEM clock onto GPS time, via the privileged helper at "
+             f"{SET_CLOCK_HELPER}. Optional: log timestamps are GPS-corrected either "
+             "way. Needs the one-time sudoers setup (docs/logging-and-playback.md).")
     args = parser.parse_args()
+
+    global SET_SYSTEM_CLOCK
+    SET_SYSTEM_CLOCK = args.set_system_clock
 
     os.makedirs(LOG_DIR, exist_ok=True)
     stats["start_monotonic"] = time.monotonic()

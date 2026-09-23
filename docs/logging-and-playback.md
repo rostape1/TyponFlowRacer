@@ -73,7 +73,8 @@ over a directory that now grows without bound.
 
 ## Timezones
 
-Three surfaces, one rule: **store UTC, display local.**
+Three surfaces, one rule: **store UTC, display local.** A fourth question — *whose* clock — is
+answered in [The clock](#the-clock) below, and it is the one that actually went wrong.
 
 | Where | Zone | Notes |
 |---|---|---|
@@ -88,6 +89,71 @@ change have no `Z` and are parsed as UTC, which is what they are, so the archive
 Do not switch stored timestamps to local time. It would split the archive into two conventions,
 break `nmea-client.js`'s parser (which appends `Z` when absent), and reintroduce DST ambiguity for
 one hour every autumn.
+
+## The clock
+
+Getting the zone right is worthless if the clock itself is wrong, and for ten days it was. See
+[`P42`](pitfalls.md) for the full account; the operational summary:
+
+**The logger derives its own clock from GPS and never trusts the Pi's.** The Pi has no RTC, and at
+sea there is no internet, so NTP never runs and `fake-hwclock` restores the time from the last
+shutdown — leaving the clock behind by however long the Pi was off, cumulatively across boots. It
+reached **115 hours wrong**, which invented the dates on 52 of 76 recordings. Nothing looked broken,
+because the filename and the line prefixes share the bad clock and therefore agree with each other.
+
+`$..RMC` is the only usable source: it carries a date as well as a time. `$GPGGA` has time only, and
+this bus emits no `$ZDA`.
+
+| Concern | How it is handled |
+|---|---|
+| A corrupt sentence setting the clock | Checksum validated, and status must be `A` — an invalid fix may carry the receiver's own uninitialised clock |
+| One bad sentence redating a whole file | Adoption requires **two agreeing readings** within `CLOCK_STEP_TOLERANCE_S` (2 s) |
+| The clock changing part-way through a file | **Rotates.** One file must never hold two clocks, or replay sees time run backwards and auto-advance compares meaningless gaps |
+| No GPS fix at all | Logging continues — losing sentences is worse — but the filename gets `_noclock`, the header says the times are unverified, and the `:8081` status page goes red |
+| Durations | Untouched. `uptime_seconds()` stays on `time.monotonic()`; a GPS step is exactly the jump `P33` is about. Asserted in `tests/test_log_clock.py` |
+
+**Optionally, the system clock too.** `--set-system-clock` plus `pi/ais-set-clock.sh` steps the
+system clock onto GPS truth, fixing what the log offset cannot reach: file mtimes,
+`boat_server.py`'s own log lines, `/api/logs` ordering. Off by default, because it needs a one-time
+privileged setup and the logs are already correct without it:
+
+```bash
+sudo install -m 755 -o root -g root pi/ais-set-clock.sh /usr/local/sbin/ais-set-clock
+echo 'rostape1 ALL=(root) NOPASSWD: /usr/local/sbin/ais-set-clock' \
+    | sudo tee /etc/sudoers.d/ais-set-clock
+sudo chmod 440 /etc/sudoers.d/ais-set-clock
+sudo visudo -c
+```
+
+Then add `--set-system-clock` to `nmea_capture.py`'s invocation in `pi/startup.sh`. The helper
+validates its argument's shape, bounds the year to 2024-2040 (a GPS rollover could otherwise name
+1999), and stands down if NTP is actually synchronised rather than fighting it.
+
+**The permanent fix is hardware** — a DS3231 RTC on the I²C header, so the Pi boots knowing the time
+with neither GPS nor internet. Everything above is the software half.
+
+### Repairing recordings already on disk
+
+```bash
+python3 tools/fix_log_times.py ~/Documents/typon-nmea-logs-raw            # survey
+python3 tools/fix_log_times.py ~/Documents/typon-nmea-logs-raw \
+    -o ~/Documents/typon-nmea-logs --apply
+```
+
+Measures the offset per file from GPS, **splits** where the clock stepped mid-recording, shifts every
+line prefix, and renames to true local time. It never modifies or deletes its input (`P34`) and never
+guesses: a file with no valid fix is copied to `no-gps/` and listed in `manifest.json` as unresolved.
+Output is line-count-audited — a repair that loses sentences is far worse than a wrong filename.
+
+Run on the real archive 2026-09-23: 76 files → 84 (six had mid-file clock steps), 21.8 M lines in and
+out, worst residual drift 0.000 s.
+
+Corrected names land at odd minutes past the hour (`nmea_2026-09-19_095204.txt`) because the original
+rotation boundaries were aligned to the wrong clock. That is truthful, not a new defect.
+
+The convention on the Mac: **`typon-nmea-logs-raw/` holds the untouched originals, `typon-nmea-logs/`
+holds the corrected copies and is what `play_logs.sh` serves.** Pull from the Pi into `-raw`, then
+re-run the repair.
 
 ## Uptime and the missing clock
 
