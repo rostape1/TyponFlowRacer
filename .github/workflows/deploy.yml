@@ -57,7 +57,7 @@ jobs:
         run: python3 -m py_compile pi/boat_server.py nmea_capture.py nmea_ws_proxy.py download_offline.py
 
       - name: Syntax-check the boat shell scripts
-        run: bash -n start_boat.sh pi/startup.sh pi/test_boat_server.sh
+        run: bash -n start_boat.sh play_logs.sh pi/startup.sh pi/test_boat_server.sh
 
   deploy:
     needs: test
