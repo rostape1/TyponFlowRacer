@@ -105,7 +105,7 @@ known-good code. Prefer that when you're not at the boat (`P25`). Python changes
 
 | Port | Owner | Notes |
 |---|---|---|
-| **8080** | `pi/boat_server.py` via `start_boat.sh` | HTTP. The boat server. `PORT` env overrides. |
+| **8080** | `pi/boat_server.py` via `start_boat.sh` | HTTP. The boat server. `PORT` env overrides. Also the port `play_logs.sh` uses for **Mac-local replay**, so the local bookmark stays stable |
 | 8081 | `nmea_capture.py` status page | `--web-port`, set explicitly in `startup.sh`. Also the disk-space alert (`P34`) |
 | 8888 | local dev static server, and legacy `main.py` | `python3 -m http.server 8888 --directory static` |
 | 10110 | AIS receiver (`192.168.47.10`) | **UDP broadcast since 2026-09-14 — this is the live path.** The Pi listens on `0.0.0.0:10110`, accepting only from `--tcp-host`. The TCP client still runs as a fallback and fails by design; `ECONNREFUSED` there is now normal (`P40`) |
@@ -319,6 +319,7 @@ safely. Look up your group's IDs in [docs/pitfalls.md](docs/pitfalls.md), by ID,
 | `pi/ais-tracker.service` | systemd unit, runs as `rostape1`, `Restart=on-failure` |
 | `pi/requirements.txt` | `aiohttp`, `websockets` |
 | `start_boat.sh` | Foreground launcher, `PORT=8080` default |
+| `play_logs.sh` | Replay recordings on a **Mac**: runs `boat_server.py` against `~/Documents/typon-nmea-logs`. A static server cannot do this — `/api/logs` and `/logs/` are `boat_server.py` routes, and without them auto-advance has no list to step through |
 | `nmea_capture.py` | Hourly-rotated NMEA logger into `logs/`, browsable at `/logs` |
 | `nmea_ws_proxy.py` | Legacy standalone TCP→WS proxy (:8765). Superseded, but `nmea_tcp_broadcast()` and `nmea_udp_broadcast()` are still imported by `boat_server.py`. |
 | `download_offline.py` | Manual idempotent tile + asset pre-fetch into `static/tiles/`. `DEFAULT_BOUNDS` is authoritative. |

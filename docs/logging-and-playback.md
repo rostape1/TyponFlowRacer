@@ -256,6 +256,25 @@ the threshold either side, unparseable names, an unknown current file, and scrub
 advancing. Mutation-tested with six deliberate bugs, including "trust the list order" and "parse the
 filename as UTC".
 
+### Replaying on a Mac, away from the boat
+
+`./play_logs.sh` — serves `~/Documents/typon-nmea-logs` (override with `LOG_DIR=`) at
+`http://localhost:8080/#playback`. Same port as the Pi on purpose, so the local bookmark never
+drifts; the script clears a previous instance off the port rather than failing to bind.
+
+**A plain static server cannot do this, and neither can GitHub Pages.** The recording picker reads
+`/api/logs` and files come from `/logs/<name>`, both routes in `pi/boat_server.py`. Without them the
+picker reads "Recording list unavailable" and **auto-advance cannot work at all** — there is no list
+to step through. Loading a file through the Charts tab's local-file input still works, but a local
+file deliberately never auto-advances.
+
+Running the real server also synthesises `/config.json` with `useCloudAIS:false`, which is what you
+want: otherwise AISstream keeps injecting live traffic over the historical fleet.
+
+Copy recordings off the Pi over HTTP — no SSH needed — by walking `/api/logs` and fetching each
+`/logs/<name>`. Skip files already present at the same size and the copy is idempotent, so it can be
+re-run to collect only what is new.
+
 ### Why seeking re-reads the log
 
 Instrument state accumulates: position, heading, wind and AIS targets each persist until a later
