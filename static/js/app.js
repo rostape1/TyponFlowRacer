@@ -7,6 +7,56 @@ const TRACK_HOURS = 0.5;
 const STALE_MINUTES = 10;
 const MAX_VESSELS = 50;
 
+/**
+ * The one place a vessel's label is decided, so the popup, the side panel, the
+ * radar and the accessibility labels cannot drift apart.
+ *
+ * Goes through VesselNames, which resolves a name the receiver has not sent yet
+ * from the local database — AIS broadcasts identity far more rarely than
+ * position, and in replay the store resets at every file boundary, so without
+ * this most contacts read as bare MMSIs.
+ *
+ * Returns a PLAIN string. Anything that interpolates it into HTML must use
+ * vesselLabelHtml() instead — stripping angle brackets is not enough for
+ * attribute context, which is where the reachable P19 sink is.
+ */
+// Load the name seed once, fire-and-forget. It resolves names the receiver has
+// not broadcast yet. Never awaited and never fatal: a missing file must degrade
+// to MMSI labels, not gate the map or the AIS feed (compare P14, where an
+// un-timed config fetch wedged both).
+if (typeof VesselNames !== 'undefined') {
+    VesselNames.load('vessel_names.json').then((n) => {
+        if (n) console.info(`[names] ${n} vessel names loaded;`,
+            JSON.stringify(VesselNames.stats()));
+    });
+}
+
+function vesselLabel(v) {
+    if (!v) return 'Unknown vessel';
+    if (v.mmsi === OWN_MMSI) return OWN_NAME;
+    return typeof VesselNames !== 'undefined'
+        ? VesselNames.displayName(v)
+        : (v.name || v.shipname || `MMSI ${v.mmsi}`);
+}
+
+/**
+ * The same label, escaped for interpolation into HTML.
+ *
+ * Use this — never vesselLabel() — anywhere the result lands in a template
+ * literal that becomes innerHTML. The AIS 6-bit charset passes values 32-63
+ * straight through, so `"` is a legal name byte; a name of `X" onclick=alert(1)`
+ * fits the 20-char Type 5 field and escapes an aria-label="…" attribute without
+ * needing a single angle bracket. It would also persist into localStorage and
+ * the seed file, firing on every load. P19, one layer out from the legend.
+ */
+function vesselLabelHtml(v) {
+    const s = vesselLabel(v);
+    return typeof VesselNames !== 'undefined'
+        ? VesselNames.escapeHtml(s)
+        : String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+
 // Boat-mode runtime config. Pi serves /config.json; GH Pages 404s, so the app
 // falls through to today's web-mode defaults. Started immediately so the fetch
 // is in flight while the rest of the script parses.
@@ -542,7 +592,7 @@ function buildPopupHtml(v) {
     const lastPing = v._lastUpdate ? formatAgo(v._lastUpdate) : '—';
 
     return `<div class="popup-content">
-        <h3>${v.mmsi === OWN_MMSI ? OWN_NAME : (v.name || 'MMSI ' + v.mmsi)}${v.mmsi === OWN_MMSI ? ' (You)' : ''}</h3>
+        <h3>${vesselLabelHtml(v)}${v.mmsi === OWN_MMSI ? ' (You)' : ''}</h3>
         <div class="popup-row"><span class="popup-label">MMSI</span><span class="popup-value">${v.mmsi}</span></div>
         ${v.ship_category && v.ship_category !== 'Unknown' ? `<div class="popup-row"><span class="popup-label">Type</span><span class="popup-value">${v.ship_category}</span></div>` : ''}
         <div class="popup-row"><span class="popup-label">SOG</span><span class="popup-value">${v.sog != null ? v.sog.toFixed(1) + ' kn' : '—'}</span></div>
@@ -756,7 +806,9 @@ function updatePanel() {
     // Filter by search query
     if (query) {
         vesselArray = vesselArray.filter(v => {
-            const name = (v.name || v.shipname || '').toLowerCase();
+            // Includes the locally-resolved name, so a vessel named only in
+            // vessel_names.json is still findable by name.
+            const name = vesselLabel(v).toLowerCase();
             const mmsi = String(v.mmsi);
             return name.includes(query) || mmsi.includes(query);
         });
@@ -805,9 +857,9 @@ function updatePanel() {
         return `<div class="vessel-card ${isOwn ? 'own-vessel' : ''} ${isStale ? 'stale' : ''} ${!isVisible ? 'vessel-hidden' : ''}"
                      data-mmsi="${v.mmsi}">
             <div class="vessel-name">
-                ${v.mmsi === OWN_MMSI ? OWN_NAME : (v.name || 'MMSI ' + v.mmsi)}
+                ${vesselLabelHtml(v)}
                 ${v.ship_category && v.ship_category !== 'Unknown' ? `<span class="vessel-type-badge ${typeClass}">${v.ship_category}</span>` : ''}
-                <button class="vessel-toggle ${isVisible ? '' : 'toggled-off'}" data-mmsi="${v.mmsi}" title="${isVisible ? 'Hide from map' : 'Show on map'}" aria-pressed="${isVisible}" aria-label="${isVisible ? 'Hide' : 'Show'} ${v.mmsi === OWN_MMSI ? OWN_NAME : (v.name || 'MMSI ' + v.mmsi)} on map">
+                <button class="vessel-toggle ${isVisible ? '' : 'toggled-off'}" data-mmsi="${v.mmsi}" title="${isVisible ? 'Hide from map' : 'Show on map'}" aria-pressed="${isVisible}" aria-label="${isVisible ? 'Hide' : 'Show'} ${vesselLabelHtml(v)} on map">
                     ${isVisible ? '&#9673;' : '&#9675;'}
                 </button>
             </div>
@@ -1103,7 +1155,7 @@ function updateMobileVesselList() {
             ? haversineNm(ownPosition.lat, ownPosition.lon, v.lat, v.lon).toFixed(1) : null;
         return `<div class="vessel-card ${isOwn ? 'own-vessel' : ''} ${isStale ? 'stale' : ''}" data-mmsi="${v.mmsi}">
             <div class="vessel-name">
-                ${isOwn ? OWN_NAME : (v.name || 'MMSI ' + v.mmsi)}
+                ${vesselLabelHtml(v)}
                 ${v.ship_category && v.ship_category !== 'Unknown' ? `<span class="vessel-type-badge ${typeClass}">${v.ship_category}</span>` : ''}
             </div>
             <div class="vessel-meta">
@@ -2489,8 +2541,17 @@ function _setDlCategory(cat, success) {
         // If we can't compute hours (broken model_run), treat as failed download
         if (hoursAhead === null) { _updateDlBadge(cat, null); return; }
     }
-    localStorage.setItem('ais_dl_status', JSON.stringify(s));
+    // A full quota must not swallow a download that actually succeeded. This used
+    // to throw BEFORE _updateDlBadge, so an exhausted localStorage left every
+    // badge dim after four successful fetches — the P04 failure: a badge that no
+    // longer reflects verified data. The badge is the truth; persistence is the
+    // convenience, so the badge goes first and the write may fail.
     _updateDlBadge(cat, 'done', hoursAhead, gaps);
+    try {
+        localStorage.setItem('ais_dl_status', JSON.stringify(s));
+    } catch (e) {
+        console.warn('[dl] could not persist download status (storage full?)', e);
+    }
 }
 
 function _updateDlBadge(cat, state, hours, gaps) {

@@ -16,6 +16,10 @@
  *        endsWith() also matches evilservices.arcgisonline.com.
  *   P24  The Pi's port drifted across five files; the smoke test defaulted to a
  *        scheme and port the server never used and failed all ten of its checks.
+ *   P43  Every relative path in sw.js's ASSETS must exist on disk. install does
+ *        cache.addAll(ASSETS), which rejects as a UNIT, so one missing file means
+ *        the Service Worker never activates and ALL offline capability is lost —
+ *        silently, because everything looks normal while online.
  *
  * P16 and P18 are functional: sw.js is loaded in a sandbox with a fake Cache API
  * and its real functions are called. P15 and P24 are source assertions, because
@@ -25,6 +29,7 @@
  */
 
 import { readFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 
@@ -258,6 +263,48 @@ section('P22 — CI actually gates the code the tests cover');
      !wf.includes('tests/test_route.mjs'), 'test_route.mjs needs live SFBOFS + Open-Meteo');
   ok('CI byte-compiles the Pi server', /py_compile[^\n]*pi\/boat_server\.py/.test(wf));
   ok('CI syntax-checks the boat shell scripts', /bash -n[^\n]*start_boat\.sh/.test(wf));
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// P43 — every precached asset must actually exist.
+//
+// install() is `caches.open(CACHE_NAME).then((c) => c.addAll(ASSETS))`, and
+// addAll rejects as a unit: ONE 404 and the Service Worker never activates, so
+// the app shell, DATA_CACHE and TILE_CACHE are all gone. It looks completely
+// normal online and is discovered offshore.
+//
+// This nearly shipped on 2026-09-24: a generated file (vessel_names.json) was
+// added to ASSETS while still untracked in git, so the deploy would have served
+// a 404 for it to every client. Five review agents found it; this check would
+// have found it in 0.2 seconds. Prefer the check.
+// ─────────────────────────────────────────────────────────────────────────────
+section('sw.js precache manifest (P43)');
+{
+  const src = read('static/sw.js');
+  const block = /const ASSETS\s*=\s*\[([\s\S]*?)\]/.exec(src);
+  ok('ASSETS array is parseable', !!block);
+  if (block) {
+    const paths = [...block[1].matchAll(/['"]([^'"]+)['"]/g)].map((m) => m[1]);
+    ok('ASSETS is non-empty', paths.length > 0, `found ${paths.length}`);
+    for (const rel of paths) {
+      if (/^(https?:)?\/\//.test(rel)) continue;         // absolute URL, not ours to check
+      if (rel === './' || rel === '.') continue;          // the page itself
+      let exists = true;
+      try { readFileSync(join(ROOT, 'static', rel)); } catch (e) { exists = false; }
+      ok(`precached asset exists: ${rel}`, exists,
+        'addAll() rejects as a unit — a missing file kills the whole Service Worker');
+      // On disk is not enough: the deploy is a fresh checkout, so an UNTRACKED
+      // file is a 404 in production while passing every local check. That is
+      // exactly how this nearly shipped.
+      let tracked = true;
+      try {
+        execFileSync('git', ['ls-files', '--error-unmatch', `static/${rel}`],
+          { cwd: ROOT, stdio: 'ignore' });
+      } catch (e) { tracked = false; }
+      ok(`precached asset is tracked in git: ${rel}`, tracked,
+        'a fresh deploy checkout would 404 this and the Service Worker would never install');
+    }
+  }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

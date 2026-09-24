@@ -40,6 +40,7 @@ const ASSETS = [
   'js/wind-overlay.js',
   'js/aisstream.js',
   'js/vessel-store.js',
+  'js/vessel-names.js',
   'js/data-loader.js',
   'js/router.js',
   'js/route-worker.js',

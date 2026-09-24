@@ -25,7 +25,11 @@ const CompetitorLabels = (() => {
         const distTrend = computeTrend(hist, now, TREND_WINDOW);
         const sogTrend = computeSogTrend(vessel);
 
-        const name = vessel.name || vessel.shipname || `MMSI ${vessel.mmsi}`;
+        // Resolved through the local name database: AIS sends identity far less
+        // often than position, and replay resets the store at each file boundary.
+        const name = typeof VesselNames !== 'undefined'
+            ? VesselNames.displayName(vessel)
+            : (vessel.name || vessel.shipname || `MMSI ${vessel.mmsi}`);
         const distStr = dist < 0.1 ? dist.toFixed(2) : dist.toFixed(1);
         const distArrow = distTrend < -0.01 ? '▲' : distTrend > 0.01 ? '▼' : '─';
         const distColor = distTrend < -0.01 ? '#2ecc71' : distTrend > 0.01 ? '#e74c3c' : '#8395a7';
