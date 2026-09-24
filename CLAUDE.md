@@ -273,6 +273,7 @@ safely. Look up your group's IDs in [docs/pitfalls.md](docs/pitfalls.md), by ID,
 
 ### Touching static serving, the browser cache or the boot script chain
 - Unversioned JS with no `Cache-Control` let Chrome run last week's app against today's Pi `P41`
+- An untracked file in `sw.js`'s `ASSETS` makes `addAll` reject and kills ALL offline caching `P43`
 
 ---
 
@@ -297,6 +298,7 @@ safely. Look up your group's IDs in [docs/pitfalls.md](docs/pitfalls.md), by ID,
 | `js/app.js` (~3300 lines) | Leaflet map, vessel markers, popups, CPA/TCPA, search, forecast UI, offline pre-fetch, config bootstrap, tile-layer selection |
 | `js/aisstream.js` | Browser WebSocket to AISstream.io → internal vessel format |
 | `js/vessel-store.js` | In-memory vessel DB, track history, localStorage persistence |
+| `js/vessel-names.js` | Local MMSI→name database: seed file + names learned from AIS + manual entries. Resolved at display time — [docs/vessel-names.md](docs/vessel-names.md) |
 | `js/data-loader.js` | NOAA CO-OPS tides/currents/water levels + Open-Meteo wind, client-side interpolation, SFBOFS staleness gate |
 | `js/router.js` + `js/route-worker.js` | Isochrone route optimizer — [docs/router.md](docs/router.md) |
 | `js/nmea-parser.js` | NMEA 0183 parser (GGA, RMC, HCHDG, MWV, MWD, VHW, DPT, VTG, ROT, XDR) |
@@ -325,6 +327,7 @@ safely. Look up your group's IDs in [docs/pitfalls.md](docs/pitfalls.md), by ID,
 | `pi/ais-set-clock.sh` | Root helper to step the *system* clock onto GPS time. Optional, needs a one-time sudoers entry; logs are correct without it (`P42`) |
 | `nmea_ws_proxy.py` | Legacy standalone TCP→WS proxy (:8765). Superseded, but `nmea_tcp_broadcast()` and `nmea_udp_broadcast()` are still imported by `boat_server.py`. |
 | `download_offline.py` | Manual idempotent tile + asset pre-fetch into `static/tiles/`. `DEFAULT_BOUNDS` is authoritative. |
+| `tools/build_vessel_names.mjs` | Builds `static/vessel_names.json` from the log archive, reusing `ais-decoder.js` rather than a second decoder (`P20`) |
 | `tools/fix_log_times.py` | Repairs recordings mis-dated by the Pi's clock: shifts prefixes, splits mid-file clock steps, renames to GPS truth. Never modifies its input (`P42`) |
 
 ### Legacy backend (root, reference / local dev only)
@@ -340,9 +343,10 @@ SQLite schema they use (`vessels`, `positions`, WAL mode) is superseded in the b
 |------|---------|
 | `tests/test_physics.mjs` | `route-worker.js` polar lookup + apparent wind math, `new Function` sandbox with stubbed `self`. In CI. |
 | `tests/test_staleness.mjs` | SFBOFS staleness gate (`P01`) + download sweep (`P03`): stale-seed deadlock, NOW-vs-+4h aliasing, high-res parity, 49-call request budget. Sandboxed `fetch`, no network. In CI. |
-| `tests/test_invariants.mjs` | Cross-file invariants — the traps that live in the gap between two files. `sw.js` host matching (`P18`) and quota eviction (`P16`) are **functional**: `sw.js` is loaded in a sandbox with a fake Cache API and its real functions called. Tile zoom range (`P15`) and the Pi port/scheme (`P24`) are cross-file source assertions, because the thing under test *is* agreement between two files' literals. In CI. |
+| `tests/test_invariants.mjs` | Cross-file invariants — the traps that live in the gap between two files. Includes the `sw.js` precache manifest (`P43`): every `ASSETS` path must exist **and be tracked in git**. `sw.js` host matching (`P18`) and quota eviction (`P16`) are **functional**: `sw.js` is loaded in a sandbox with a fake Cache API and its real functions called. Tile zoom range (`P15`) and the Pi port/scheme (`P24`) are cross-file source assertions, because the thing under test *is* agreement between two files' literals. In CI. |
 | `tests/test_boat_server.py` | Pi proxy + cache: JS↔Python parity (`P20`, incl. `toFixed` comparison against real `node`), UTC-rollover alias (`P06`), captive portals (`P07`), 404-vs-5xx (`P08`), stale ceilings, single-flight, prune, allowlists. Also the NMEA transports (`P40`): UDP reassembly, source filtering, bridge-task liveness in `/api/health`. In CI; needs `pip install -r pi/requirements.txt`. |
 | `tests/test_replay.mjs` | Playback scrub (`nmea-client.js`) in a sandbox with a fake store and controllable clock. The invariant: seeking to N leaves the store identical to playing through to N. Mutation-tested. In CI. |
+| `tests/test_vessel_names.mjs` | The MMSI→name database: layer precedence, cleaning, persistence and its failure paths, replay learning, pasted-reference parsing, `P19`. In CI. |
 | `tests/test_log_clock.py` | The GPS-derived log clock (`P42`): checksum + fix-status rejection, two-reading adoption, rotation on a clock step, the `_noclock` marker, and the optional system-clock push. Mutation-tested with seven bugs. In CI. |
 | `tests/test_route.mjs` | End-to-end route runs against live SFBOFS + Open-Meteo. Prints ETA/distance/avg/ratio per variant, ~13s for four. **Use this instead of screenshots for router work.** Not in CI (network). |
 | `pi/test_boat_server.sh` | Curl smoke test against a running Pi: proxy byte-parity, local fallback, SSRF rejection, `X-Cache` MISS→HIT, `/nmea` upgrade. Not in CI (live server). |
@@ -353,14 +357,15 @@ node tests/test_staleness.mjs      # staleness gate + download sweep
 node tests/test_invariants.mjs     # cross-file invariants (sw.js, zoom range, ports)
 node tests/test_replay.mjs         # playback seek/scrub invariant
 python3 tests/test_boat_server.py  # Pi proxy/cache + JS↔Python parity
+node tests/test_vessel_names.mjs   # MMSI→name database
 python3 tests/test_log_clock.py    # GPS-derived log clock
 ```
 
-CI runs all six in `deploy.yml`'s `test` job, plus `py_compile` on the Pi/root Python and `bash -n`
+CI runs all seven in `deploy.yml`'s `test` job, plus `py_compile` on the Pi/root Python and `bash -n`
 on the boat shell scripts.
 
-**21 of the 42 pitfalls are mechanically enforced** — a test fails if you undo the fix. Those are
-`P01` `P03` `P06` `P07` `P08` `P10` `P11` `P15` `P16` `P18` `P20` `P21` `P22` `P24` `P33` `P34` `P36` `P37` `P40` `P41` `P42`. The rest are
+**22 of the 43 pitfalls are mechanically enforced** — a test fails if you undo the fix. Those are
+`P01` `P03` `P06` `P07` `P08` `P10` `P11` `P15` `P16` `P18` `P20` `P21` `P22` `P24` `P33` `P34` `P36` `P37` `P40` `P41` `P42` `P43`. The rest are
 documentation-only: the index is the only thing standing between you and re-introducing them. If you
 fix a doc-only pitfall's code area, consider whether an assertion could move it into the enforced set.
 
@@ -437,6 +442,9 @@ sudo journalctl -u ais-tracker -f
 - **Competitor labels** — distance/speed/bearing relative to Typon, toggleable, click to open the
   vessel popup.
 - **50 vessel cap** — cloud AIS mode keeps only the 50 closest.
+- **Vessel names resolved locally** — AIS sends identity far more rarely than position, so contacts
+  arrive as bare MMSIs; a local database fills them in. Manual entry is API-only so far.
+  [docs/vessel-names.md](docs/vessel-names.md)
 - **Forecast range asymmetry** — tides are unlimited (harmonic math, no model). Wind caps at 49h
   (Open-Meteo), current field at 48h (SFBOFS).
 - **Auto-download on load** — `_autoDownload()` fires 8s after load, pre-fetches everything, retries
@@ -520,6 +528,7 @@ new topic doc gets a row in the map below.
 | **Route optimizer** — isochrone search, wind frame, pruning, polars, variants | [docs/router.md](docs/router.md) |
 | **Logging, hub and playback** — retention, the disk alert, the transport, seek semantics | [docs/logging-and-playback.md](docs/logging-and-playback.md) |
 | **NMEA receiver hardware** — the XPort, why a refusal is ambiguous, safe probing, TCP↔UDP | [docs/nmea-hardware.md](docs/nmea-hardware.md) |
+| **Vessel names** — why contacts show as MMSIs, the three layers, what is not automated | [docs/vessel-names.md](docs/vessel-names.md) |
 | Land mask — TIGER/Line polygons, water/land detection | [docs/land-mask.md](docs/land-mask.md) |
 | Router open work / next session notes | [docs/router-next-session.md](docs/router-next-session.md) |
 | **Pre-ship review gate** — the 5 passes, pitfall injection, adversarial verification | [.claude/skills/pre-ship-review/SKILL.md](.claude/skills/pre-ship-review/SKILL.md) |

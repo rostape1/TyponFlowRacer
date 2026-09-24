@@ -43,6 +43,9 @@ jobs:
       - name: Run replay/scrub tests
         run: node tests/test_replay.mjs
 
+      - name: Run vessel name database tests
+        run: node tests/test_vessel_names.mjs
+
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'

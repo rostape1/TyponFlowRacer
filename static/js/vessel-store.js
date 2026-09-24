@@ -76,6 +76,18 @@ class VesselStore {
         // cloud-AIS path, which has no per-message timestamp.
         const seenAt = Number.isFinite(msg._reportedAt) ? msg._reportedAt : this.now();
         const merged = { ...existing, ...msg, _lastUpdate: seenAt };
+
+        // Record identity in the name database. This is the one choke point every
+        // AIS message passes, live or replayed, so it cannot be missed the way
+        // four separate call sites could.
+        //
+        // Note this happens even while replaying, unlike _save() below. That is
+        // deliberate: identity is timeless, position is not. Learning that
+        // 368309230 is FINAL FINAL from a June log is true today; learning where
+        // she was in June is exactly what must not leak into the live picture.
+        if (typeof VesselNames !== 'undefined') {
+            VesselNames.learn(msg.mmsi, msg.name || msg.shipname);
+        }
         this.vessels.set(msg.mmsi, merged);
         this.messageCount++;
 

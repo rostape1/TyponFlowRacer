@@ -288,7 +288,13 @@ class RadarView {
             icon.style.color = color;
             icon.style.transform = `rotate(${(v.cog || v.heading || 0)}deg)`;
 
-            el.querySelector('.radar-vessel-name').textContent = v.name || 'MMSI ' + v.mmsi;
+            // Resolved through the name database like every other label site, or the
+            // radar reads "MMSI 368309230" for a contact the side panel is calling
+            // FINAL FINAL at the same instant. textContent, so no escaping needed.
+            el.querySelector('.radar-vessel-name').textContent =
+                typeof VesselNames !== 'undefined'
+                    ? VesselNames.displayName(v)
+                    : (v.name || 'MMSI ' + v.mmsi);
             const speedEl = el.querySelector('.radar-vessel-speed');
             speedEl.textContent = (v.sog != null ? v.sog.toFixed(1) : '?') + 'kts';
             speedEl.style.color = color;

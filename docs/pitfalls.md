@@ -730,6 +730,37 @@ with neither GPS nor internet.
 
 ---
 
+## An untracked file in sw.js's ASSETS destroys ALL offline capability [P43]
+
+**`ENFORCED`** — `tests/test_invariants.mjs` asserts every relative path in `ASSETS` both exists on
+disk **and is tracked in git**. Verified by mutation: re-adding the untracked entry fails two
+assertions.
+
+`install` is `caches.open(CACHE_NAME).then((c) => c.addAll(ASSETS))`. **`cache.addAll()` rejects as a
+unit.** One 404 and the promise rejects, `waitUntil` rejects, the Service Worker never activates —
+so the app shell, `DATA_CACHE` and `TILE_CACHE` are *all* gone. Not the one missing asset: all of
+`docs/offline-cache.md`.
+
+It is invisible while online. Everything renders normally from the network; the loss is discovered
+offshore.
+
+On 2026-09-24 a generated seed file (`static/vessel_names.json`) was added to `ASSETS` while still
+untracked in git. A deploy is a fresh checkout, so Pages would have served a 404 for it to every
+client. Worse, the *source* file `static/js/vessel-names.js` was untracked too — two instances of
+the same mistake in one change, and the second was found only because the new assertion existed.
+
+Two rules follow:
+
+- **On disk is not enough.** A local check passes for an untracked file; the deploy checkout does
+  not have it. Assert `git ls-files --error-unmatch`, not just readability.
+- **Never put a generated artifact in an atomic precache.** Source files are always present in a
+  checkout; build outputs are exactly the class that can go missing. `vessel_names.json` is now
+  omitted from `ASSETS` and lands in `CACHE_NAME` through the network-first fallthrough instead, so
+  its absence costs vessel names and nothing else.
+
+Five zero-context review agents found this. The assertion finds it in 0.2 seconds. Prefer the
+assertion — that is the whole argument for the smoke-prepass model.
+
 ## Adding a pitfall
 
 Writeup goes here under a new `## <one-line title> [Pnn]` heading with the next unused number.
