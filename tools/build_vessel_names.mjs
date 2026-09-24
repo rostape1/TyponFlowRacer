@@ -16,6 +16,11 @@
  * decoder written in Python would be two implementations that must agree
  * forever, which is exactly the trap P20 is filed against.
  *
+ * Hand-known names come from tools/vessel_names_overrides.json and are merged LAST,
+ * so they survive a rebuild and beat a garbled broadcast. That is the only durable
+ * home for the 7% of vessels that never transmit a name — localStorage is
+ * per-browser, and editing the generated file is wiped by the next build.
+ *
  * The output is committed. It lives in static/ rather than data/ deliberately:
  * data/ is not in git and static/data/ is gitignored, so a seed placed there
  * would silently never reach the Pi. static/ is served directly by both GitHub
@@ -102,6 +107,27 @@ for (const f of files) {
 }
 process.stderr.write('\n');
 
+// Merge hand-known names LAST, so they win over a garbled broadcast. 59 of the
+// archive's 824 vessels never broadcast a name, and no amount of listening fixes
+// that — see tools/vessel_names_overrides.json.
+let overrides = 0;
+try {
+    const ov = JSON.parse(readFileSync(join(__dirname, 'vessel_names_overrides.json'), 'utf8'));
+    for (const k of Object.keys(ov.names || {})) {
+        if (!/^\d{9}$/.test(k)) {
+            console.error(`  skipping override with malformed MMSI: ${k}`);
+            continue;
+        }
+        const n = cleanName(ov.names[k]);
+        if (!n) { console.error(`  skipping empty override for ${k}`); continue; }
+        names.set(k, n);
+        overrides++;
+    }
+} catch (e) {
+    // Optional file. Absent is normal; malformed should be loud but not fatal.
+    if (e.code !== 'ENOENT') console.error(`  overrides file unusable: ${e.message}`);
+}
+
 // Sorted keys so the committed file has a stable diff — otherwise every rebuild
 // churns the whole thing and the history becomes unreadable.
 const sorted = {};
@@ -118,6 +144,7 @@ const payload = {
     named_with_position: namedWithPosition,  // ...of which we know a name  <- coverage
     never_named: positions.size - namedWithPosition,
     names_known: names.size,                 // total names, incl. static-only MMSIs
+    hand_overrides: overrides,               // from tools/vessel_names_overrides.json
     names: sorted,
 };
 writeFileSync(out, JSON.stringify(payload, null, 1) + '\n');
@@ -127,4 +154,5 @@ console.log(`${files.length} files, ${lines.toLocaleString()} AIVDM lines`);
 console.log(`${positions.size} vessels seen with a position`);
 console.log(`  ${namedWithPosition} named (${pct}%), ${positions.size - namedWithPosition} never broadcast a name`);
 console.log(`${names.size} names in the file (includes MMSIs seen without a position)`);
+console.log(`  ${overrides} from hand overrides`);
 console.log(`wrote ${out}`);

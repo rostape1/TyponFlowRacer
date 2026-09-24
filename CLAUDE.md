@@ -43,8 +43,14 @@ it had.
   the same root-cause-first premise at greater length; running both is duplication.
 - **Review → `/pre-ship-review` is the gate, and the only one.** Do not also run gstack's review
   family (`autoplan`, `review`, `devex-review`, `health`, `cso`), and do not run bare
-  `5-pass-review` — `.claude/skills/pre-ship-review/` is the repo-local replacement and fixes four
-  measured flaws in it.
+  `5-pass-review`. The gate **starts with a script, not a reviewer**:
+  `.claude/skills/pre-ship-review/bin/smoke.sh` runs the whole mechanical class in ~5s with no LLM,
+  and `SMOKE_FINDINGS` must be 0 before any agent is dispatched. Then **two** passes, not five, each
+  capped at 5 findings, with **a measurement as the admission ticket**. Rebuilt 2026-09-24 from a
+  measured run: three of five passes found the same four defects, the worst was reachable by one
+  `git ls-files` call, and the readability pass had the lowest action rate — that is `/simplify`'s
+  job. When a review finds a *mechanical* defect, add a check to `smoke.sh`; that is what makes the
+  gate cheaper next time.
 - **Verification → targeted, not generic.** Don't add "double-check your work" passes or spawn
   subagents to re-read your own diff. **Do** verify the named risk paths: run the test suites, and
   when you change something a test can't see (rendering, the Pi at sea), say plainly that you
@@ -327,6 +333,7 @@ safely. Look up your group's IDs in [docs/pitfalls.md](docs/pitfalls.md), by ID,
 | `pi/ais-set-clock.sh` | Root helper to step the *system* clock onto GPS time. Optional, needs a one-time sudoers entry; logs are correct without it (`P42`) |
 | `nmea_ws_proxy.py` | Legacy standalone TCP→WS proxy (:8765). Superseded, but `nmea_tcp_broadcast()` and `nmea_udp_broadcast()` are still imported by `boat_server.py`. |
 | `download_offline.py` | Manual idempotent tile + asset pre-fetch into `static/tiles/`. `DEFAULT_BOUNDS` is authoritative. |
+| `tools/vessel_names_overrides.json` | Hand-known vessel names, merged over the archive at build time. The durable home for the 7% that never broadcast one — localStorage is per-browser, and editing the generated file is wiped by the next build |
 | `tools/build_vessel_names.mjs` | Builds `static/vessel_names.json` from the log archive, reusing `ais-decoder.js` rather than a second decoder (`P20`) |
 | `tools/fix_log_times.py` | Repairs recordings mis-dated by the Pi's clock: shifts prefixes, splits mid-file clock steps, renames to GPS truth. Never modifies its input (`P42`) |
 
@@ -531,5 +538,5 @@ new topic doc gets a row in the map below.
 | **Vessel names** — why contacts show as MMSIs, the three layers, what is not automated | [docs/vessel-names.md](docs/vessel-names.md) |
 | Land mask — TIGER/Line polygons, water/land detection | [docs/land-mask.md](docs/land-mask.md) |
 | Router open work / next session notes | [docs/router-next-session.md](docs/router-next-session.md) |
-| **Pre-ship review gate** — the 5 passes, pitfall injection, adversarial verification | [.claude/skills/pre-ship-review/SKILL.md](.claude/skills/pre-ship-review/SKILL.md) |
+| **Pre-ship review gate** — the `smoke.sh` prepass, 2 passes, measurement-as-admission-ticket, mechanical-vs-judgment triage | [.claude/skills/pre-ship-review/SKILL.md](.claude/skills/pre-ship-review/SKILL.md) |
 | End-user documentation | [USER_GUIDE.md](USER_GUIDE.md) |
