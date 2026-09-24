@@ -1,0 +1,23 @@
+{
+  "_comment": [
+    "Hand-known vessel names, merged on top of whatever the log archive yields.",
+    "",
+    "WHY THIS FILE EXISTS. tools/build_vessel_names.mjs derives names from Type 5/24",
+    "broadcasts in the recordings. 59 of 824 vessels in the archive (7.2%) never",
+    "broadcast a name at all, so no amount of listening will ever resolve them. A",
+    "name typed into the browser lands in localStorage, which is per-browser and",
+    "per-device; a name hand-edited into static/vessel_names.json is wiped by the",
+    "next rebuild. This file is the durable place: committed, merged at build time,",
+    "and survives regeneration.",
+    "",
+    "Entries here WIN over the archive, because a human looked it up and the AIS",
+    "payload may be garbled. Keep it small and keep it sourced — note where the",
+    "name came from so the next person can re-check it."
+  ],
+  "names": {
+    "368309230": "FINAL FINAL"
+  },
+  "sources": {
+    "368309230": "operator, 2026-09-24 — not present in the archive at all (0 appearances)"
+  }
+}

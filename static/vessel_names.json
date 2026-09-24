@@ -1,10 +1,11 @@
 {
- "generated": "2026-09-24T06:35:00.055Z",
+ "generated": "2026-09-24T06:49:45.743Z",
  "source_files": 84,
  "vessels_seen": 824,
  "named_with_position": 765,
  "never_named": 59,
- "names_known": 774,
+ "names_known": 775,
+ "hand_overrides": 1,
  "names": {
   "209008000": "LABRADOR",
   "211391250": "KAIROS",
@@ -655,6 +656,7 @@
   "368302170": "PV GOLDEN GATE",
   "368302420": "PELICAN",
   "368305950": "MOONRISE KINGDOM",
+  "368309230": "FINAL FINAL",
   "368311000": "MISS TAMMY",
   "368315910": "SOLITUDE",
   "368316730": "SEXY THING",
