@@ -59,7 +59,7 @@ table now reaches 180°.
 | Leeway | **leeway = 2.75° × (heel/20)^2.25 × (6.5/STW)²** (refit 2026-09-25; was 7.5 × heel/STW², linear, and 0.5–2° short above 26° heel). Per heel range, fitted without the formula: 1.5° below 20°, 3.0° at 20–23°, 4.5° at 23–26°, 5.0° at 26–28°, 6.0° at 28–30°, 7.25° at 30–34° (±0.5°); the formula matches within 0.2° above 20°. Below 15° two fits disagree (0.5° from the formula, 1.5° per range), so light-air upwind % carries ±2 points. Each extra degree of heel adds ~0.33° leeway at 20°, 0.43° at 25°, 0.50° at 28°, 0.54° at 30° (−0.024 to −0.039 kn VMG), while speed rises only ~0.2 kn from 20° to 34°. Fitted from heading vs GPS track in 46 upwind windows that contain both tacks, current held constant per 10 min. Current is solved as an unknown per window, so anything that is the same on both tacks (paddlewheel scale, a fixed compass offset) goes into it; only an error that flips with the tack can pass for leeway. Compass deviation was one, and is now removed. Imperfect tilt compensation in the heading sensor would be another, and the logs can't separate it | corrected: **TWA is now through the water**, as ORC's angles are |
 | Masthead angle | **+3.25° offset** plus **4.0° upwash**, from 72 tacks. Raw data showed 45° vs 34° TWA by tack and a 7° TWD jump on every tack | corrected in software. **The instrument display is still raw**: upwind it reads ~7° wide on starboard and ~2° narrow on port (by the bow) |
 | Wind height | ORC's wind speeds are at 10 m (per ORC's speed guide; not checked against the VPP documentation). Our masthead is ~20.3 m up: cert BAS 1.55 + P 16.97 + ~0.5 m, plus ~1.3 m freeboard (estimate). Over-water profile, exponent 0.11: masthead wind × 0.925 (1/7 would give × 0.904) | corrected. Before it, every ORC target we compared against was for too much wind: light-air VMG read 84% instead of 89% |
-| Masthead speed | TWS reads ~9% higher downwind than upwind at mark roundings (could be the sea breeze building) | not corrected: **±10%** |
+| Masthead speed | TWS reads **~6% higher downwind than upwind** (80% range 3–9%), from 9 beat→run and 7 run→beat roundings: an instrument error flips sign between the two, a building breeze doesn't, and the breeze explains only ~1% (2026-09-25). **Not heel:** it is ~13% under 15° heel, 7% at 15–22°, ~0 above 22°, so it is a light-air effect (likely the cups reading a few % low, or sail-induced flow at the masthead). Heavy-air numbers are unaffected; light-air upwind % could be ~5 points lower (if downwind is right) or light-air downwind ~5 higher (if upwind is right). Settle it with a calm-day motoring test (apparent wind = boat speed) or a shore station. Heel also lowers the masthead (18.4 m at 25°, ~1% less wind; not corrected) | not corrected: light air ±10%, breeze ±3% |
 | Wind feed | Updates every **5.2 s**, ~2 s behind the compass | steady-state filter; manoeuvres excluded |
 | Rudder | Zero offset +1.7°; typical upwind weather helm 3.6° | corrected |
 | Heel | ~1° asymmetry between tacks | none |
@@ -478,7 +478,7 @@ three. Their MMSIs would let `--rival` time them too.
 
 ## 7. Race tracks on the map (replay's race picker)
 
-`python3 tools/race_tracks.py` writes `static/races/bbs2026.json`, which the replay bar's **Race**
+`python3 tools/race_tracks.py` writes `static/races/<regatta>.json` (+ `index.json`), which the replay bar's **Race**
 picker draws (`static/js/race-tracks.js`; UI in [logging-and-playback.md](logging-and-playback.md)).
 Each point on a boat's track is its % of **that boat's own certificate**, with the full §2
 calibration for Typon:
@@ -504,7 +504,7 @@ Rivals in the file: Wowla in every race; Frequent Flyer (Farr 30, cert US5230 in
 transcribed from the results; it is its closest AIS pass to our finish point (72 m).
 Per-point medians (Typon / Wowla, after the 2026-09-25 leeway refit): R1 95/104, R2 97/105, R3 91/94,
 R4 87/105, R5 89/95, R6 95/104 (FF 96). These are higher than the leg-level 94/91/86/82/92/90 in §6, which also charge tacks and
-route choice. New regatta or rival: add it to `RACES` in `race_tracks.py` (and the cert to `CERTS`).
+route choice. New regatta or rival: §10.
 
 ## 8. Sea state: does chop cost us upwind?
 
@@ -536,3 +536,54 @@ at the same wind:
 
 Tacks add a little pitch (spread 0.72° with none in the window, 0.90° with two), which is why the
 no-tack rows are the ones to quote.
+
+## 9. Upwind insights (2026-09-25) — `tools/upwind_insights.py`
+
+Each finding below is one section of `python3 tools/upwind_insights.py [--only NAME]`, so it reruns
+on any regatta in `tools/regattas.json`. BBS 2026 results, wind at 10 m:
+
+| Section | Finding |
+|---|---|
+| `leeway` | Leeway rises steadily from ~20° heel (table in §2); each extra degree costs 0.024 kn VMG at 20° and 0.039 at 30°, for ~0.02 kn of speed. No knee at 28°. |
+| `helm` | In 16+ kn, heavier helm was not slower; VMG fell 91 → 89 → 86 → 87% across <22, 22–26, 26–28, >28° heel. At the same heel, helm falls slightly as wind builds, so no sign of a stretching main from helm. |
+| `gusts` | Over 13 kn a gust becomes heel, not speed: +0.1 kn (13–16) and −0.1 kn (16+), heel 27–30°, over 28° for 45–63% of gust time (17–38% steady). Under-depowered, not over-flogged: flatten early, traveller down in gusts. |
+| `tacks` | Tack loss grows ~1.3 s per knot of wind, not with chop, except 16+ kn: ~20 s in rougher vs ~12 s in calmer water (5 + 5 tacks, a lead). |
+| `gate` | Upwind, Typon 90% inside vs 88% outside the Gate; Wowla 95% vs 101%. Outside we sailed ~4° wider than target and still under target speed: footing in waves did not buy speed. Light air outside (swell) is the worst case: 91% vs 102% inside. |
+| `best` | Best vs worst quarter of upwind minutes, same tack and wind: in 13+ kn the best are **2.5° higher by the bow at the same speed**, ~0.5° flatter, less leeway (the groove exists, we hold it a quarter of the time). Under 13 kn the best are **~0.5 kn faster at the same angle**, in flat water, quieter helm; the worst were 60% outside the Gate and in headers. It also lists the best moments to replay. |
+| `sides` | We look 6–8 points better on starboard in light air, but Wowla shows the same gap against our wind: a wind/current reference bias, not our port-tack sailing. |
+| `wind` | Masthead wind reads ~6% higher downwind than upwind (§2 row "Masthead speed"). |
+
+No sail-trim sensors are logged, so these say *what* the good moments looked like, not the
+settings that made them; trim marks and timestamped photos would close that gap.
+
+## 10. New regatta: the checklist
+
+Everything above reruns from one regatta entry. Before the start, open the Pi's `:8081` page and
+check a recording is growing: no log, no analysis (Swiftsure 29–30 Aug 2026 has no data).
+
+1. **Logs to the Mac.** Copy new recordings off the Pi into `~/Documents/typon-nmea-logs-raw/`
+   (walk `/api/logs`, fetch each `/logs/<name>`), then repair the dates:
+   `python3 tools/fix_log_times.py ~/Documents/typon-nmea-logs-raw -o ~/Documents/typon-nmea-logs --apply`.
+2. **One entry in `tools/regattas.json`**: id, name, crew, optional `windows` (sailing time used for
+   the calibration; defaults to the races), and per race day, local start and finish, our handicap
+   and each rival's handicap and finish from the results. Rival MMSIs if known (0 = none). Local
+   time; the timezone is handled (PDT and PST).
+3. **Rival certificates** that are new go into `CERTS` in `tools/race_review.py`, keyed by the
+   name in upper case, with the same fields as the others ("Rated boat velocities").
+4. **Run, in order:**
+   ```bash
+   python3 tools/build_polar.py            # re-parse all logs, recalibrate, charts + crib sheet (~35 s)
+   python3 tools/race_tracks.py            # static/races/<regatta>.json + index.json for the replay picker
+   python3 tools/sea_state.py              # pitch cache for the new races (no --cache after adding races)
+   python3 tools/race_review.py --race R1 --regatta <id>   # per race: legs, rivals, rating vs sailing
+   python3 tools/upwind_insights.py        # the §9 analyses across every regatta
+   ```
+   The calibration is refitted from all logs every run, so new data also refines the old numbers;
+   expect the BBS figures to move by a point or two.
+5. **Check before trusting:** `build_polar.py` prints each fit. Compass deviation, paddlewheel k per
+   day, leeway per heel range (the model should track the fitted column within ~0.5°), masthead
+   offset and residual TWD jump (should be within ±1°). A new mast unit, paddlewheel or compass
+   position invalidates the old fits: they are refitted, but check the printout.
+6. **Commit** `tools/regattas.json`, `static/races/`, `docs/polar/*.png` and any doc changes.
+   Different crew or sails (e.g. 8 crew, big jib): put it in the regatta's `crew`/name and compare
+   regattas with `upwind_insights.py`; the tools don't yet split results by crew or sail.

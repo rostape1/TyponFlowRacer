@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Race tracks scored against ORC, for the replay's race picker (static/races/<series>.json).
 
-    python3 tools/race_tracks.py            # needs tools/polar_out/grid.pkl (run build_polar.py once)
+    python3 tools/race_tracks.py            # every regatta in tools/regattas.json; needs grid.pkl (build_polar.py)
+    python3 tools/race_tracks.py --regatta bbs2026
 
 Every point on a boat's track carries its % of that boat's own ORC certificate, scored the way
 docs/polar.md does it:
@@ -28,9 +29,9 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import build_polar as bp
 import race_review as rr
+import regattas
 
-SERIES = 'bbs2026'
-OUT = os.path.join(bp.REPO, 'static', 'races', f'{SERIES}.json')
+RACES_DIR = os.path.join(bp.REPO, 'static', 'races')   # <regatta>.json + index.json, read by replay's race picker
 STEP_S = 5                  # own track resolution in the file
 OWN_SMOOTH_S = 31
 CURRENT_SMOOTH_S = 300
@@ -44,19 +45,29 @@ TURN_BLANK_S = (5, 15)
 AIS_MAX_FROM_US_NM = 10
 AIS_MAX_JUMP_KN = 25
 
-# Local start and finish from the results (docs/polar.md §6); rivals: name -> (MMSI, finish).
-# Only rivals with a known, transmitting MMSI and a certificate in race_review.CERTS appear.
-# Frequent Flyer transmitted on 20 Sept only. finish None = not transcribed: the rival's closest
-# pass to our finish point is used instead (finish_from_ais).
-RACES = [
-    ('R1', 'Thu', 'AP low/med',        '2026-09-17', '10:05:00', '14:13:27', {'Wowla': (338521423, '13:58:32')}),
-    ('R2', 'Fri', 'W/L med',           '2026-09-18', '11:45:00', '12:47:36', {'Wowla': (338521423, '12:44:50')}),
-    ('R3', 'Fri', 'W/L med/high',      '2026-09-18', '13:40:00', '16:44:14', {'Wowla': (338521423, '16:41:38')}),
-    ('R4', 'Sat', 'W/L medium',        '2026-09-19', '12:00:00', '12:47:06', {'Wowla': (338521423, '12:43:33')}),
-    ('R5', 'Sat', 'W/L 60-40 med/high', '2026-09-19', '13:00:00', '15:35:42', {'Wowla': (338521423, '15:36:46')}),
-    ('R6', 'Sun', 'Bay Tour',          '2026-09-20', '11:50:00', '13:49:19', {'Wowla': (338521423, '13:45:15'),
-                                                                                 'Frequent Flyer': (338147545, None)}),
-]
+def race_list(rid=None):
+    """Races from tools/regattas.json, with the rivals we can draw: a transmitting MMSI and a
+    certificate in race_review.CERTS. finish None = not transcribed: the rival's closest AIS pass to
+    our finish point is used instead (finish_from_ais)."""
+    out = []
+    for g, r in regattas.races(rid):
+        ais = {n: (int(v['mmsi']), v.get('finish')) for n, v in r.get('rivals', {}).items()
+               if v.get('mmsi') and n.upper() in rr.CERTS}
+        out.append(dict(regatta=g, race=r, id=f"{g['id'].upper()}-{r['id']}", day=r['day'],
+                        start=r['start'], finish=r['finish'], rivals=ais,
+                        label=f"{g['name']} – {r['id']} ({r['label']})"))
+    return out
+
+
+def load_tracks():
+    """Every race in static/races/*.json that index.json lists (what the replay picker shows)."""
+    with open(os.path.join(RACES_DIR, 'index.json')) as f:
+        idx = json.load(f)
+    races = []
+    for e in idx['regattas']:
+        with open(os.path.join(RACES_DIR, e['file'])) as f:
+            races += json.load(f)['races']
+    return races
 
 
 def score(spd, twa, tws, cert):
@@ -101,7 +112,7 @@ FIELDS = ['t', 'lat', 'lon', 'pct', 'twa', 'tws', 'spd', 'mode', 'tgt_twa', 'tgt
 
 
 def _utc_s(day, hms):
-    return int((pd.Timestamp(f'{day} {hms}') - pd.Timedelta(hours=bp.LOCAL_UTC_OFFSET_H)).value // 10**9)
+    return regattas.local_to_utc_s(day, hms)
 
 
 def _circ_roll(deg, n):
@@ -203,50 +214,72 @@ def summary(pts):
                                                      for k, v in by.items() if k) + f'), {len(df)} scored points')
 
 
-def main():
-    g = pd.read_pickle(os.path.join(bp.REPO, 'tools', 'polar_out', 'grid.pkl'))
-    with contextlib.redirect_stdout(io.StringIO()):
-        g, _ = bp.calibrate(g)
-    g = own_frame(g)
+def build(g, rid):
+    """Score every race of one regatta; returns the races list for its JSON file."""
     races, positions = [], {}
-    for rid, dow, course, day, start, finish, rivals in RACES:
-        t0, t1 = _utc_s(day, start), _utc_s(day, finish)
-        mm = {v[0] for v in rivals.values()}
-        if (day, frozenset(mm)) not in positions:
-            positions[(day, frozenset(mm))] = rr.read_positions(day, mm)
-        O, A = positions[(day, frozenset(mm))]
+    for R in race_list(rid):
+        rid_, day, rivals = R['race']['id'], R['day'], R['rivals']
+        t0, t1 = _utc_s(day, R['start']), _utc_s(day, R['finish'])
+        mm = frozenset(v[0] for v in rivals.values())
+        if (day, mm) not in positions:
+            positions[(day, mm)] = rr.read_positions(day, set(mm))
+        O, A = positions[(day, mm)]
+        if O.empty:
+            print(f'{R["id"]}: no GPS positions in the logs for {day} (was the logger running?)')
+            continue
         boats = [dict(name='Typon', mmsi=338361814, source='instruments', pts=own_track(g, O, t0, t1))]
-        print(f'{rid} Typon {summary(boats[0]["pts"])}')
+        print(f'{R["id"]} Typon {summary(boats[0]["pts"])}')
         for name, (mmsi, fin) in rivals.items():
             if fin:
                 t_fin = _utc_s(day, fin)
             else:
                 f = finish_from_ais(O, A, mmsi, t0, t1)
                 if f is None:
-                    print(f'{rid} {name}: no AIS reports near our finish')
+                    print(f'{R["id"]} {name}: no AIS reports near our finish')
                     continue
                 t_fin = f[0]
-                print(f"{rid} {name}: finish from AIS {pd.Timestamp(t_fin + bp.LOCAL_UTC_OFFSET_H * 3600, unit='s').strftime('%H:%M:%S')}"
+                print(f"{R['id']} {name}: finish from AIS {regattas.utc_s_to_local(t_fin).strftime('%H:%M:%S')}"
                       f' ({f[1]:.0f} m from our finish point)')
             pts = rival_track(g, O, A, mmsi, t0, t_fin, rr.CERTS[name.upper()])
             if pts:
                 boats.append(dict(name=name, mmsi=mmsi, source='ais', pts=pts))
-                print(f'{rid} {name} {summary(pts)}')
+                print(f'{R["id"]} {name} {summary(pts)}')
             else:
-                print(f'{rid} {name}: no AIS reports in the race window')
-        races.append(dict(id=f'{SERIES.upper()}-{rid}', label=f'BBS 2026 – {rid} ({dow}, {course})',
-                          start=t0 * 1000, finish=t1 * 1000, boats=boats))
-    doc = dict(series=SERIES, generated=pd.Timestamp.now().strftime('%Y-%m-%d'),
-               fields=FIELDS,
-               note='pct = % of the boat\'s own ORC certificate: VMG upwind (u) and downwind (d), speed on a '
-                    'reach (r); null = tack/gybe or no data. twa through the water, tws at 10 m; tgt_twa/tgt_spd = ORC '
-                    'target angle (beat/gybe; null on a reach, where the course sets it) and speed. Rivals: AIS, '
-                    'scored with Typon\'s current and wind. tools/race_tracks.py, docs/polar.md §7.',
-               races=races)
-    os.makedirs(os.path.dirname(OUT), exist_ok=True)
-    with open(OUT, 'w') as f:
-        json.dump(doc, f, separators=(',', ':'))
-    print(f'wrote {os.path.relpath(OUT, bp.REPO)} ({os.path.getsize(OUT) / 1024:.0f} KB)')
+                print(f'{R["id"]} {name}: no AIS reports in the race window')
+        races.append(dict(id=R['id'], label=R['label'], start=t0 * 1000, finish=t1 * 1000, boats=boats))
+    return races
+
+
+def main():
+    import argparse
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument('--regatta', help='only this regatta id from tools/regattas.json (default: all)')
+    args = ap.parse_args()
+    g = bp.load_grid()
+    with contextlib.redirect_stdout(io.StringIO()):
+        g, _ = bp.calibrate(g)
+    g = own_frame(g)
+    os.makedirs(RACES_DIR, exist_ok=True)
+    for reg in regattas.regattas():
+        if args.regatta and reg['id'] != args.regatta:
+            continue
+        doc = dict(series=reg['id'], name=reg['name'], generated=pd.Timestamp.now().strftime('%Y-%m-%d'),
+                   fields=FIELDS,
+                   note='pct = % of the boat\'s own ORC certificate: VMG upwind (u) and downwind (d), speed on a '
+                        'reach (r); null = tack/gybe or no data. twa through the water, tws at 10 m; tgt_twa/tgt_spd = ORC '
+                        'target angle (beat/gybe; null on a reach, where the course sets it) and speed. Rivals: AIS, '
+                        'scored with Typon\'s current and wind. tools/race_tracks.py, docs/polar.md §7.',
+                   races=build(g, reg['id']))
+        out = os.path.join(RACES_DIR, f"{reg['id']}.json")
+        with open(out, 'w') as f:
+            json.dump(doc, f, separators=(',', ':'))
+        print(f'wrote {os.path.relpath(out, bp.REPO)} ({os.path.getsize(out) / 1024:.0f} KB)')
+    # The picker's list: every regatta whose file exists, in regattas.json order.
+    idx = [dict(id=r['id'], name=r['name'], file=f"{r['id']}.json") for r in regattas.regattas()
+           if os.path.exists(os.path.join(RACES_DIR, f"{r['id']}.json"))]
+    with open(os.path.join(RACES_DIR, 'index.json'), 'w') as f:
+        json.dump(dict(regattas=idx), f, indent=1)
+    print(f'wrote static/races/index.json ({len(idx)} regatta(s))')
 
 
 if __name__ == '__main__':

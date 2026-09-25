@@ -398,7 +398,15 @@ console.log('race tracks:');
 {
     const rtSrc = readFileSync(join(__dirname, '../static/js/race-tracks.js'), 'utf8');
     const box = {};
-    new Function('module', 'NmeaClient', 'L', rtSrc + '\nmodule.RaceTracks = RaceTracks;')(box, NmeaClient, {});
+    const served = {
+        'races/index.json': { regattas: [{ id: 'a', file: 'a.json' }, { id: 'b', file: 'b.json' }] },
+        'races/a.json': { races: [{ id: 'A-R1' }, { id: 'A-R2' }] },
+        'races/b.json': { races: [{ id: 'B-R1' }] },
+    };
+    const fakeFetch = (url) => Promise.resolve(served[url]
+        ? { ok: true, json: () => Promise.resolve(served[url]) } : { ok: false, status: 404 });
+    new Function('module', 'NmeaClient', 'L', 'fetch', rtSrc + '\nmodule.RaceTracks = RaceTracks;')(
+        box, NmeaClient, { canvas: () => ({}) }, fakeFetch);
     const { RaceTracks } = box;
     const hue = (c) => +/hsl\((\d+)/.exec(c)[1];
 
@@ -452,6 +460,14 @@ console.log('race tracks:');
     assert(RaceTracks.atTime(tp, 99e3, 10)[0] === 100, 'just before the first point');
     assert(RaceTracks.atTime(tp, 125e3, 10) === null, 'a gap wider than the tolerance -> null, never a stale reading');
     assert(RaceTracks.atTime([], 100e3, 10) === null, 'no points -> null');
+
+    // Every regatta in races/index.json is listed, in index order (a new regatta = one more file).
+    const loaded = await new RaceTracks({}, null).load();
+    assert(loaded.races.map(r => r.id).join(',') === 'A-R1,A-R2,B-R1', `regattas merged in index order, got ${loaded.races.map(r => r.id)}`);
+    served['races/index.json'].regattas.push({ id: 'c', file: 'missing.json' });
+    let failed404 = false;
+    await new RaceTracks({}, null).load().catch(e => { failed404 = /missing\.json: HTTP 404/.test(e.message); });
+    assert(failed404, 'a listed file that is missing fails loudly, naming the file');
 }
 
 // --- loadUrl -------------------------------------------------------------
