@@ -306,11 +306,12 @@ safely. Look up your group's IDs in [docs/pitfalls.md](docs/pitfalls.md), by ID,
 | `js/vessel-store.js` | In-memory vessel DB, track history, localStorage persistence |
 | `js/vessel-names.js` | Local MMSI→name database: seed file + names learned from AIS + manual entries. Resolved at display time — [docs/vessel-names.md](docs/vessel-names.md) |
 | `js/data-loader.js` | NOAA CO-OPS tides/currents/water levels + Open-Meteo wind, client-side interpolation, SFBOFS staleness gate |
-| `js/router.js` + `js/route-worker.js` | Isochrone route optimizer — [docs/router.md](docs/router.md) |
+| `js/router.js` + `js/route-worker.js` | Isochrone route optimizer; polar table is generated, never hand-edited — [docs/router.md](docs/router.md) |
 | `js/nmea-parser.js` | NMEA 0183 parser (GGA, RMC, HCHDG, MWV, MWD, VHW, DPT, VTG, ROT, XDR) |
 | `js/ais-decoder.js` | Browser AIS 6-bit decoder for !AIVDM/!AIVDO, types 1/2/3/5/18/19/24 |
 | `js/nmea-store.js` | NMEA state manager (EventTarget), ring buffers, true-wind computation |
 | `js/nmea-client.js` | Live WebSocket to `/nmea`, or file replay with speed control |
+| `js/race-tracks.js` | Replay's race picker: tracks coloured by % of ORC, the live race box, hover/click-to-jump — [docs/logging-and-playback.md](docs/logging-and-playback.md) |
 | `js/sailing-charts.js` | Charts view: 8 gauges + Chart.js time-series |
 | `js/competitor-labels.js` | Leaflet tooltips: distance/speed/bearing relative to Typon |
 | `js/radar-view.js` | Radar tab: polar plot, canvas rings, DOM labels, manual zoom 0.25–32nm |
@@ -335,6 +336,10 @@ safely. Look up your group's IDs in [docs/pitfalls.md](docs/pitfalls.md), by ID,
 | `download_offline.py` | Manual idempotent tile + asset pre-fetch into `static/tiles/`. `DEFAULT_BOUNDS` is authoritative. |
 | `tools/vessel_names_overrides.json` | Hand-known vessel names, merged over the archive at build time. The durable home for the 7% that never broadcast one — localStorage is per-browser, and editing the generated file is wiped by the next build |
 | `tools/build_vessel_names.mjs` | Builds `static/vessel_names.json` from the log archive, reusing `ais-decoder.js` rather than a second decoder (`P20`) |
+| `tools/build_polar.py` | Router polar = Typon's **ORC certificate** (`--write-js` writes both JS copies). Also measures race sailing against it from the logs (self-calibrating) and renders `docs/polar/` charts + crib sheet — [docs/polar.md](docs/polar.md) |
+| `tools/race_review.py` | Leg-by-leg race review: each leg against ORC for the leg actually sailed (beat/run/reach by rhumb line), and against AIS rivals timed between our rounding points. Reuses `build_polar.py`'s calibration — [docs/polar.md](docs/polar.md) §6 |
+| `tools/race_tracks.py` | Writes `static/races/bbs2026.json`: each boat's race track scored against its own ORC cert (Typon: full calibration; rivals: AIS + our wind/current), with ORC target angle/speed per point, for replay's race picker — [docs/polar.md](docs/polar.md) §7 |
+| `tools/sea_state.py` | Sea state from our own 20 Hz pitch (spread + encounter period), and whether it explains upwind % of ORC at the same wind, with Wowla as control — [docs/polar.md](docs/polar.md) §8 |
 | `tools/fix_log_times.py` | Repairs recordings mis-dated by the Pi's clock: shifts prefixes, splits mid-file clock steps, renames to GPS truth. Never modifies its input (`P42`) |
 
 ### Legacy backend (root, reference / local dev only)
@@ -536,6 +541,7 @@ new topic doc gets a row in the map below.
 | **Logging, hub and playback** — retention, the disk alert, the transport, seek semantics | [docs/logging-and-playback.md](docs/logging-and-playback.md) |
 | **NMEA receiver hardware** — the XPort, why a refusal is ambiguous, safe probing, TCP↔UDP | [docs/nmea-hardware.md](docs/nmea-hardware.md) |
 | **Vessel names** — why contacts show as MMSIs, the three layers, what is not automated | [docs/vessel-names.md](docs/vessel-names.md) |
+| **Polar** — ORC cert as router polar, log calibration, how we sail vs the cert, heel/helm, crib sheet, race tracks, sea state | [docs/polar.md](docs/polar.md) |
 | Land mask — TIGER/Line polygons, water/land detection | [docs/land-mask.md](docs/land-mask.md) |
 | Router open work / next session notes | [docs/router-next-session.md](docs/router-next-session.md) |
 | **Pre-ship review gate** — the `smoke.sh` prepass, 2 passes, measurement-as-admission-ticket, mechanical-vs-judgment triage | [.claude/skills/pre-ship-review/SKILL.md](.claude/skills/pre-ship-review/SKILL.md) |

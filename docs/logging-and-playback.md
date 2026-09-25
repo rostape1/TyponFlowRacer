@@ -271,6 +271,29 @@ a model.
 
 (Both are future work. Nothing below the `$IIVDR` row is implemented.)
 
+### Race picker: tracks coloured by % of ORC
+
+The **Race** dropdown (first on the replay bar) lists the races in `static/races/bbs2026.json`.
+Picking one:
+
+- draws each boat's whole race track, coloured red → yellow → green by % of its own ORC
+  certificate (scoring and calibration: [polar.md](polar.md) §7), and frames the map on Typon's track;
+- loads the recording holding the gun (`RaceTracks.fileForTime`) and seeks to it;
+- adds a **race box** to the legend that follows the replay clock: per boat, % of ORC, TWA against
+  the ORC target angle ("4° low (footing)"), and speed against the target speed with the delta.
+  Hovering a track shows the same lines for that point, and clicking it jumps the replay there.
+
+The tracks are Leaflet layers, not store state, so they survive the hourly store resets at each
+auto-advance. With them drawn, a new recording does not re-centre the map on the boat. Picking a
+recording by hand, loading a local file, or Exit to Live removes them.
+
+**Jumps re-read only 10 minutes.** A race-day recording is ~450k lines an hour (AIS plus 20 Hz
+attitude), and the full re-read to a gun 40 minutes into one froze the tab for over a minute. So
+race jumps call `seek(idx, { warmupMs: 10 min })`: position, wind and every contact that reported in
+those 10 minutes are right, and a contact last heard earlier is missing until it next reports. The
+scrubber still does the full re-read, and `tests/test_replay.mjs` still asserts "seek == play
+through" for it. The warmup path has its own assertions, mutation-checked.
+
 ### Auto-advance into the next recording
 
 Recordings rotate hourly, so a three-hour race is three files and used to mean reaching for the

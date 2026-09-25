@@ -54,3 +54,6 @@ tests/.cache/
 # Leading slash anchors it to the repo root: an unanchored `cache/` would also
 # swallow any nested directory of that name (P23).
 /cache/
+
+# tools/build_polar.py scratch output (charts that matter are copied to docs/polar/)
+tools/polar_out/

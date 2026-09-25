@@ -33,9 +33,29 @@ function approx(a, b, tol = 0.1) { return Math.abs(a - b) < tol; }
 console.log('Polar lookup:');
 
 const bsp90_10 = getBoatSpeed(90, 10, 1.0);
-assert(bsp90_10 > 7 && bsp90_10 < 8, `BSP at TWA=90 TWS=10 should be ~7.4, got ${bsp90_10.toFixed(2)}`);
+assert(bsp90_10 > 7 && bsp90_10 < 8, `BSP at TWA=90 TWS=10 should be ~7.38 (ORC), got ${bsp90_10.toFixed(2)}`);
 
-assert(getBoatSpeed(30, 10, 1.0) === 0, 'BSP at TWA=30 (below min 52°) should be 0');
+// The table starts at TWA 30; below that is unsailable.
+assert(getBoatSpeed(25, 10, 1.0) === 0, 'BSP at TWA=25 (below table min 30°) should be 0');
+
+// The polar is Typon's ORC certificate. The router picks headings by VMG, so the best VMG it can
+// find must sit at the certificate's beat / gybe angle and equal the certificate's beat / run VMG.
+// (tools/build_polar.py expands the cert so this holds; a hand edit or a coarser grid breaks it.)
+const ORC = [ // tws, beat angle, beat VMG, gybe angle, run VMG — from the certificate
+    [8, 41.6, 4.17, 150.1, 4.73], [12, 39.3, 5.11, 156.5, 6.36], [16, 38.3, 5.46, 168.5, 7.50],
+];
+for (const [tws, ba, bv, ga, rv] of ORC) {
+    let up = [0, 0], dn = [0, 0];
+    for (let a = 30; a <= 180; a += 0.5) {
+        const v = getBoatSpeed(a, tws, 1.0) * Math.cos(a * Math.PI / 180);
+        if (v > up[1]) up = [a, v];
+        if (-v > dn[1]) dn = [a, -v];
+    }
+    assert(Math.abs(up[0] - ba) <= 2 && approx(up[1], bv, bv * 0.02),
+        `TWS ${tws}: best upwind VMG should be ~${bv} at ~${ba}° (ORC), got ${up[1].toFixed(2)} at ${up[0]}°`);
+    assert(Math.abs(dn[0] - ga) <= 3 && approx(dn[1], rv, rv * 0.02),
+        `TWS ${tws}: best downwind VMG should be ~${rv} at ~${ga}° (ORC), got ${dn[1].toFixed(2)} at ${dn[0]}°`);
+}
 assert(getBoatSpeed(90, 0.5, 1.0) === 0, 'BSP at TWS=0.5 (below 1kn) should be 0');
 
 const bsp_perf = getBoatSpeed(90, 10, 0.85);
@@ -50,13 +70,25 @@ assert(bsp_light > 0, `BSP in 3kn wind should still be positive`);
 assert(getBoatSpeed(270, 10, 1.0) === getBoatSpeed(90, 10, 1.0),
     `Port/starboard mirror: TWA=270 should equal TWA=90`);
 
-// Boundary: TWA clamp above polar table max (150°)
-assert(getBoatSpeed(170, 10, 1.0) === getBoatSpeed(150, 10, 1.0),
-    `TWA clamp: TWA=170 should equal TWA=150 (table max)`);
+// Dead downwind is in the table (the cert's gybe angles reach 178°), so the falloff variant,
+// which only discounts beyond the table's last TWA, must not discount anything
+assert(getBoatSpeed(180, 12, 1.0) > 0, `TWA=180 should be in the table`);
+assert(getBoatSpeed(175, 12, 1.0, true) === getBoatSpeed(175, 12, 1.0, false),
+    `Falloff must not discount rows inside the table (TWA 175)`);
 
-// Boundary: TWS clamp above polar table max (20kn)
-assert(getBoatSpeed(90, 25, 1.0) === getBoatSpeed(90, 20, 1.0),
-    `TWS clamp: TWS=25 should equal TWS=20 (table max)`);
+// router.js keeps a main-thread copy of the table; tools/build_polar.py --write-js writes both.
+// A hand edit to one copy must fail here rather than show one polar and route with another.
+const routerSrc = readFileSync(join(__dirname, '../static/js/router.js'), 'utf8');
+const polarBlock = (src) => {
+    const m = src.match(/\/\/ --- Polar Table[\s\S]*?---\n([\s\S]*?)\/\/ --- end polar ---/);
+    return m ? m[1] : null;
+};
+assert(polarBlock(workerSrc) !== null && polarBlock(workerSrc) === polarBlock(routerSrc),
+    `Polar table in router.js must be byte-identical to route-worker.js (regenerate with tools/build_polar.py --write-js)`);
+
+// Boundary: TWS clamp above polar table max (24kn)
+assert(getBoatSpeed(90, 30, 1.0) === getBoatSpeed(90, 24, 1.0),
+    `TWS clamp: TWS=30 should equal TWS=24 (table max)`);
 
 console.log(`  ${passed} passed`);
 
