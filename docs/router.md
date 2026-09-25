@@ -72,7 +72,7 @@ used, so harbors and shoreline waypoints are reachable. Monterey harbor blocked 
 `tools/build_polar.py --write-js` into both `router.js` and `route-worker.js`. TWA 30–180°, TWS 4–24 kn.
 Best VMG sits at the cert's beat and gybe angles (asserted in `tests/test_physics.mjs`).
 Performance factor default 95%: race sailing made a median 96% of rated VMG, measured before the
-leeway correction. Corrected for leeway and wind height, it is 88–89% VMG upwind and 94–100%
+leeway correction. Corrected for leeway and wind height, it is 88–93% VMG upwind (88% in 13+ kn) and 94–100%
 downwind; the default has not
 been revisited ([polar.md](polar.md) §1). It replaced a generic
 Swan 47 × 85% that treated anything under 52° as unsailable.

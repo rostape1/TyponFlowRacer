@@ -94,11 +94,37 @@ CERTS = {
          [2.85, 4.17, 5.31, 6.28, 6.96, 7.39, 7.78, 8.65, 9.79]],
         [2.46, 3.61, 4.60, 5.45, 6.16, 6.72, 7.15, 7.88, 8.69],
         [140.4, 145.3, 149.6, 152.8, 159.4, 166.4, 172.7, 175.0, 166.7]),
+    'FREQUENT FLYER': bp.Cert(_W,  # USA 52, Farr 30, ORC 2026 (US5230); symmetric spinnaker
+        [44.9, 42.1, 39.5, 37.2, 36.7, 36.4, 36.2, 36.3, 38.0],
+        [2.73, 3.85, 4.62, 4.99, 5.15, 5.24, 5.30, 5.33, 5.21],
+        [[4.25, 5.81, 6.63, 6.98, 7.14, 7.24, 7.32, 7.42, 7.40],
+         [4.54, 6.09, 6.81, 7.16, 7.36, 7.50, 7.60, 7.74, 7.76],
+         [4.76, 6.26, 6.94, 7.35, 7.69, 7.91, 8.08, 8.35, 8.47],
+         [4.62, 6.13, 6.91, 7.38, 7.82, 8.22, 8.56, 9.09, 9.46],
+         [4.49, 6.21, 7.08, 7.61, 7.98, 8.32, 8.66, 9.69, 10.68],
+         [4.33, 6.07, 7.04, 7.66, 8.24, 8.74, 9.21, 10.14, 11.03],
+         [3.83, 5.47, 6.65, 7.33, 8.03, 8.86, 9.80, 11.56, 13.08],
+         [3.17, 4.62, 5.80, 6.73, 7.37, 8.02, 8.81, 11.03, 14.32]],
+        [2.75, 4.00, 5.02, 5.87, 6.53, 7.08, 7.66, 9.55, 12.40],
+        [140.2, 143.3, 147.6, 154.3, 160.9, 163.3, 156.8, 147.4, 149.5]),
+    'TANGAROA': bp.Cert(_W,  # J/109, ORC 2026 (LOA 10.76)
+        [46.1, 43.5, 41.4, 39.6, 37.7, 36.8, 36.7, 36.7, 37.5],
+        [2.39, 3.42, 4.19, 4.76, 5.12, 5.28, 5.37, 5.43, 5.41],
+        [[3.76, 5.22, 6.22, 6.83, 7.15, 7.31, 7.38, 7.47, 7.49],
+         [4.05, 5.51, 6.48, 7.01, 7.31, 7.48, 7.57, 7.68, 7.70],
+         [4.26, 5.70, 6.64, 7.15, 7.46, 7.68, 7.85, 8.03, 8.13],
+         [4.20, 5.87, 6.91, 7.36, 7.57, 7.74, 7.99, 8.38, 8.63],
+         [4.32, 6.02, 7.09, 7.61, 7.98, 8.28, 8.51, 8.95, 9.34],
+         [4.20, 5.90, 7.00, 7.57, 8.00, 8.42, 8.82, 9.45, 10.06],
+         [3.72, 5.28, 6.52, 7.26, 7.73, 8.20, 8.69, 9.90, 11.82],
+         [3.08, 4.46, 5.61, 6.58, 7.24, 7.64, 8.02, 8.86, 10.45]],
+        [2.67, 3.86, 4.86, 5.70, 6.31, 6.72, 7.08, 7.74, 9.05],
+        [139.7, 143.3, 147.5, 149.6, 153.2, 157.9, 161.5, 159.3, 142.0]),
 }
 
 
 def read_positions(day, mmsis):
-    """Own track ($GPRMC, 1 Hz) and AIS positions for the given MMSIs, on one log day."""
+    """Own track ($GPRMC, 1 Hz) and AIS positions (with reported SOG/COG) for the given MMSIs, on one log day."""
     own, ais = [], []
     for f in sorted(glob.glob(os.path.join(LOGS, f'nmea_{day}*.txt'))):
         for line in open(f, errors='replace'):
@@ -120,10 +146,10 @@ def read_positions(day, mmsis):
                 continue
             msg = decode_ais(p[5])
             if msg['mmsi'] in mmsis and msg['lat'] is not None and msg['lon'] is not None:
-                ais.append((t, msg['mmsi'], msg['lat'], msg['lon']))
+                ais.append((t, msg['mmsi'], msg['lat'], msg['lon'], msg['sog'], msg['cog']))
     O = pd.DataFrame(own, columns=['t', 'lat', 'lon'])
     O = O.groupby(np.floor(O.t).astype(np.int64)).mean()
-    return O, pd.DataFrame(ais, columns=['t', 'mmsi', 'lat', 'lon'])
+    return O, pd.DataFrame(ais, columns=['t', 'mmsi', 'lat', 'lon', 'sog', 'cog'])
 
 
 def _nm(lat1, lon1, lat2, lon2):
@@ -198,6 +224,14 @@ def main():
                          benchmark=how, nm=abs(Dw), orc_min=ideal * 60, lost_min=(actual - ideal) * 60,
                          pct=ideal / actual * 100, turns=count_turns(s)))
     L = pd.DataFrame(rows)
+    # Sea state per leg from our own pitch (tools/sea_state.py; docs/polar.md §8). Imported here, not
+    # at the top: sea_state imports race_tracks, which imports this module.
+    import sea_state as ss
+    if os.path.exists(ss.CACHE):
+        P = pd.read_pickle(ss.CACHE)
+        st = [ss.leg_state(P, s.index[0], s.index[-1]) for s in split_legs(x)]
+        L['pitch'] = [a for a, _ in st]
+        L['period_s'] = [b for _, b in st]
     pd.set_option('display.width', 220)
     print(f'Typon {args.day} {args.start}-{args.finish}, wind at 10 m\n' + L.round(1).to_string(index=False))
     print(f"\ntotal: sailed {L['min'].sum():.1f} min, ORC {L.orc_min.sum():.1f} min -> {L.orc_min.sum() / L['min'].sum() * 100:.0f}% of ORC; "

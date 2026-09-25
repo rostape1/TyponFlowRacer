@@ -350,6 +350,110 @@ console.log('time range:');
     assert(c.getReplayTimeRange() === null, 'no log loaded should give a null range, not a crash');
 }
 
+// --- seeking to a moment (the race picker jumps to the gun) --------------
+console.log('indexAtTime:');
+
+{
+    const c = new NmeaClient(makeStore());
+    assert(c.indexAtTime(Date.parse('2026-09-13T19:00:30Z')) === null, 'no recording loaded -> null');
+    c.loadText(LOG);
+    c.startReplay(1);
+    const t0 = Date.parse('2026-09-13T19:00:00Z');
+    assert(c.indexAtTime(t0 + 30000) === 30, 'an exact second lands on that line');
+    assert(c.indexAtTime(t0 + 30500) === 31, 'between lines -> the first line after, never before the moment');
+    assert(c.indexAtTime(t0 - 3600e3) === 0, 'before the recording -> its first line');
+    assert(c.indexAtTime(t0 + LOG_N * 1000) === null, 'after the recording ends -> null, not the last line');
+    assert(c.indexAtTime(NaN) === null, 'NaN is not a time');
+    c.seek(c.indexAtTime(t0 + 45000));
+    assert(c.getReplayTimeRange().current === t0 + 45000, 'seek(indexAtTime(t)) puts the clock at t');
+}
+
+{
+    // Unstamped lines (a raw paste in the middle of a log) must be skipped, not matched.
+    const c = new NmeaClient(makeStore());
+    c.loadText('2026-09-13 19:00:00.000  $GPRMC,a,A\n$GPRMC,raw,A\n2026-09-13 19:00:02.000  $GPRMC,b,A');
+    c.startReplay(1);
+    assert(c.indexAtTime(Date.parse('2026-09-13T19:00:01Z')) === 2, 'an unstamped line is never the answer');
+}
+
+{
+    // warmupMs: re-read only the window before the target (race jumps on ~450k-line recordings).
+    const store = makeStore();
+    const c = new NmeaClient(store);
+    c.loadText(LOG);
+    c.startReplay(1);
+    c.seek(100, { warmupMs: 30000 });
+    assert(store.lines.length === 30, `a 30 s warmup re-reads 30 lines, got ${store.lines.length}`);
+    assert(store.lines[0].includes('$GPRMC,000070,'), 'starting at the line 30 s before the target');
+    assert(c.getReplayTimeRange().current === Date.parse('2026-09-13T19:01:40Z'), 'the playhead still lands on the target');
+    c.seek(10, { warmupMs: 30000 });
+    assert(store.lines.length === 10, 'a window reaching back past the start re-reads from line 0');
+    c.seek(100);
+    assert(store.lines.length === 100, 'without warmupMs a seek still re-reads everything (the scrubber\'s invariant)');
+}
+
+// --- race tracks: colour ramp, segments, which recording holds a moment ---
+console.log('race tracks:');
+
+{
+    const rtSrc = readFileSync(join(__dirname, '../static/js/race-tracks.js'), 'utf8');
+    const box = {};
+    new Function('module', 'NmeaClient', 'L', rtSrc + '\nmodule.RaceTracks = RaceTracks;')(box, NmeaClient, {});
+    const { RaceTracks } = box;
+    const hue = (c) => +/hsl\((\d+)/.exec(c)[1];
+
+    assert(hue(RaceTracks.colorFor(85)) === 0 && hue(RaceTracks.colorFor(60)) === 0, '85% and below are pure red');
+    assert(hue(RaceTracks.colorFor(97)) === 120 && hue(RaceTracks.colorFor(110)) === 120, '97% and above are pure green');
+    assert(hue(RaceTracks.colorFor(91)) === 60, 'halfway (91%) is yellow');
+    assert(hue(RaceTracks.colorFor(88)) < hue(RaceTracks.colorFor(94)), 'the ramp rises with %');
+    assert(RaceTracks.colorFor(null) === RaceTracks.UNSCORED && RaceTracks.colorFor(NaN) === RaceTracks.UNSCORED,
+        'unscored (tack, no data) is grey, never a colour that reads as a score');
+
+    const pt = (t, pct) => [t, 37.8 + t * 1e-5, -122.4, pct];
+    const seg = RaceTracks.segments([pt(0, 90), pt(5, 90), pt(10, 70), pt(15, 70), pt(20, null)]);
+    assert(seg.length === 3, `three colour runs, got ${seg.length}`);
+    assert(seg[1].latlngs[0][0] === pt(5)[1], 'a run starts at the previous run\'s last point, so the line is unbroken');
+    const gap = RaceTracks.segments([pt(0, 90), pt(5, 90), pt(500, 90), pt(505, 90)]);
+    assert(gap.length === 2 && gap[1].latlngs.length === 2, 'a hole in the data breaks the line instead of drawing across it');
+    assert(RaceTracks.segments([pt(0, 90)]).length === 0, 'a single point draws nothing');
+
+    const files = [                                   // newest first, as /api/logs sends them
+        { name: 'nmea_2026-09-17_122333.txt' }, { name: 'nmea_2026-09-17_114740.txt' },
+        { name: 'nmea_2026-09-17_114737.txt' }, { name: 'nmea_2026-09-17_102333.txt' },
+        { name: 'nmea_2026-09-17_092333.txt' },
+    ];
+    const at = (h, m) => new Date(2026, 8, 17, h, m, 0).getTime();   // local, like the filenames
+    assert(RaceTracks.fileForTime(files, at(10, 5)).name === 'nmea_2026-09-17_092333.txt',
+        'the gun at 10:05 is in the 09:23 recording');
+    assert(RaceTracks.fileForTime(files, at(11, 50)).name === 'nmea_2026-09-17_114740.txt',
+        'after a logger restart, the latest recording starting before the moment');
+    assert(RaceTracks.fileForTime(files, at(8, 0)) === null, 'before every recording -> null');
+    assert(RaceTracks.fileForTime(files, at(18, 0)) === null, 'hours past the last recording\'s start -> null, not a stale file');
+
+    // The race box: angle and speed against the ORC target. Rows: [t, lat, lon, pct, twa, tws, spd, mode, tgt_twa, tgt_spd]
+    const v = (twa, mode, tgt) => RaceTracks.angleVerdict([0, 0, 0, 90, twa, 12, 6.5, mode, tgt, 6.6]);
+    assert(v(44, 'u', 40).text === '4° low (footing)', `upwind wider than target is low/footing, got "${v(44, 'u', 40).text}"`);
+    assert(v(37, 'u', 40).text === '3° high (pinching)', 'upwind tighter than target is high/pinching');
+    assert(v(160, 'd', 170).text === '10° high (hotter)', 'downwind hotter than the gybe angle is high');
+    assert(v(176, 'd', 170).text === '6° low (deeper)', 'downwind deeper than the gybe angle is low');
+    assert(v(41, 'u', 40).text === 'on target', 'within 1.5° is on target');
+    assert(v(90, 'r', null) === null, 'a reach has no angle verdict: the course sets it');
+    const L1 = RaceTracks.lines({ name: 'Typon', source: 'instruments' }, [0, 0, 0, 88, 44, 12.3, 6.46, 'u', 39.2, 6.64]);
+    assert(L1[0] === 'Typon: 88% of ORC VMG upwind', `headline, got "${L1[0]}"`);
+    assert(L1[1] === 'TWA 44° vs target 39° → 5° low (footing)', `angle line, got "${L1[1]}"`);
+    assert(L1[2] === 'STW 6.46 vs target 6.64 kn → −0.18 kn', `speed line, got "${L1[2]}"`);
+    const L2 = RaceTracks.lines({ name: 'Wowla', source: 'ais' }, [0, 0, 0, 101, 95, 14, 7.8, 'r', null, 7.5]);
+    assert(L2[1].includes('course sets the angle') && L2[2].endsWith('+0.30 kn'), 'reach: no angle verdict, speed delta still shown');
+    assert(RaceTracks.lines({ name: 'X' }, [0, 0, 0, null, null, null, null, '', null, null])[0].includes('not scored'),
+        'an unscored point says so');
+
+    const tp = [[100], [105], [110], [140]].map(([t]) => [t, 0, 0, 90]);
+    assert(RaceTracks.atTime(tp, 106e3, 10)[0] === 105, 'the nearest point in time');
+    assert(RaceTracks.atTime(tp, 99e3, 10)[0] === 100, 'just before the first point');
+    assert(RaceTracks.atTime(tp, 125e3, 10) === null, 'a gap wider than the tolerance -> null, never a stale reading');
+    assert(RaceTracks.atTime([], 100e3, 10) === null, 'no points -> null');
+}
+
 // --- loadUrl -------------------------------------------------------------
 console.log('loadUrl:');
 

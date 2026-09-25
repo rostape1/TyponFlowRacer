@@ -366,12 +366,26 @@ class NmeaClient {
      *
      * Re-ingest runs in the store's bulk mode, so AIS decoding happens for every
      * sentence but the map/panel refresh is coalesced into one event. An hour of
-     * NMEA is ~12k lines; the largest logs are ~150k. Callers should still seek
-     * on a slider's `change`, not `input`.
+     * NMEA used to be ~12k lines; race-day recordings with AIS are ~450k, so a
+     * seek near the end of one re-reads ~400k lines and freezes the tab for over
+     * a minute. Callers should still seek on a slider's `change`, not `input`.
+     *
+     * `warmupMs` trades exactness for speed: re-ingest only the lines stamped
+     * within warmupMs before the target, not the whole log. Position, wind and
+     * every contact that reported in that window are right; a contact last heard
+     * earlier is missing until it next reports. So the "seek == play through"
+     * invariant holds only without it, which is what the scrubber uses. The race
+     * picker's jumps pass it (docs/logging-and-playback.md).
      */
-    seek(idx) {
+    seek(idx, { warmupMs = null } = {}) {
         if (!this._replayLines) return;
         const target = Math.max(0, Math.min(idx | 0, this._replayLines.length));
+        let from = 0;
+        if (warmupMs != null && target > 0) {
+            const tt = this._replayTimestamps[Math.min(target, this._replayTimestamps.length - 1)];
+            const w = tt == null ? null : this.indexAtTime(tt - warmupMs);
+            if (w != null) from = Math.min(w, target);
+        }
 
         if (this._replayRafId) {
             cancelAnimationFrame(this._replayRafId);
@@ -389,7 +403,7 @@ class NmeaClient {
         const bulk = typeof this.store.beginBulk === 'function';
         if (bulk) this.store.beginBulk();
         try {
-            for (let i = 0; i < target; i++) {
+            for (let i = from; i < target; i++) {
                 this.store.ingest(this._replayLines[i], this._replayTimestamps[i] || Date.now());
                 this._sentenceCount++;
             }
@@ -439,6 +453,20 @@ class NmeaClient {
         let current = this._replayTimestamps[idx];
         if (current == null) current = this._replayFirstTs;
         return { start: this._replayFirstTs, end: this._replayLastTs, current };
+    }
+
+    /**
+     * Index of the first line stamped at or after `ms`, for seeking to a moment (a race's gun)
+     * rather than a position. null when the recording has no timestamps or ends before `ms`;
+     * a moment before the first line is index 0. Unstamped lines are skipped, never matched.
+     */
+    indexAtTime(ms) {
+        if (!this._replayTimestamps || !Number.isFinite(ms)) return null;
+        const ts = this._replayTimestamps;
+        for (let i = 0; i < ts.length; i++) {
+            if (ts[i] != null && ts[i] >= ms) return i;
+        }
+        return null;
     }
 
     pauseReplay() {

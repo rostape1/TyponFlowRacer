@@ -3084,6 +3084,12 @@ if (nmeaStore && nmeaClient) {
         if (replayPauseBtn) {
             replayPauseBtn.textContent = nmeaClient._replayPaused ? '▶ Play' : '⏸ Pause';
         }
+        // The race box follows the playhead. Scrubbing previews without seeking,
+        // so it waits for the seek like the rest of the map does.
+        if (raceTracks && !scrubbing) {
+            const r = nmeaClient.getReplayTimeRange();
+            raceTracks.update(r ? r.current : null);
+        }
     }
 
     // Pan to own position once, as soon as the recording reveals it. A log can
@@ -3188,7 +3194,9 @@ if (nmeaStore && nmeaClient) {
         // explicitly afterwards, or the dropdown says Max while playing at 1x.
         if (replaySpeedSel) nmeaClient.setReplaySpeed(parseInt(replaySpeedSel.value));
         startReplayUiSync();
-        _recenterOnOwnWhenFound();
+        // With race tracks drawn the map is already framed on the whole race;
+        // panning to the boat at every hourly roll-over would undo that.
+        if (!(raceTracks && raceTracks.layers.length)) _recenterOnOwnWhenFound();
     }
 
     // Populate the recording list from the Pi. Uncached on purpose, and an
@@ -3381,6 +3389,7 @@ if (nmeaStore && nmeaClient) {
         if (replayBar) replayBar.classList.remove('hidden');
         positionReplayBar();
         loadLogList();
+        loadRaceList();
         const btn = document.getElementById('replay-toggle');
         if (btn) { btn.classList.remove('replay-off'); btn.textContent = 'Replay: ON'; }
     };
@@ -3401,10 +3410,86 @@ if (nmeaStore && nmeaClient) {
         });
     }
 
+    // --- race picker ----------------------------------------------------
+    // Draws each boat's race track coloured by % of its own ORC certificate
+    // (race-tracks.js; the scoring and calibration are tools/race_tracks.py's)
+    // and jumps the replay to the gun. The tracks do not come from the store,
+    // so they survive the hourly recording boundaries that reset it.
+    const replayRaceSel = document.getElementById('replay-race-select');
+    // Race-day recordings are ~450k lines an hour, and a full re-read to a gun
+    // 40 min into one froze the tab for over a minute. A jump re-reads only this
+    // much before the target; see seek()'s warmupMs for what that gives up.
+    const RACE_JUMP_WARMUP_MS = 10 * 60 * 1000;
+    const raceTracks = (typeof RaceTracks !== 'undefined' && replayRaceSel)
+        ? new RaceTracks(map, (ms) => replayJumpTo(ms)) : null;
+
+    function loadRaceList() {
+        if (!raceTracks || replayRaceSel.options.length > 1) return;
+        raceTracks.load()
+            .then(d => {
+                for (const r of d.races) {
+                    const opt = document.createElement('option');
+                    opt.value = r.id;
+                    opt.textContent = r.label;
+                    replayRaceSel.appendChild(opt);
+                }
+            })
+            .catch(err => {
+                replayRaceSel.options[0].textContent = 'Races unavailable';
+                console.error('[playback] could not load race tracks:', err);
+            });
+    }
+
+    function clearRaceTracks() {
+        if (raceTracks) raceTracks.clear();
+        if (replayRaceSel) replayRaceSel.value = '';
+    }
+
+    /** Put the replay at moment `ms`: seek within the loaded recording, or load the one holding it. */
+    function replayJumpTo(ms) {
+        const range = nmeaClient.getReplayTimeRange();
+        if (range && ms >= range.start && ms <= range.end) {
+            replayEndNote = null;
+            nmeaClient.seek(nmeaClient.indexAtTime(ms), { warmupMs: RACE_JUMP_WARMUP_MS });
+            syncReplayUi();
+            return;
+        }
+        loadLogList().then(() => {
+            const f = RaceTracks.fileForTime(replayLogFiles, ms);
+            if (!f) {
+                // Say so rather than leave the previous recording looking like this race.
+                replayEndNote = 'no recording then';
+                if (replayClock) replayClock.textContent = replayEndNote;
+                return;
+            }
+            replayLogSel.value = f.url;
+            if (replayClock) replayClock.textContent = 'loading…';
+            nmeaClient.loadUrl(f.url, (n) => {
+                beginReplay(n);
+                const idx = nmeaClient.indexAtTime(ms);
+                if (idx != null) { nmeaClient.seek(idx, { warmupMs: RACE_JUMP_WARMUP_MS }); syncReplayUi(); }
+            }, (err) => {
+                endReplayWithNote('load failed');
+                console.error('[playback] could not load recording for', new Date(ms), err);
+            });
+        });
+    }
+
+    if (replayRaceSel) {
+        replayRaceSel.addEventListener('change', () => {
+            const race = raceTracks && raceTracks.race(replayRaceSel.value);
+            if (!race) { if (raceTracks) raceTracks.clear(); return; }
+            raceTracks.show(race);
+            replayJumpTo(race.start);
+        });
+    }
+
     if (replayLogSel) {
         replayLogSel.addEventListener('change', () => {
             const url = replayLogSel.value;
             if (!url) return;
+            // A recording picked by hand is no longer "this race".
+            clearRaceTracks();
             if (replayClock) replayClock.textContent = 'loading…';
             nmeaClient.loadUrl(url, beginReplay, (err) => {
                 if (replayClock) replayClock.textContent = 'load failed';
@@ -3417,6 +3502,7 @@ if (nmeaStore && nmeaClient) {
         fileInput.addEventListener('change', (e) => {
             const file = e.target.files[0];
             if (!file) return;
+            clearRaceTracks();
             nmeaClient.loadFile(file, beginReplay);
         });
     }
@@ -3479,6 +3565,7 @@ if (nmeaStore && nmeaClient) {
             closePlaybackBar();
             if (replayControls) replayControls.classList.add('hidden');
             if (replayLogSel) replayLogSel.value = '';
+            clearRaceTracks();
             // Order matters: leave replay mode (which clears the store) and wipe
             // the map layer BEFORE reconnecting, so no replayed contact survives
             // into the live picture.

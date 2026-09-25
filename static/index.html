@@ -364,6 +364,9 @@
          Charts and Radar through the same store, so the scrubber has to stay
          reachable while you are watching any of them. -->
     <div id="replay-bar" class="hidden">
+        <select id="replay-race-select" title="Race: draws each boat's track coloured by % of its ORC certificate and jumps to the gun">
+            <option value="">Race…</option>
+        </select>
         <select id="replay-log-select" title="Recording to replay (names are local date/time)">
             <option value="">Select a recording…</option>
         </select>
@@ -435,6 +438,7 @@
             .then(() => loadScript('js/radar-view.js'))
             .then(() => loadScript('js/vessel-names.js'))
             .then(() => loadScript('js/competitor-labels.js'))
+            .then(() => loadScript('js/race-tracks.js'))
             .then(() => loadScript('js/app.js'));
 
         // Register service worker for PWA

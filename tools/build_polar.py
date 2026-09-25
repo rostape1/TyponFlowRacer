@@ -13,7 +13,7 @@ Log pipeline:
   1. Parse GPRMC (SOG/COG), HCHDG (10 Hz heading), YXXDR (heel), IIMWV (apparent wind), IIVHW
      (paddlewheel), AGRSA (rudder) into a 1 Hz grid on the log timestamp (GPS time, P42).
   2. Calibrate from the data: paddlewheel scale per day (GPS vs BSP, current held constant per
-     15 min); vane heel correction (cos heel); leeway = K*heel/STW^2 (heading vs GPS track, both-tack
+     15 min); vane heel correction (cos heel); leeway = B*(heel/20)^n*(6.5/STW)^2 (heading vs GPS track, both-tack
      windows); masthead offset + symmetric upwash (upwind TWA equal on both tacks, no TWD jump).
      TWA is referenced to the course through the water, as ORC's angles are, not to the bow.
   3. Keep race windows only, beats (TWA <= 55) and runs (TWA >= 130) only, steady 60 s stretches,
@@ -307,11 +307,36 @@ def heel_correct(awa, aws, heel):
 LEE_MAX = 12.0
 
 
+LEE_REF_HEEL, LEE_REF_STW, LEE_RAMP_HEEL = 20.0, 6.5, 8.0
+
+
 def leeway(heel, stw, awa, K):
-    """Leeway (deg, >= 0, to leeward) = K * heel / STW^2, the usual keelboat form. Tapered out with
-    the upwash term: nothing beyond 90 AWA, where rolling heel is not side force."""
+    """Leeway (deg, >= 0, to leeward) = [A * min(heel/8, 1) + B * (heel/20)^n] * (6.5/STW)^2,
+    K = (A, B, n), at 6.5 kn: A is the low-heel leeway, B the extra at 20 deg heel. The 1/STW^2 is the
+    usual keelboat form (side force ~ speed^2); the power n lets it steepen with heel, which the
+    per-bin fit showed it does (docs/polar.md §4: ~1.5 deg below 20 heel, 7.25 at 30-34, rising ~0.45
+    deg per degree from 20; K*heel/STW^2 was linear and 0.5-2 deg short above 26). A ramps in over the
+    first 8 deg so an upright boat has ~none, which fit_deviation relies on.
+    Tapered out with the upwash term: nothing beyond 90 AWA, where rolling heel is not side force."""
+    A, B, n = K
+    h = np.abs(heel)
     taper = np.clip((90 - np.abs(signed(awa))) / 60, 0, 1)
-    return np.clip(K * np.abs(heel) / np.maximum(stw, 3.0) ** 2, 0, LEE_MAX) * taper
+    return np.clip((A * np.minimum(h / LEE_RAMP_HEEL, 1) + B * (h / LEE_REF_HEEL) ** n)
+                   * (LEE_REF_STW / np.maximum(stw, 3.0)) ** 2, 0, LEE_MAX) * taper
+
+
+def leeway_str(K):
+    return f'[{K[0]:.2f} x min(heel/8, 1) + {K[1]:.2f} x (heel/20)^{K[2]:.2f}] x (6.5/STW)^2'
+
+
+def leeway_per_degree(K, heels=(15, 20, 25, 28, 30), stw=6.4, twa=40.0):
+    """For the crib sheet: at each heel, leeway, the extra leeway one more degree of heel adds, and
+    what that costs in VMG on its own (stw * sin(twa) * d_leeway), at a typical upwind speed/angle."""
+    rows = []
+    for h in heels:
+        L0, L1 = (float(leeway(x, stw, 30.0, K)) for x in (h, h + 1))
+        rows.append((h, L0, L1 - L0, stw * math.sin(math.radians(twa)) * math.radians(L1 - L0)))
+    return rows
 
 
 def fit_leeway(g):
@@ -329,12 +354,13 @@ def fit_leeway(g):
     def cost(x, L):     # boat moves at heading rotated L to leeward: +L math angle with wind from stbd
         r = x.V - x.stw * np.exp(1j * np.deg2rad(90 - x.hdg + x.s * L))
         return (np.abs(r - r.groupby(x.win).transform('mean')) ** 2).mean()
-    Ks = np.arange(0, 40.01, 0.5)
-    K = Ks[int(np.argmin([cost(d, leeway(d.heel, d.stw, d.awa, k)) for k in Ks]))]
+    grid = [(A, B, n) for A in np.arange(0, 2.51, 0.25) for B in np.arange(0.25, 6.01, 0.25)
+            for n in np.arange(1.0, 4.01, 0.25)]
+    K = grid[int(np.argmin([cost(d, leeway(d.heel, d.stw, d.awa, k)) for k in grid]))]
     bins = []
-    for lo, hi in [(0, 15), (15, 20), (20, 25), (25, 40)]:
+    for lo, hi in [(0, 15), (15, 20), (20, 23), (23, 26), (26, 28), (28, 30), (30, 34)]:
         x = d[(d.heel.abs() >= lo) & (d.heel.abs() < hi)]
-        if len(x) >= 1800:
+        if len(x) >= 900:
             L = min(np.arange(-4, 12.01, 0.25), key=lambda L: cost(x, L))
             bins.append((lo, hi, L, float(leeway(x.heel, x.stw, x.awa, K).median()), len(x) / 60))
     return dict(K=K, bins=bins, windows=d.win.nunique(), hours=len(d) / 3600)
@@ -749,9 +775,9 @@ def chart_heel_helm(up, outdir, plt):
 
 def chart_cheatsheet(v, up, m, heel_fast, floor, power, held, cal, hours, outdir, plt):
     """One-page crib sheet: targets from the certificate, habits from our logs."""
-    fig = plt.figure(figsize=(11, 33.3))
+    fig = plt.figure(figsize=(11, 34.5))
     fig.patch.set_facecolor(SURFACE)
-    ax = fig.add_axes([0, 0, 1, 1]); ax.axis('off'); ax.set_xlim(0, 100); ax.set_ylim(-102.8, 200)
+    ax = fig.add_axes([0, 0, 1, 1]); ax.axis('off'); ax.set_xlim(0, 100); ax.set_ylim(-113.7, 200)
     T = lambda x, y, s, **k: ax.text(x, y, s, **{'color': INK, 'fontsize': 10, 'va': 'top', **k})
     T(5, 197, 'TYPON — speed & angle crib sheet', fontsize=22, fontweight='bold')
     T(5, 192.2, f'Targets: ORC International certificate.  Habits: {hours:.0f} h of steady beats and runs, Big Boat Series 17–20 Sept 2026.',
@@ -768,9 +794,10 @@ def chart_cheatsheet(v, up, m, heel_fast, floor, power, held, cal, hours, outdir
     lee_b = v[v.sector == 'upwind'].set_index('band').lee
     rows = [('Upwind TWA (track)', [f'{orc_beat(s)[1]:.0f}°' for s in cols]),
             ('  on display, our leeway', [f'{orc_beat(s)[1] - lee_b[band_of[s]]:.0f}°' if band_of[s] in lee_b else '–' for s in cols]),
-            ('Upwind speed', [f'{orc_beat(s)[0] / cosd(orc_beat(s)[1]):.1f}' for s in cols]),
+            ('ORC target speed (at ORC angle)', [f'{orc_beat(s)[0] / cosd(orc_beat(s)[1]):.1f}' for s in cols]),
             ('Upwind VMG', [f'{orc_beat(s)[0]:.1f}' for s in cols]),
-            ('Upwind speed floor (ours)', [f'{floor[s][0]:.1f}' if floor.get(s) else '–' for s in cols]),
+            ('Our normal speed (groove)', [f'{floor[s][1]:.1f}' if floor.get(s) else '–' for s in cols]),
+            ('Speed floor: never below', [f'{floor[s][0]:.1f}' if floor.get(s) else '–' for s in cols]),
             ('Upwind power (ours)', [power[s][0] if power.get(s) else '–' for s in cols]),
             ('Downwind TWA', [f'{orc_run(s)[1]:.0f}°' for s in cols]),
             ('Downwind speed', [f'{orc_run(s)[0] / -cosd(orc_run(s)[1]):.1f}' for s in cols]),
@@ -786,20 +813,22 @@ def chart_cheatsheet(v, up, m, heel_fast, floor, power, held, cal, hours, outdir
               fontweight='bold' if 'TWA' in name or s == 'POWER UP' else 'normal')
         y -= 4.2
     T(5, y + 0.5, 'Track = through the water, as ORC measures. Display row = ORC angle minus our measured leeway in that band; the display shows the bow.\n'
-      f'Speed floor: point as high as you can, but not below this. It is our normal-groove speed at that wind minus {POINT_SPEED_LOSS} kn, where pointing\n'
-      'higher stopped paying. Paddlewheel-corrected: the raw display may read up to ~0.3 kn lower. Judge it after a minute, not at once.\n'
+      'ORC target speed is at ORC\'s angle; we have not made both at once. Groove = our normal speed at that wind, at our (wider) angle.\n'
+      f'Speed floor = groove minus {POINT_SPEED_LOSS} kn, where pointing higher stopped paying. A LIMIT, NOT A TARGET: get to groove speed, then point\n'
+      'higher while speed stays above the floor (over ~11 kn). Under ~11 kn sail for speed. Paddlewheel-corrected: the raw display may read up to\n'
+      '~0.3 kn lower. Judge it after a minute, not at once.\n'
       'Power row: whether one more degree of heel gained VMG (POWER UP), didn\'t matter (on the edge) or cost it (depower), in our sailing at that wind.\n'
       'Heel row: median heel in the faster half of our steady upwind sailing, by wind band (6–10 / 10–13 / 13–16 / 16+).',
       fontsize=8, color=INK2, linespacing=1.4)
-    y -= 7.5
+    y -= 10.5
 
     # --- upwind playbook: the rules below, in the order they are used on the water
     y -= 1
     T(5, y, 'UPWIND, IN ORDER', fontsize=12, fontweight='bold'); y -= 4.2
     play = [
-        'Point up until the jib luff just lifts. Never foot for speed.',
-        'Watch speed through the water: stay above the speed-floor row. Below it, bear away 2°, rebuild, then point again.',
-        'Heel: power up to 12–15° under ~11 kn. 22–26° over 16 kn. Past ~28°: flatten, traveller down, feather; if that fails, reef.',
+        'Build to groove speed first. Over ~11 kn, then point up a degree at a time: speed drifts down, that is fine.',
+        'Stop at the speed floor, never below. Below it: bear away 2°, rebuild, point again. Under ~11 kn: sail for speed.',
+        'Heel: 12–15° under ~11 kn, 20–25° over 16 kn. Gust past 25°: traveller down. Past 28°: flatten, feather, reef.',
         'Tack less over 13 kn: each tack costs ~2–3 boat lengths.',
     ]
     for i, t in enumerate(play):
@@ -882,9 +911,13 @@ def chart_cheatsheet(v, up, m, heel_fast, floor, power, held, cal, hours, outdir
          'Backstay off, jib halyard eased, car forward, fuller main with twist; let her heel to ~15° in 6–10 kn. '
          f'Neutral helm (0–2°) was 0.15–0.3 kn slow; typical helm {up.whelm.median():.1f}°, ~1° more per 4° heel.'),
         ('5', 'OVER ~17 kn WE ARE OVERPOWERED: flatten, traveller down, feather.',
-         'Above 17 kn extra heel cost VMG (−0.04 kn per degree) and added leeway. Sweet spot 22–26° heel; past ~28° VMG fell ~0.07 kn '
-         'even with 0.8 kn more wind. If traveller, backstay and feathering can\'t hold her under ~28°, that is the reef / change-down '
-         'signal (our data only reaches ~21 kn at 10 m). Easing to neutral helm is untested.'),
+         'Every extra degree of heel adds leeway, and more of it the further over she is: '
+         + ', '.join(f'at {h}° heel +{dL:.2f}° leeway ({-dv:+.3f} kn VMG)' for h, _, dL, dv in leeway_per_degree(cal['K'], heels=(20, 25, 28, 30)))
+         + '; from 20° to 34° of heel speed rose only ~0.2 kn. '
+         + 'Within a stretch, heel past the edge cost ' + ' and '.join(
+             f'{power[w][1]:+.2f} kn VMG per degree at {w} kn' for w in (16, 20) if power.get(w)) + '. '
+         'Aim 20–25°; a gust past 25° is the traveller-down signal (in 16+ kn gusts heel went to ~30° and speed did not rise). '
+         'If traveller, backstay and feathering can\'t hold her under ~28°, reef or change down (our data only reaches ~21 kn at 10 m).'),
         ('6', 'LIGHT AIR: quiet helm.',
          'In 6–13 kn, busy steering (rudder moving 3°+) cost 0.15–0.25 kn. Trim to the puffs; '
          'steer only to the telltales. In 13+ kn steering through waves is fine.'),
@@ -909,7 +942,7 @@ def chart_cheatsheet(v, up, m, heel_fast, floor, power, held, cal, hours, outdir
     T(5, y, 'WATCH OUT FOR', fontsize=12, fontweight='bold'); y -= 4.2
     watch = [
         f'Calibrated in software only: compass deviation (−4° / +1° on the beat headings), vane heel correction, +{cal["offset"]:.2f}° masthead offset, '
-        f'{cal["sym"]:.1f}° upwash, leeway {cal["K"]:.1f}×heel/speed². The display is raw: upwind it reads ~7° WIDE on starboard and ~2° NARROW on port. '
+        f'{cal["sym"]:.1f}° upwash, leeway ≈ {cal["K"][1]:.2f}°×(heel/20)^{cal["K"][2]:.2f}×(6.5/speed)². The display is raw: upwind it reads ~7° WIDE on starboard and ~2° NARROW on port. '
         'Calibrate the instruments before steering to the target angles.',
         'ORC\'s angles are through the water; the display\'s TWA is by the bow. We slide 3–5° (most in heavy air), '
         'so a calibrated display reads narrower than ORC\'s angle: the "on display" target row allows for it.',
@@ -927,7 +960,7 @@ def chart_cheatsheet(v, up, m, heel_fast, floor, power, held, cal, hours, outdir
         T(6, y, '▲', color=ORC_C, fontsize=10)
         T(10, y, _wrap(w, 108), fontsize=9.5, color=INK2, linespacing=1.35)
         y -= 2.2 * (_wrap(w, 108).count('\n') + 1) + 0.9
-    T(5, -100.7, 'Generated by tools/build_polar.py — docs/polar.md has the method and caveats.', fontsize=8, color=INK2)
+    T(5, -111.6, 'Generated by tools/build_polar.py — docs/polar.md has the method and caveats.', fontsize=8, color=INK2)
     p = os.path.join(outdir, 'crib_sheet.png'); plt.savefig(p, dpi=130); plt.close(); return p
 
 
@@ -970,7 +1003,7 @@ def calibrate(g):
     print(f'\nheel-corrected wind angle: {g.awa.notna().mean() * 100:.0f}% of samples have heel '
           f'({race_mask(g)[g.awa.notna().values].sum() / race_mask(g).sum() * 100:.0f}% of race time)')
     lw = fit_leeway(g)
-    print(f"leeway = {lw['K']:.1f} x heel / STW^2 from {lw['windows']} two-tack upwind windows ({lw['hours']:.1f} h); "
+    print(f"leeway = {leeway_str(lw['K'])} from {lw['windows']} two-tack upwind windows ({lw['hours']:.1f} h); "
           'model-free check, constant leeway per heel bin:')
     for lo, hi, L, Lm, mins in lw['bins']:
         print(f'  heel {lo:2d}-{hi:2d} deg: fitted {L:+.2f} deg, model {Lm:.1f} deg  ({mins:.0f} min)')

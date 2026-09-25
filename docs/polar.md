@@ -22,7 +22,7 @@ New regatta: add its windows to `RACES` in the script and re-run.
 | Source | Generic Swan 47 table × 85% | Typon's ORC International certificate |
 | Upwind | **Nothing below 52° TWA**: the beat row was never copied | Cert beat angles (38–47°) and beat VMG |
 | Downwind | Clamped at 150° | Cert gybe angles (141–178°) and run VMG |
-| Performance slider default | 85% | 95%, set when race sailing measured 96% of rated VMG. **Since the leeway and wind-height corrections (§2) upwind is 88–89% VMG, downwind 94–100%: not yet revisited** |
+| Performance slider default | 85% | 95%, set when race sailing measured 96% of rated VMG. **Since the leeway and wind-height corrections (§2) upwind is 88–93% VMG (88% in 13+ kn), downwind 94–100%: not yet revisited** |
 
 The cert's fixed-angle rows (52–150°) are used as they are. Between the beat angle and 52°, and
 between 150° and the gybe angle, **VMG** is interpolated rather than speed, so the cert's optimum
@@ -56,7 +56,7 @@ table now reaches 180°.
 | Paddlewheel | Reads 0–5% low (k = 1.00–1.05 per day), fitted against GPS with current removed | corrected |
 | Compass deviation | Fitted from 0.9 h of upright sailing (heel under 4°, so no leeway): compass heading vs GPS track, current held constant per 10 min, as a 2nd-order curve. **−4.3° on the ~198° beat heading, +0.9° on ~273°.** Half that difference, 2.6° per side, would otherwise read as leeway. Thin data: ±1–2° | corrected before everything else |
 | Masthead heel | A heeled vane turns in the tilted plane and sees the sideways wind × cos(heel), so it reads **narrow**: ~1° of AWA at 25° heel | corrected per sample. Needs the heel sensor; samples without one are dropped, not left uncorrected |
-| Leeway | **leeway = 7.5 × heel / STW²**: ~1.5° below 20° heel, 3.5° at 20–25°, ~6° beyond. Fitted from heading vs GPS track in 46 upwind windows that contain both tacks, current held constant per 10 min. Current is solved as an unknown per window, so anything that is the same on both tacks (paddlewheel scale, a fixed compass offset) goes into it; only an error that flips with the tack can pass for leeway. Compass deviation was one, and is now removed. Imperfect tilt compensation in the heading sensor would be another, and the logs can't separate it | corrected: **TWA is now through the water**, as ORC's angles are |
+| Leeway | **leeway = 2.75° × (heel/20)^2.25 × (6.5/STW)²** (refit 2026-09-25; was 7.5 × heel/STW², linear, and 0.5–2° short above 26° heel). Per heel range, fitted without the formula: 1.5° below 20°, 3.0° at 20–23°, 4.5° at 23–26°, 5.0° at 26–28°, 6.0° at 28–30°, 7.25° at 30–34° (±0.5°); the formula matches within 0.2° above 20°. Below 15° two fits disagree (0.5° from the formula, 1.5° per range), so light-air upwind % carries ±2 points. Each extra degree of heel adds ~0.33° leeway at 20°, 0.43° at 25°, 0.50° at 28°, 0.54° at 30° (−0.024 to −0.039 kn VMG), while speed rises only ~0.2 kn from 20° to 34°. Fitted from heading vs GPS track in 46 upwind windows that contain both tacks, current held constant per 10 min. Current is solved as an unknown per window, so anything that is the same on both tacks (paddlewheel scale, a fixed compass offset) goes into it; only an error that flips with the tack can pass for leeway. Compass deviation was one, and is now removed. Imperfect tilt compensation in the heading sensor would be another, and the logs can't separate it | corrected: **TWA is now through the water**, as ORC's angles are |
 | Masthead angle | **+3.25° offset** plus **4.0° upwash**, from 72 tacks. Raw data showed 45° vs 34° TWA by tack and a 7° TWD jump on every tack | corrected in software. **The instrument display is still raw**: upwind it reads ~7° wide on starboard and ~2° narrow on port (by the bow) |
 | Wind height | ORC's wind speeds are at 10 m (per ORC's speed guide; not checked against the VPP documentation). Our masthead is ~20.3 m up: cert BAS 1.55 + P 16.97 + ~0.5 m, plus ~1.3 m freeboard (estimate). Over-water profile, exponent 0.11: masthead wind × 0.925 (1/7 would give × 0.904) | corrected. Before it, every ORC target we compared against was for too much wind: light-air VMG read 84% instead of 89% |
 | Masthead speed | TWS reads ~9% higher downwind than upwind at mark roundings (could be the sea breeze building) | not corrected: **±10%** |
@@ -104,25 +104,26 @@ ORC has no leeway angle to compare ours with: side force appears only as induced
 
 | Upwind | 6–10 kn | 10–13 | 13–16 | 16+ |
 |---|---|---|---|---|
-| Median VMG, % of ORC | 89% | 89% | 88% | 89% |
-| Our angle (ORC) | 47° (41°) | 46° (40°) | 42° (39°) | 40° (38°) |
-| Our leeway | 3.0° | 3.1° | 4.2° | 4.8° |
-| Our angle by the bow | 44° | 43° | 38° | 35° |
-| Speed, % of ORC at our angle | 96% | 95% | 92% | 91% |
+| Median VMG, % of ORC | 93% (91–93) | 90% | 88% | 88% |
+| Our angle (ORC) | 45° (41°) | 45° (40°) | 42° (39°) | 41° (38°) |
+| Our leeway | 1.4° | 2.3° | 4.2° | 5.3° |
+| Our angle by the bow | 43° | 43° | 38° | 36° |
+| Speed, % of ORC at our angle | 101% | 96% | 92% | 90% |
 
 | Downwind | 6–10 kn | 10–13 | 13–16 | 16+ |
 |---|---|---|---|---|
 | Median VMG, % of ORC | 97% | **94%** | 100% | 96% |
 | Our angle (ORC) | 155° (151°) | **145° (156°)** | 159° (164°) | **156° (174°)** |
 
-- **Upwind is the bigger loss: 88–89% of rated VMG in every band.** Our best 10% of moments reach
-  94–103%, so the boat can get there; holding it is the gap.
+- **Upwind is the bigger loss: 88% of rated VMG in 13+ kn, 90% in 10–13, ~91–93% in light air**
+  (since the 2026-09-25 leeway refit; before it, 88–89% in every band). Our best 10% of moments
+  reach 93–107%, so the boat can get there; holding it is the gap.
 - **What we can sustain.** Best VMG held as a rolling mean (the crib sheet's "best held" rows):
 
   | Held for | 6–10 kn | 10–13 | 13–16 | 16+ |
   |---|---|---|---|---|
-  | 5 min | 101% | 102% | 93% | 93% |
-  | 10 min | 92% | 95% | 93% | 91% |
+  | 5 min | 106% | 103% | 93% | 93% |
+  | 10 min | 98% | 96% | 92% | 90% |
 
   No run at 95%+ lasted 3 minutes, but 16 of the 18 one-minute-plus runs had steady wind and
   steady or rising speed, and most were 0–6° *wider* than ORC. So they were real speed, not lulls,
@@ -245,7 +246,10 @@ a gust arriving; the direction across bands is the solid part, not the size). 10
 - **Short of power below ~11 kn.** That was most of 17 Sept (7–10 kn) and the lulls on 20 Sept
   (10–13 kn). Helm there was only ~1.5°.
 - **On the edge at 11–17 kn, overpowered above 17.**
-- **Heel ceiling ~28°.** In 16–19 kn, VMG went 91% → 89% → 88% → 86% of ORC across 22–24°,
+- **No sharp heel ceiling; every degree past ~20° costs a little more** (refit 2026-09-25: leeway
+  rises steadily, ~0.45° per degree of heel, see §2 for the numbers). Aim 20–25° in 16+ kn; a gust
+  past 25° is the traveller-down signal (in 16+ kn gusts heel reached ~30° and speed did not rise).
+  28° is where the loss becomes obvious, not where it starts. The earlier reading: in 16–19 kn, VMG went 91% → 89% → 88% → 86% of ORC across 22–24°,
   24–26°, 26–28° and 28–30° of heel; within a stretch, moments past 28° made 0.07 kn less VMG
   despite 0.8 kn more wind. In 13–16 kn there was no clear ceiling up to 30°. Leeway and track
   angle both grow with heel (16–19 kn: 37° track at 22–24° heel, 43° at 28–30°).
@@ -273,13 +277,19 @@ a gust arriving; the direction across bands is the solid part, not the size). 10
 
 These were stated in an earlier draft and are wrong:
 
+- **"Heel ceiling 28°" and "88–89% upwind in every band".** Leeway was modelled as linear in heel
+  (7.5 × heel/STW²). Fitted per heel range it steepens: too much below 20° of heel, 0.5–2° too
+  little above 26°. With the refit, light-air upwind is 91–93% rather than 88–89%, heavy air stays
+  at 88%, and there is no knee at 28°: each extra degree of heel costs a little more than the last.
+
 - **"We sail 31–35° in heavy air, higher than ORC's 38°, at 97–98% of rated VMG."** That compared
   our angle by the bow with ORC's angle through the water, and computed VMG along the bow. With
   leeway (§2) our track is 41–44° in 13+ kn and VMG is 86–88%. The same correction moves every
   upwind band from 93–98% to 84–88%. The first suspicion was the vane reading narrow at heel. That
   is real but worth only ~1° of AWA, and the calibration had already pinned the vane to the compass.
 - **"Upwind 84–88%, light air worst."** Before the 10 m wind correction, ORC's targets were for
-  ~8% too much wind. At 10 m, upwind is 88–89% in every band and downwind 94–100%.
+  ~8% too much wind. At 10 m, upwind is 88–89% in every band and downwind 94–100% (88–93% after the
+  leeway refit, first bullet).
 - **"We slide 7° in heavy air."** An intermediate version, before the compass deviation fit. 2.6°
   per side of that was deviation between the two beat headings; leeway is ~5°, the bow angle ~36°.
   VMG and the track angle didn't change.
@@ -384,7 +394,13 @@ corrected times:
 In a moderate windward/leeward race the rating is fair and a win is ~94% away. On a windy course
 with a reach finish (R5), the rating (~1.7% against us) plus a rival sailing above its polar put
 the win out of reach; a consistent 93–95% is still worth 1–4 places. Two races on one day; the
-Tangaroa (J/109) and Frequent Flyer certificates are still missing.
+Tangaroa (J/109) and Frequent Flyer (Farr 30) certificates were added 2026-09-25. Their finishes
+are transcribed for Saturday only, so their split is R4/R5 only (% of own polar, then corrected gap to
+Typon = rating + sailing, + = rival ahead): Tangaroa R4 95% (+5.6 = −0.7 + 6.3), R5 100%
+(+16.3 = +3.2 + 13.0); Frequent Flyer R4 88% (+2.5 = −0.8 + 3.3), R5 90% (−1.0 = +2.1 − 3.1).
+Tangaroa matches the J/100s: it sails to its polar and we don't. Frequent Flyer is the one boat near
+our level. Commands: `--rival TANGAROA=0:0.9193:12:41:19 --rival "FREQUENT FLYER=0:0.947:12:43:23"` (R4),
+`--rival TANGAROA=0:0.9798:15:24:22 --rival "FREQUENT FLYER=0:1.0066:15:37:38"` (R5).
 
 ### The whole series (17–20 Sept)
 
@@ -454,7 +470,69 @@ heavier boat. So the levers are boat speed and choosing a side; tack timing on s
 matches Wowla's.
 
 **AIS coverage.** Wowla (338521423) transmitted all day. Frequent Flyer (338147545) and Final
-Final (368309230, 368447470) are in `static/vessel_names.json` but sent nothing during the race.
+Final (368309230, 368447470) are in `static/vessel_names.json` but sent nothing during the race
+(on 19 Sept; Frequent Flyer did transmit on 20 Sept, R6, see §7).
 Feather, Tangaroa and Jarlen have no name in our AIS data; several unnamed class B boats stayed
 within ~1 nm of us (368282130, 232008347, 338513455, …), and some of them are probably those
 three. Their MMSIs would let `--rival` time them too.
+
+## 7. Race tracks on the map (replay's race picker)
+
+`python3 tools/race_tracks.py` writes `static/races/bbs2026.json`, which the replay bar's **Race**
+picker draws (`static/js/race-tracks.js`; UI in [logging-and-playback.md](logging-and-playback.md)).
+Each point on a boat's track is its % of **that boat's own certificate**, with the full §2
+calibration for Typon:
+
+| TWA (through the water) | Scored as | ORC target shown in the race box |
+|---|---|---|
+| ≤ 55° | VMG / ORC beat VMG | beat angle and the speed at it → "N° high (pinching) / low (footing)" |
+| ≥ 130° | VMG / ORC run VMG | gybe angle and its speed → "N° high (hotter) / low (deeper)" |
+| between | speed / ORC speed at that angle | no angle verdict (the course sets it), speed at the angle sailed |
+
+Colours: red ≤ 85%, green ≥ 97%, yellow at 91%. Typon's %, TWA, STW and TWS are 31 s medians.
+Only the turn of a tack or gybe is unscored (5 s before to 15 s after the side change), so the slow
+build back to speed after a heavy-air tack shows red. This is deliberate: it is agreed focus #2.
+
+**Rivals are AIS.** Reported SOG/COG minus the current *we* measured (GPS minus through-water, 5 min
+mean), against *our* wind (2 min mean), every ~30 s. So a rival's % assumes our wind and current.
+AIS carries corrupt fixes (Wowla had longitude −1.4 once each in R1 and R5): reports more than 10 nm
+from us or implying a jump over 25 kn are dropped. One such point once zoomed the map out to half the
+world and froze the tab, so the map is also framed on Typon's GPS track only.
+
+Rivals in the file: Wowla in every race; Frequent Flyer (Farr 30, cert US5230 in
+`race_review.CERTS`) in R6 only, as it transmitted on 20 Sept alone. Its R6 finish (13:42:01) was not
+transcribed from the results; it is its closest AIS pass to our finish point (72 m).
+Per-point medians (Typon / Wowla, after the 2026-09-25 leeway refit): R1 95/104, R2 97/105, R3 91/94,
+R4 87/105, R5 89/95, R6 95/104 (FF 96). These are higher than the leg-level 94/91/86/82/92/90 in §6, which also charge tacks and
+route choice. New regatta or rival: add it to `RACES` in `race_tracks.py` (and the cert to `CERTS`).
+
+## 8. Sea state: does chop cost us upwind?
+
+`python3 tools/sea_state.py [--cache]`. No wave sensor is aboard, but the heading unit logs
+attitude (`$YXXDR` Yaw/Pitch/Roll) at ~20 Hz. **Pitch spread** = std of pitch after removing a 20 s
+rolling mean; **period** = strongest period 1.5–12 s in its spectrum. Both are *as we meet the waves*:
+a proxy for steepness, not a height, and an encounter period (upwind into chop ~2.6 s; running with
+it 10–11 s). Roll is not used: it mixes in gust heel and steering. `race_review.py` now prints both
+per leg (`pitch`, `period_s`) once `tools/polar_out/pitch.pkl` exists.
+
+**Result (79 upwind 5-min windows, 6.6 h; 36 of them with no tack; before the 2026-09-25 leeway refit,
+which moved these by ≤1–2 points: all windows now −7.9 Typon / −1.1 Wowla, same conclusions).** Pitch spread is uncorrelated
+with TWS (+0.00), so wind and waves can be separated. Upwind % of ORC per degree of pitch spread,
+at the same wind:
+
+| Windows | Typon | Wowla (AIS control, same water) |
+|---|---|---|
+| all | −7.6 | −2.4 |
+| no tack in the window | −8.3 | 0.0 |
+| no tack, Bay chop only (period < 5 s) | −6.0 | −5.2 |
+
+- **In Bay chop, chop costs both boats about the same.** It is not a Typon-specific weakness.
+- **The Typon-specific loss is light air in leftover ocean swell** (R1 outside the Gate, period
+  ~6 s): calmer vs rougher half of 6–10 kn, Typon 100% → 88%, Wowla 110% → 116%. Only 3 + 3
+  windows, so treat it as a lead, not a finding.
+- **In 13+ kn, chop does not explain the gap.** The calmer and rougher halves differ by only
+  0.0–0.1° of pitch spread, and Typon sits at 88–90% of ORC in both. The heavy-air upwind loss is
+  boat speed in any sea, which is agreed focus #1 (§3–§4).
+
+Tacks add a little pitch (spread 0.72° with none in the window, 0.90° with two), which is why the
+no-tack rows are the ones to quote.

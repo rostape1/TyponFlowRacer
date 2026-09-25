@@ -1887,6 +1887,46 @@ body.panel-collapsed #panel-toggle {
     max-width: 210px;
 }
 
+#replay-race-select {
+    background: rgba(255, 255, 255, 0.06);
+    border: 1px solid rgba(100, 150, 200, 0.2);
+    color: #c8d6e5;
+    padding: 3px 6px;
+    border-radius: 4px;
+    font-size: 12px;
+    max-width: 150px;
+}
+
+/* Race tracks coloured by % of ORC (race-tracks.js). The ramp mirrors RaceTracks.colorFor:
+   hue 0 at 85%, 60 at 91%, 120 at 97%. */
+.race-legend {
+    background: rgba(10, 22, 40, 0.88);
+    backdrop-filter: blur(12px);
+    border: 1px solid rgba(100, 150, 200, 0.28);
+    border-radius: 8px;
+    color: #c8d6e5;
+    font-size: 11px;
+    padding: 8px 10px;
+    width: 270px;
+}
+.race-legend-title { font-weight: 600; margin-bottom: 6px; }
+.race-legend-ramp {
+    height: 8px;
+    border-radius: 4px;
+    background: linear-gradient(to right, hsl(0, 85%, 48%), hsl(60, 85%, 48%), hsl(120, 85%, 48%));
+}
+.race-legend-scale { display: flex; justify-content: space-between; color: #7f93a8; margin: 2px 0 6px; }
+.race-legend-boat { display: flex; align-items: center; gap: 6px; margin: 2px 0; }
+.race-legend-line { display: inline-block; width: 22px; height: 3px; background: #c8d6e5; border-radius: 2px; }
+.race-legend-line.own { height: 5px; }
+.race-legend-note { color: #7f93a8; margin-top: 6px; line-height: 1.35; }
+.race-track-tip { font-size: 11px; }
+.race-now { margin-top: 8px; padding-top: 6px; border-top: 1px solid rgba(100, 150, 200, 0.2); }
+.race-now-clock { color: #7f93a8; margin-bottom: 4px; font-variant-numeric: tabular-nums; }
+.race-now-boat { margin: 4px 0 6px; font-variant-numeric: tabular-nums; }
+.race-now-head { font-weight: 600; border-left: 4px solid #7f8c8d; padding-left: 5px; }
+.race-now-boat div + div { padding-left: 9px; color: #aebdcc; }
+
 #replay-scrub {
     flex: 1;
     min-width: 120px;
