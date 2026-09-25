@@ -2,6 +2,7 @@
 """Race review: where a race was lost, leg by leg, against Typon's ORC certificate and against
 competitors that transmit AIS.
 
+    python3 tools/race_review.py --race R4          # everything from tools/regattas.json
     python3 tools/race_review.py 2026-09-19 12:00:00 12:47:06 --handicap 0.9243 \\
         --rival WOWLA=338521423:0.9039
 
@@ -33,6 +34,7 @@ import pandas as pd
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import build_polar as bp
+import regattas
 from ais_diagnose import decode_ais   # the repo's Python AIS decoder, with the position-unavailable sentinels
 
 LOGS = os.path.expanduser('~/Documents/typon-nmea-logs')
@@ -187,17 +189,28 @@ def orc_leg_time(dist, alpha, tws, c=bp.TYPON):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument('day'); ap.add_argument('start'); ap.add_argument('finish')
-    ap.add_argument('--handicap', type=float, required=True, help="Typon's time-on-time handicap for this race")
-    ap.add_argument('--rival', action='append', default=[], help='NAME=MMSI:HANDICAP[:FINISH]')
+    ap.add_argument('day', nargs='?'); ap.add_argument('start', nargs='?'); ap.add_argument('finish', nargs='?')
+    ap.add_argument('--race', help='take day/start/finish/handicap/rivals from tools/regattas.json, e.g. R5')
+    ap.add_argument('--regatta', help='regatta id in regattas.json, when a race id is in more than one')
+    ap.add_argument('--handicap', type=float, help="Typon's time-on-time handicap for this race")
+    ap.add_argument('--rival', action='append', default=[], help='NAME=MMSI:HANDICAP[:FINISH] (adds to / overrides the file)')
     args = ap.parse_args()
     rivals = {}
+    if args.race:
+        _, race = regattas.find_race(args.race, args.regatta)
+        args.day, args.start, args.finish = race['day'], race['start'], race['finish']
+        args.handicap = args.handicap or race['handicap']
+        for name, rv in race.get('rivals', {}).items():
+            if rv.get('handicap') is not None:          # no handicap: nothing to correct with
+                rivals[name.upper()] = (int(rv['mmsi']), float(rv['handicap']), rv.get('finish'))
+    if not (args.day and args.start and args.finish and args.handicap):
+        ap.error('give DAY START FINISH --handicap H, or --race ID')
     for r in args.rival:
         name, rest = r.split('=')
         mmsi, hc, *fin = rest.split(':', 2)
         rivals[name] = (int(mmsi), float(hc), fin[0] if fin else None)
 
-    g = pd.read_pickle(os.path.join(bp.REPO, 'tools', 'polar_out', 'grid.pkl'))
+    g = bp.load_grid()
     with contextlib.redirect_stdout(io.StringIO()):
         g, _ = bp.calibrate(g)
     g['twd'] = (g.hdg + g.twa_bow) % 360
@@ -205,8 +218,8 @@ def main():
     t0, t1 = (pd.Timestamp(f'{args.day} {x}') for x in (args.start, args.finish))
     x = g[(g.local >= t0) & (g.local <= t1)].dropna(subset=['stw', 'crs_w', 'twa', 'tws'])
     O, A = read_positions(args.day, {v[0] for v in rivals.values()} - {0})
-    O['local'] = pd.to_datetime(O.t, unit='s') + pd.Timedelta(hours=bp.LOCAL_UTC_OFFSET_H)
-    A['local'] = pd.to_datetime(A.t, unit='s') + pd.Timedelta(hours=bp.LOCAL_UTC_OFFSET_H)
+    O['local'] = regattas.utc_s_to_local(O.t)
+    A['local'] = regattas.utc_s_to_local(A.t)
     A = A[(A.local >= t0 - pd.Timedelta(minutes=10)) & (A.local <= t1 + pd.Timedelta(minutes=30))]
 
     rows, marks = [], []
@@ -240,7 +253,7 @@ def main():
     if not rivals:
         return
     # leg boundaries: start, our roundings (all but the last leg end), the finish
-    ours = [t0] + [pd.to_datetime(t, unit='s') + pd.Timedelta(hours=bp.LOCAL_UTC_OFFSET_H) for t, _, _ in marks[:-1]] + [t1]
+    ours = [t0] + [regattas.utc_s_to_local(t) for t, _, _ in marks[:-1]] + [t1]
     print('\nleg times, elapsed (corrected = elapsed x handicap); rival rounding = its closest approach to our rounding point')
     print('\nwhole race, each boat against its own certificate over our legs (needs CERTS entry + FINISH):')
     ideal_t = L.orc_min.sum() * 60

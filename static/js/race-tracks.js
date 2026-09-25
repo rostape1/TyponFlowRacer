@@ -13,7 +13,8 @@ class RaceTracks {
     static get GREEN_PCT() { return 97; }    // at or above: green
     static get UNSCORED() { return '#7f8c8d'; }
     static get GAP_BREAK_S() { return 120; }  // a longer hole in the data breaks the line
-    static get SERIES_URL() { return 'races/bbs2026.json'; }
+    // Written by tools/race_tracks.py: one file per regatta in tools/regattas.json, listed here.
+    static get INDEX_URL() { return 'races/index.json'; }
     static get ON_TARGET_DEG() { return 1.5; }
     // How far from a boat's nearest point the live box still reads it: own track is every 5 s,
     // AIS every ~30 s.
@@ -187,11 +188,15 @@ class RaceTracks {
         this.renderer = L.canvas({ padding: 0.5 });
     }
 
-    load(url = RaceTracks.SERIES_URL) {
+    /** Every regatta the index lists, merged into one { races } list in index order. */
+    load(indexUrl = RaceTracks.INDEX_URL) {
         if (this.data) return Promise.resolve(this.data);
-        return fetch(url, { cache: 'no-cache' })
-            .then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
-            .then(d => (this.data = d));
+        const get = (url) => fetch(url, { cache: 'no-cache' })
+            .then(r => { if (!r.ok) throw new Error(`${url}: HTTP ${r.status}`); return r.json(); });
+        const base = indexUrl.slice(0, indexUrl.lastIndexOf('/') + 1);
+        return get(indexUrl)
+            .then(idx => Promise.all((idx.regattas || []).map(e => get(base + e.file))))
+            .then(docs => (this.data = { races: docs.flatMap(d => d.races || []) }));
     }
 
     race(id) {

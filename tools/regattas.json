@@ -1,0 +1,55 @@
+{
+  "_readme": "One entry per regatta: the single place races are defined. Times are LOCAL (timezone below; DST handled). windows = when we were sailing and racing, used by the calibration and habit analyses (defaults to each race's start..finish if omitted). Per race: start/finish/handicap from the results; rivals: mmsi 0 = none known (whole-race split still works with a finish), finish null = not transcribed (race_tracks takes the AIS pass nearest our finish). Rival certificates live in tools/race_review.py CERTS, keyed by the name in upper case. docs/polar.md section 9 has the new-regatta checklist.",
+  "timezone": "America/Los_Angeles",
+  "regattas": [
+    {
+      "id": "bbs2026",
+      "name": "BBS 2026",
+      "event": "Rolex Big Boat Series, ORC D",
+      "crew": 14,
+      "windows": [
+        ["2026-09-17 10:04", "2026-09-17 14:21"],
+        ["2026-09-18 11:45", "2026-09-18 16:49"],
+        ["2026-09-19 12:00", "2026-09-19 15:43"],
+        ["2026-09-20 11:51", "2026-09-20 13:55"]
+      ],
+      "races": [
+        {"id": "R1", "day": "2026-09-17", "label": "Thu, AP low/med", "start": "10:05:00", "finish": "14:13:27", "handicap": 0.9732,
+         "rivals": {"Wowla": {"mmsi": 338521423, "handicap": 0.9671, "finish": "13:58:32"},
+                    "Feather": {"mmsi": 0, "handicap": 0.9705, "finish": "13:45:13"},
+                    "Jarlen": {"mmsi": 0, "handicap": 0.9871, "finish": "13:47:55"},
+                    "Final Final": {"mmsi": 0, "handicap": 0.9471, "finish": "14:12:17"}}},
+        {"id": "R2", "day": "2026-09-18", "label": "Fri, W/L med", "start": "11:45:00", "finish": "12:47:36", "handicap": 0.9243,
+         "rivals": {"Wowla": {"mmsi": 338521423, "handicap": 0.9039, "finish": "12:44:50"},
+                    "Feather": {"mmsi": 0, "handicap": 0.9043, "finish": "12:43:19"},
+                    "Jarlen": {"mmsi": 0, "handicap": 0.9302, "finish": "12:45:06"},
+                    "Final Final": {"mmsi": 0, "handicap": 0.8805, "finish": "12:47:55"}}},
+        {"id": "R3", "day": "2026-09-18", "label": "Fri, W/L med/high", "start": "13:40:00", "finish": "16:44:14", "handicap": 1.0441,
+         "rivals": {"Wowla": {"mmsi": 338521423, "handicap": 0.9956, "finish": "16:41:38"},
+                    "Feather": {"mmsi": 0, "handicap": 0.994, "finish": "16:24:20"},
+                    "Jarlen": {"mmsi": 0, "handicap": 1.0258, "finish": "16:28:36"},
+                    "Final Final": {"mmsi": 0, "handicap": 0.9745, "finish": "16:43:48"}}},
+        {"id": "R4", "day": "2026-09-19", "label": "Sat, W/L medium", "start": "12:00:00", "finish": "12:47:06", "handicap": 0.9243,
+         "rivals": {"Wowla": {"mmsi": 338521423, "handicap": 0.9039, "finish": "12:43:33"},
+                    "Feather": {"mmsi": 0, "handicap": 0.9043, "finish": "12:41:46"},
+                    "Jarlen": {"mmsi": 0, "handicap": 0.9302, "finish": "12:43:00"},
+                    "Final Final": {"mmsi": 0, "handicap": 0.8805, "finish": "12:46:24"},
+                    "Tangaroa": {"mmsi": 0, "handicap": 0.9193, "finish": "12:41:19"},
+                    "Frequent Flyer": {"mmsi": 0, "handicap": 0.947, "finish": "12:43:23"}}},
+        {"id": "R5", "day": "2026-09-19", "label": "Sat, W/L 60-40 med/high", "start": "13:00:00", "finish": "15:35:42", "handicap": 1.0129,
+         "rivals": {"Wowla": {"mmsi": 338521423, "handicap": 0.9657, "finish": "15:36:46"},
+                    "Feather": {"mmsi": 0, "handicap": 0.963, "finish": "15:24:47"},
+                    "Jarlen": {"mmsi": 0, "handicap": 0.9994, "finish": "15:29:04"},
+                    "Final Final": {"mmsi": 0, "handicap": 0.9414, "finish": "15:42:29"},
+                    "Tangaroa": {"mmsi": 0, "handicap": 0.9798, "finish": "15:24:22"},
+                    "Frequent Flyer": {"mmsi": 0, "handicap": 1.0066, "finish": "15:37:38"}}},
+        {"id": "R6", "day": "2026-09-20", "label": "Sun, Bay Tour", "start": "11:50:00", "finish": "13:49:19", "handicap": 0.9561,
+         "rivals": {"Wowla": {"mmsi": 338521423, "handicap": 0.9382, "finish": "13:45:15"},
+                    "Feather": {"mmsi": 0, "handicap": 0.9381, "finish": "13:38:11"},
+                    "Jarlen": {"mmsi": 0, "handicap": 0.9617, "finish": "13:42:11"},
+                    "Final Final": {"mmsi": 0, "handicap": 0.9138, "finish": "13:50:19"},
+                    "Frequent Flyer": {"mmsi": 338147545, "handicap": null, "finish": null}}}
+      ]
+    }
+  ]
+}

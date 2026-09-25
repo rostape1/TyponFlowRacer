@@ -26,16 +26,10 @@ import pandas as pd
 warnings.filterwarnings('ignore')
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 VAR_E = 15.1              # magnetic variation, from $GPRMC on the Bay
-LOCAL_UTC_OFFSET_H = -7   # PDT
 
-# Race windows, LOCAL time: start = the turn upwind after the pre-start circling,
-# end = head-to-wind as the sails come down (all four within 0.2 nm, off the St. Francis).
-RACES = [
-    ('2026-09-17 10:04', '2026-09-17 14:21'),
-    ('2026-09-18 11:45', '2026-09-18 16:49'),
-    ('2026-09-19 12:00', '2026-09-19 15:43'),
-    ('2026-09-20 11:51', '2026-09-20 13:55'),
-]
+# Sailing windows (LOCAL time) come from tools/regattas.json: the one place races are defined.
+import regattas
+RACES = regattas.windows()
 UP_MAX_TWA, DOWN_MIN_TWA = 55, 130
 
 # ---- Typon ORC International certificate, "Rated boat velocities in knots"
@@ -239,9 +233,20 @@ def to_grid(raw):
                          np.abs(tf - ts_all[np.clip(near - 1, 0, len(ts_all) - 1)]))
         x[gap > lim] = np.nan
         g[k] = (x % 360) if ang else x
-    g['day'] = pd.to_datetime(g.index, unit='s').strftime('%Y-%m-%d')
-    g['local'] = pd.to_datetime(g.index, unit='s') + pd.Timedelta(hours=LOCAL_UTC_OFFSET_H)
+    return add_local(g)
+
+
+def add_local(g):
+    """Local time and local date (the paddlewheel factor is fitted per local day), via the regatta
+    timezone, so PDT and PST are both right. Re-applied on every cache load: a cached grid may predate it."""
+    g['local'] = regattas.utc_s_to_local(g.index)
+    g['day'] = g['local'].dt.strftime('%Y-%m-%d')
     return g
+
+
+def load_grid():
+    """The parsed 1 Hz grid from tools/polar_out/grid.pkl (build_polar.py writes it)."""
+    return add_local(pd.read_pickle(os.path.join(REPO, 'tools', 'polar_out', 'grid.pkl')))
 
 
 # ---------------------------------------------------------------- 2. calibrate
@@ -1036,7 +1041,7 @@ def main():
     os.makedirs(args.out, exist_ok=True)
     cache = os.path.join(REPO, 'tools', 'polar_out', 'grid.pkl')
     if args.cache and os.path.exists(cache):
-        g = pd.read_pickle(cache)
+        g = add_local(pd.read_pickle(cache))
     else:
         g = to_grid(parse(args.logs))
         os.makedirs(os.path.dirname(cache), exist_ok=True)

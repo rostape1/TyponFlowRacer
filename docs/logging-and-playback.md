@@ -273,7 +273,8 @@ a model.
 
 ### Race picker: tracks coloured by % of ORC
 
-The **Race** dropdown (first on the replay bar) lists the races in `static/races/bbs2026.json`.
+The **Race** dropdown (first on the replay bar) lists every race of every regatta in `static/races/index.json`
+(one `<regatta>.json` per entry in `tools/regattas.json`, written by `tools/race_tracks.py`).
 Picking one:
 
 - draws each boat's whole race track, coloured red → yellow → green by % of its own ORC
