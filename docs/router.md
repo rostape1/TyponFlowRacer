@@ -1,6 +1,6 @@
 # Route optimizer
 
-Isochrone route search for a Swan 47 across the SFBOFS current field and the Open-Meteo wind grid.
+Isochrone route search for Typon across the SFBOFS current field and the Open-Meteo wind grid.
 `computeRoute()` in `static/js/router.js` orchestrates; the search itself runs in
 `static/js/route-worker.js` (a Web Worker, off the main thread).
 
@@ -68,13 +68,20 @@ used, so harbors and shoreline waypoints are reachable. Monterey harbor blocked 
 
 ## Polars and variants
 
-Swan 47 polars with a configurable performance factor, default 85%.
+**Typon's ORC International certificate** ([polar.md](polar.md)), expanded by
+`tools/build_polar.py --write-js` into both `router.js` and `route-worker.js`. TWA 30–180°, TWS 4–24 kn.
+Best VMG sits at the cert's beat and gybe angles (asserted in `tests/test_physics.mjs`).
+Performance factor default 95%: race sailing made a median 96% of rated VMG, measured before the
+leeway correction. Corrected for leeway and wind height, it is 88–89% VMG upwind and 94–100%
+downwind; the default has not
+been revisited ([polar.md](polar.md) §1). It replaced a generic
+Swan 47 × 85% that treated anything under 52° as unsailable.
 
 | Variant | Behavior |
 |---|---|
 | `baseline` | Distance-from-start pruning, flat performance factor |
 | `vmc` | Velocity-made-good-to-course biased pruning |
-| `falloff` | Sets the worker's `polarFalloff` flag: linear degrade, 1.0 @ 150° → 0.85 @ 180° |
+| `falloff` | Sets the worker's `polarFalloff` flag: degrades beyond the table's last TWA. The ORC table reaches 180°, so it is currently a no-op |
 | `both` | `vmc` + `falloff` |
 
 Selected from a dropdown in the route-planner panel; changing it auto-recomputes. The variant string
