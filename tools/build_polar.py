@@ -947,7 +947,8 @@ def chart_cheatsheet(v, up, m, heel_fast, floor, power, held, cal, hours, outdir
         'ORC\'s angles are through the water; the display\'s TWA is by the bow. We slide 3–5° (most in heavy air), '
         'so a calibrated display reads narrower than ORC\'s angle: the "on display" target row allows for it.',
         'Leeway is fitted from heading vs GPS track, current removed per 10 min. If it is off by 2°, every upwind angle and VMG moves with it. '
-        'Wind speed may be off by up to ±10% (reads ~9% higher downwind than upwind).',
+        'Wind speed reads ~6% higher downwind than upwind, almost all of it in light air (above 22° heel they agree). '
+        'So light-air % are ±5 points; heavy-air numbers are sound. A calm-day motoring test (apparent wind = boat speed) would settle it.',
         f'Wind speeds on this sheet are at 10 m, as ORC\'s. The masthead display reads ~{(1 / TWS_TO_10M - 1) * 100:.0f}% more: use the small "display" figure under each column. '
         'Wind data updates only every ~5 s: don\'t chase the numbers after a shift.',
         'Light-air numbers are the least certain: in 6–13 kn the vane reads ~4° wider than the compass through tacks (one upwash number for all winds). '
