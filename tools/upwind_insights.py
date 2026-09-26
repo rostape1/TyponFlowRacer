@@ -21,6 +21,11 @@ sea-state sections, tools/polar_out/pitch.pkl (sea_state.py). Sections:
            reference, not our sailing
   wind     masthead wind speed, downwind vs upwind, from both mark types: an instrument error flips
            sign between windward and leeward roundings, a building breeze does not
+  pointing who points higher, by the BOW: each AIS rival's transmitted heading against ours at the
+           same moment on the same tack, within POINT_MAX_NM. No wind or current in it; a constant
+           offset in either compass (or true vs magnetic) cancels in the port/starboard average, and
+           half their difference estimates that offset. Also by the track through the water, and
+           the rival's leeway (its heading vs its course through water, our current removed)
 
 The Gate longitude and the wind bands are SF Bay specifics; everything else is general.
 """
@@ -309,7 +314,81 @@ def sec_wind(g, cal):
     print(D.groupby('heel_b', observed=True).dv.agg(['size', 'median']).round(1).to_string())
 
 
-SECTIONS = ['leeway', 'helm', 'gusts', 'tacks', 'gate', 'best', 'sides', 'wind']
+# ---------------------------------------------------------------- pointing, bow against bow
+POINT_MAX_NM = 1.0           # same wind, roughly: farther apart, a shift can pass for pointing
+POINT_STEADY_S = 20          # no tack of ours within this of the report
+
+
+def pointing_rows(g):
+    """One row per rival AIS report with a heading, both boats upwind on the same tack."""
+    gg = rt.own_frame(g)
+    side = np.sign(gg.twa.rolling(2 * POINT_STEADY_S + 1, center=True).median())
+    steady = side.rolling(2 * POINT_STEADY_S + 1, center=True).apply(lambda v: float(np.all(v == v[0])), raw=True) == 1
+    rows = []
+    for R in rt.race_list():
+        day = R['day']; t0, t1 = rt._utc_s(day, R['start']), rt._utc_s(day, R['finish'])
+        if not R['rivals']:
+            continue
+        O, A = rr.read_positions(day, {m for m, _ in R['rivals'].values()})
+        for name, (mmsi, fin) in R['rivals'].items():
+            t_fin = rt._utc_s(day, fin) if fin else t1
+            r = A[(A.mmsi == mmsi) & A.sog.notna() & A.cog.notna() & A.hdg.notna()].copy()
+            r['s'] = np.floor(r.t).astype(np.int64)
+            for s, a in r[(r.s >= t0) & (r.s <= t_fin)].groupby('s').first().iterrows():
+                if s not in gg.index or a.sog < 3 or not steady.get(s, False):
+                    continue
+                o = gg.loc[s]
+                if not (np.isfinite(o.cur_e) and np.isfinite(o.twd_s) and np.isfinite(o.hdg)) or abs(o.twa) > 55:
+                    continue
+                near = O.index[np.clip(O.index.searchsorted(s), 0, len(O) - 1)]
+                if rr._nm(a.lat, a.lon, O.at[near, 'lat'], O.at[near, 'lon']) > POINT_MAX_NM:
+                    continue
+                c = math.radians(a.cog); e, n = a.sog * math.sin(c) - o.cur_e, a.sog * math.cos(c) - o.cur_n
+                crs_r = math.degrees(math.atan2(e, n)) % 360
+                twa_r = float(bp.signed(o.twd_s - crs_r))
+                if abs(twa_r) > 55 or np.sign(twa_r) != np.sign(o.twa):
+                    continue                     # the rival is not beating, or is on the other tack
+                k = 1 if o.twa > 0 else -1       # starboard: higher = heading further right
+                rows.append(dict(race=R['race']['id'], boat=name, t=int(s), lon=float(a.lon), tack='stbd' if k > 0 else 'port', tws=o.tws_s,
+                                 bow=k * float(bp.signed(a.hdg - o.hdg)),          # + = rival points higher by the bow
+                                 track=k * float(bp.signed(crs_r - o.crs_w)),      # + = rival's track through the water higher
+                                 lee_r=k * float(bp.signed(a.hdg - crs_r)), lee_us=float(o.lee)))
+    return pd.DataFrame(rows)
+
+
+def pointing_table(D, by):
+    """Per group: both tacks' medians, then the tack average (pointing) and half-difference (compass offset)."""
+    out = []
+    for key, d in D.groupby(by, observed=True):
+        p, s = d[d.tack == 'port'], d[d.tack == 'stbd']
+        if len(p) < 3 or len(s) < 3:
+            continue
+        m = lambda c: ((p[c].median() + s[c].median()) / 2)
+        out.append(dict(zip(by if isinstance(by, list) else [by], key if isinstance(key, tuple) else (key,)),
+                        n_port=len(p), n_stbd=len(s), bow_port=p.bow.median(), bow_stbd=s.bow.median(),
+                        bow_higher=m('bow'), compass_offset=(s.bow.median() - p.bow.median()) / 2,
+                        track_higher=m('track'), leeway_rival=m('lee_r'), leeway_us=m('lee_us')))
+    return pd.DataFrame(out).round(1)
+
+
+def sec_pointing(g, cal):
+    print(f'\n=== POINTING, bow against bow: rival heading vs ours, same moment, same tack, within {POINT_MAX_NM:g} nm ===')
+    print('+ = the rival higher. bow_higher = mean of the two tacks (a constant compass offset cancels); '
+          'compass_offset = half their difference (their heading sensor vs ours). Leeway: rival from its heading '
+          'vs course through water (our current), ours from the model.')
+    D = pointing_rows(g)
+    if D.empty:
+        print('no rival AIS reports with a heading'); return
+    D['band'] = band(D.tws)
+    print('\nper race and rival:')
+    print(pointing_table(D, ['race', 'boat']).to_string(index=False))
+    print('\nall races, per rival and wind band:')
+    print(pointing_table(D, ['boat', 'band']).to_string(index=False))
+    print('\nall races, per rival:')
+    print(pointing_table(D, ['boat']).to_string(index=False))
+
+
+SECTIONS = ['leeway', 'helm', 'gusts', 'tacks', 'gate', 'best', 'sides', 'wind', 'pointing']
 
 
 def main():
@@ -332,6 +411,7 @@ def main():
         elif s == 'best': sec_best(g, cal, P)
         elif s == 'sides': sec_sides(g, cal, args.control)
         elif s == 'wind': sec_wind(g, cal)
+        elif s == 'pointing': sec_pointing(g, cal)
 
 
 if __name__ == '__main__':

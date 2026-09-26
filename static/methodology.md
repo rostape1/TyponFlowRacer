@@ -109,6 +109,14 @@ it was far from us in shifty wind. Figures like 110% on a leg usually mean it ha
 we measured, not that it sailed 10% above its certificate. AIS positions that are clearly wrong
 (more than 10 nm from us, or implying a jump faster than 25 kn) are dropped.
 
+**Who points higher.** Wowla and Frequent Flyer transmit their heading as well as their course. So
+the reviews compare boats directly: bow against bow and track through the water against track, at
+the same moments, on the same tack, within 1 nm. The two tacks are averaged, which cancels a
+difference in the wind where each boat was, and a constant error in either boat's compass. No wind
+reading is involved. Their heading sensors are not calibrated like ours, so allow about ±2°, and
+more on a beat with few reports on one tack. Across the series Wowla's track was ~2° higher than
+ours (~5° in 10–13 kn, level in 16+ kn).
+
 The grey dots on the map are every other boat our AIS heard within 3 nm while moving. They are
 not scored.
 
