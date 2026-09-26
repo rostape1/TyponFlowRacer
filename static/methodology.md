@@ -155,5 +155,20 @@ not scored.
   shifts, not the helm. The wind direction varies 5–10° from one tack to the next within a race,
   while the instrument itself shows no jump when we tack. Pointing is judged by comparing GPS
   courses with rivals on the same tack at the same moment, which doesn't depend on our wind.
+- **ORC's targets in breeze are not a realistic 100%.** The certificate assumes flat water and
+  ideal depowering. In 16+ kn upwind, Wowla made 88% of its own certificate across the series and we
+  made 87%. So in breeze, about 88% is fleet pace, and a leg there is judged against the rivals, not
+  against 100%. Our best moments in 16+ kn were *higher* than ORC's angle but about 0.3 kn under its
+  speed: ORC's angle and speed together happened in under 3% of them.
+- **Chop costs speed, not angle.** At the same wind, rougher water (measured by our pitch) cost
+  about 7% of target speed per degree of pitch spread, while the angle widened only about 1°. The
+  loss is largest in 6–13 kn and almost gone in 16+ kn, where the boat has power to spare. Wowla
+  lost much less in chop, but on few samples, and "rough" is measured where *we* were. A heavy boat
+  carries through one wave but re-accelerates slowly after it, which may be why light air with chop
+  is where we lose. We already sail wider than ORC, so footing further is not the fix the data
+  supports.
+- **Tide** doesn't enter our own % of ORC: speed and wind angle are both through the water, and the
+  true wind is computed relative to the water, which is what the sails feel. Tide matters through
+  the waves it builds (wind against tide), the route, and the rivals' % (which assumes our current).
 - **What the logs cannot see:** sail trim, sail choice, crew position, traveller and sheet
   positions. The data shows *that* something was slow, often *where*, but rarely *why*.
