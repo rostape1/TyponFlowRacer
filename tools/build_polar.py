@@ -272,45 +272,6 @@ def fit_paddlewheel(g):
     return out
 
 
-# Paddlewheel error by heel and tack: signed heel nodes (+ = heeled to starboard = port tack), the
-# factor pinned to 1 upright. Between nodes it is linear, beyond the ends it is held.
-PADDLE_HEEL_NODES = (-30, -21, -13, 0, 13, 21, 30)
-
-
-def paddle_heel_factor(heel, m):
-    """True STW / per-day-corrected STW at this signed heel, for node factors m (PADDLE_HEEL_NODES)."""
-    h = np.clip(np.nan_to_num(np.asarray(heel, float)), PADDLE_HEEL_NODES[0], PADDLE_HEEL_NODES[-1])
-    return np.interp(h, PADDLE_HEEL_NODES, m)
-
-
-def fit_paddle_heel(g, K):
-    """The paddlewheel's error as a function of signed heel, from the leeway fit's two-tack upwind
-    windows: GPS velocity = m(heel) * STW along the course through the water + a current constant per
-    10 min. The two tacks move in different directions, so within a window scale and current separate.
-    A wheel off the centreline reads differently heeled one way than the other (docs/polar.md §2)."""
-    d = g.dropna(subset=['sog', 'cog', 'hdg', 'stw', 'heel', 'awa'])
-    d = d[(d.sog > 2.5) & (d.stw > 2.5) & (np.abs(signed(d.awa)) < 60)].copy()
-    d['s'] = np.sign(signed(d.awa))
-    d['win'] = d.index // 600
-    c = d.groupby(['win', 's']).size().unstack(fill_value=0)
-    d = d[d.win.isin(c[(c.get(1, 0) >= 90) & (c.get(-1, 0) >= 90)].index)]
-    L = leeway(d.heel, d.stw, d.awa, K)
-    U = d.stw.values * np.exp(1j * np.deg2rad(90 - d.hdg.values + d.s.values * np.asarray(L)))
-    V = d.sog.values * np.exp(1j * np.deg2rad(90 - d.cog.values))
-    nodes = np.array(PADDLE_HEEL_NODES, float)
-    hc = np.clip(d.heel.values, nodes[0], nodes[-1])
-    W = np.stack([np.interp(hc, nodes, np.eye(len(nodes))[j]) for j in range(len(nodes))], -1)   # hat functions
-    X = U[:, None] * W
-    dm = lambda a: a - pd.DataFrame(a).groupby(d.win.values).transform('mean').values
-    zero = int(np.argmin(np.abs(nodes)))
-    free = [j for j in range(len(nodes)) if j != zero]
-    Xd, yd = dm(X), dm((V - X[:, zero])[:, None])[:, 0]            # the upright node held at 1
-    A = np.vstack([Xd[:, free].real, Xd[:, free].imag]); b = np.concatenate([yd.real, yd.imag])
-    sol = np.linalg.lstsq(A, b, rcond=None)[0]
-    m = np.ones(len(nodes)); m[free] = sol
-    return dict(m=m, windows=d.win.nunique(), hours=len(d) / 3600)
-
-
 def fit_deviation(g):
     """Compass deviation vs heading, from upright sailing (heel < 4 deg, so no leeway): the rotation
     between compass heading and GPS track, current held constant per 10 min, as a 2nd-order Fourier
@@ -473,8 +434,52 @@ def fit_awa(g, K):
             cost = jump ** 2 + asym ** 2
             if best is None or cost < best[0]:
                 best = (cost, off, sym, jump, np.median(stbd), np.median(port))
-    return dict(n_tacks=len(tacks), offset=best[1], sym=best[2], jump=best[3],
-                twa_stbd=best[4], twa_port=best[5], K=K)
+    const = dict(offset=best[1], sym=best[2], jump=best[3])
+    # Stage 2: upwash as a straight line in wind speed, the offset still ONE constant. The offset
+    # turns both tacks' true wind the same way (it shows as stbd vs port angle); upwash narrows both
+    # tacks (it shows as the wind direction jumping at a tack). Fitted per tack against the zero-jump
+    # test in each wind band, the upwash falls as the sails depower; a single number left the jump
+    # at +3 deg under 10 kn and -5 deg in 16+ kn. Wind speed for the line: this segment's 10 m TWS
+    # from the stage-1 fit (upwash barely moves TWS, so one pass is enough).
+    t10 = np.bincount(seg, true_wind(awa, aws, stw, const['offset'], const['sym'], lee)[1], nseg) / cnt * TWS_TO_10M
+    tack_tws = (t10[0::2] + t10[1::2]) / 2
+    seg_tws = t10[seg]
+    bands = np.digitize(tack_tws, [b[0] for b in BANDS[1:]])
+    best = None
+    for off in np.arange(const['offset'] - 1.5, const['offset'] + 1.51, 0.25):
+        for sym in np.arange(-2, 10.01, 0.25):
+            for slope in np.arange(-0.6, 0.201, 0.05):
+                up = upwash_at(seg_tws, dict(sym=sym, sym_slope=slope))
+                twa, _ = true_wind(awa, aws, stw, off, up, lee)
+                twd = np.deg2rad(hdg + twa - np.sign(twa) * lee)
+                mdir = np.rad2deg(np.arctan2(np.bincount(seg, np.sin(twd), nseg), np.bincount(seg, np.cos(twd), nseg)))
+                mtwa = np.bincount(seg, np.abs(twa), nseg) / cnt
+                J = signed(mdir[0::2] - mdir[1::2]) * sgn
+                stbd = np.where(sgn > 0, mtwa[0::2], mtwa[1::2])
+                port = np.where(sgn > 0, mtwa[1::2], mtwa[0::2])
+                jb = [np.median(J[bands == k]) for k in range(len(BANDS)) if (bands == k).sum() >= 5]
+                asym = np.median(stbd) - np.median(port)
+                cost = np.mean(np.square(jb)) + asym ** 2
+                if best is None or cost < best[0]:
+                    best = (cost, off, sym, slope, np.median(J), np.median(stbd), np.median(port),
+                            [(BANDS[k], int((bands == k).sum()), float(np.median(J[bands == k])))
+                             for k in range(len(BANDS)) if (bands == k).sum() >= 5])
+    return dict(n_tacks=len(tacks), offset=best[1], sym=best[2], sym_slope=best[3], jump=best[4],
+                twa_stbd=best[5], twa_port=best[6], band_jumps=best[7], const=const, K=K)
+
+
+UPWASH_REF_TWS, UPWASH_MIN, UPWASH_MAX = 12.0, 0.0, 8.0
+
+
+def upwash_at(tws10, cal):
+    """Masthead upwash (deg, same on both tacks) at this 10 m true wind speed: cal['sym'] at 12 kn,
+    changing by cal['sym_slope'] per knot, held within 0-8 deg."""
+    return np.clip(cal['sym'] + cal.get('sym_slope', 0.0) * (np.asarray(tws10, float) - UPWASH_REF_TWS),
+                   UPWASH_MIN, UPWASH_MAX)
+
+
+def upwash_str(cal):
+    return ', '.join(f'{upwash_at(t, cal):.1f}° at {t} kn' for t in (8, 12, 16, 20))
 
 
 def compass_check(g):
@@ -822,13 +827,14 @@ def chart_heel_helm(up, outdir, plt):
 def display_awa(tws10, lee, heel, cal):
     """What the RAW masthead display reads at ORC's beat target, (starboard, port): the target TWA and
     speed turned into apparent wind at the masthead, by the bow (our leeway), then our corrections
-    undone: heel (the vane reads narrow), offset and upwash (true_wind subtracts off + sym on starboard,
-    off - sym on port, for AWA under 30°)."""
+    undone: heel (the vane reads narrow), offset and upwash at this wind (true_wind subtracts off + upwash
+    on starboard, off - upwash on port, for AWA under 30°)."""
     vmg, a = orc_beat(tws10)
     v, tm = vmg / cosd(a), tws10 / TWS_TO_10M
     awa = math.degrees(math.atan2(tm * math.sin(math.radians(a)), tm * math.cos(math.radians(a)) + v)) - lee
     raw = math.degrees(math.atan(math.tan(math.radians(awa)) * math.cos(math.radians(heel))))
-    return raw + cal['offset'] + cal['sym'], raw - cal['offset'] + cal['sym']
+    up = float(upwash_at(tws10, cal))
+    return raw + cal['offset'] + up, raw - cal['offset'] + up
 
 
 def chart_cheatsheet(v, up, m, heel_fast, floor, power, held, cal, hours, outdir, plt):
@@ -875,7 +881,7 @@ def chart_cheatsheet(v, up, m, heel_fast, floor, power, held, cal, hours, outdir
         y -= 4.2
     T(5, y + 0.5, 'Track = through the water, as ORC measures. Display row = ORC angle minus our measured leeway in that band; the display shows the bow.\n'
       f'AWA TO STEER: calibrated, ORC\'s target is ~23–24° apparent in EVERY wind (light air: wider true angle, but boat speed pulls the apparent forward). The RAW display\n'
-      f'reads it ~{2 * cal["offset"]:.0f}° apart by tack (masthead offset +{cal["offset"]:.1f}°, upwash {cal["sym"]:.0f}°): steer the stbd/port figure, or enter the offset in the instruments and steer one number.\n'
+      f'reads it ~{2 * cal["offset"]:.0f}° apart by tack (masthead offset +{cal["offset"]:.1f}°, upwash {upwash_at(16, cal):.0f}–{upwash_at(8, cal):.0f}°): steer the stbd/port figure, or enter the offset in the instruments and steer one number.\n'
       'ORC target speed is at ORC\'s angle; we have not made both at once. Groove = our normal speed at that wind, at our (wider) angle.\n'
       f'Speed floor = groove minus {POINT_SPEED_LOSS} kn, where pointing higher stopped paying. A LIMIT, NOT A TARGET: get to groove speed, then point\n'
       'higher while speed stays above the floor (over ~11 kn). Under ~11 kn sail for speed. Paddlewheel-corrected: the raw display may read up to\n'
@@ -1007,9 +1013,12 @@ def chart_cheatsheet(v, up, m, heel_fast, floor, power, held, cal, hours, outdir
     y -= 1
     T(5, y, 'WATCH OUT FOR', fontsize=12, fontweight='bold'); y -= 4.2
     watch = [
-        f'Calibrated in software only: compass deviation (−4° / +1° on the beat headings), paddlewheel per day and by tack (port reads ~1–2% high vs stbd when heeled), vane heel correction, +{cal["offset"]:.2f}° masthead offset, '
-        f'{cal["sym"]:.1f}° upwash, leeway ≈ {cal["K"][1]:.2f}°×(heel/20)^{cal["K"][2]:.2f}×(6.5/speed)². The display is raw: upwind it reads ~7° WIDE on starboard and ~2° NARROW on port. '
+        f'Calibrated in software only: compass deviation (−4° / +1° on the beat headings), paddlewheel per day (NOT by tack, see below), vane heel correction, +{cal["offset"]:.2f}° masthead offset, '
+        f'upwash {upwash_at(8, cal):.1f}° in 8 kn to {upwash_at(20, cal):.1f}° in 20 kn, leeway ≈ {cal["K"][1]:.2f}°×(heel/20)^{cal["K"][2]:.2f}×(6.5/speed)². The display is raw: upwind at 12 kn it reads ~{cal["offset"] + upwash_at(12, cal):.0f}° wide on starboard and ~{upwash_at(12, cal) - cal["offset"]:.0f}° wide on port. '
         'Calibrate the instruments before steering to the target angles.',
+        'PORT vs STARBOARD in light air (under 13 kn) is NOT measured reliably: every light-air beat reads ~6° wider and ~10 points lower on port, '
+        'but by GPS against Wowla and Frequent Flyer we were not faster on starboard. The paddlewheel may read differently by tack, and race logs '
+        'can\'t separate that from the current each tack sailed in. Treat per-tack figures as unknown until an on-water test (docs/polar.md §2).',
         'ORC\'s angles are through the water; the display\'s TWA is by the bow. We slide 3–5° (most in heavy air), '
         'so a calibrated display reads narrower than ORC\'s angle: the "on display" target row allows for it.',
         'Leeway is fitted from heading vs GPS track, current removed per 10 min. If it is off by 2°, every upwind angle and VMG moves with it. '
@@ -1017,7 +1026,7 @@ def chart_cheatsheet(v, up, m, heel_fast, floor, power, held, cal, hours, outdir
         'So light-air % are ±5 points; heavy-air numbers are sound. A calm-day motoring test (apparent wind = boat speed) would settle it.',
         f'Wind speeds on this sheet are at 10 m, as ORC\'s. The masthead display reads ~{(1 / TWS_TO_10M - 1) * 100:.0f}% more: use the small "display" figure under each column. '
         'Wind data updates only every ~5 s: don\'t chase the numbers after a shift.',
-        'Light-air numbers are the least certain: in 6–13 kn the vane reads ~4° wider than the compass through tacks (one upwash number for all winds). '
+        'Light-air numbers are the least certain: in 6–13 kn the vane reads ~2–3° wider than the compass through tacks. '
         'If the compass is right, light-air VMG is several points better than shown.',
         'All of this is from 14 crew (Big Boat Series). With our usual 8 there is ~0.5 t less on the rail: expect to reach the heel limits, '
         '"depower" and the reef point ~1–2 kn earlier (estimate, not measured). The heel numbers themselves still apply; light air gets slightly better.',
@@ -1025,7 +1034,7 @@ def chart_cheatsheet(v, up, m, heel_fast, floor, power, held, cal, hours, outdir
         'CHOP COSTS SPEED, NOT ANGLE. At the same wind, rougher water (our pitch) cost ~7% of target speed per degree of pitch spread, most of it '
         'in 6–13 kn (105% -> 92–97% of target speed), almost none in 16+ kn; the angle widened only ~1°. We are already 2–4° wider than ORC, so '
         'don\'t foot further to chase it: expect the speed loss, keep the power on (don\'t over-flatten). Wowla barely lost in chop (few samples).',
-        'IN 16+ kn ~88% IS FLEET PACE: Wowla made 88% of its own cert upwind in 16+ kn, we made 87%. ORC\'s heavy-air target assumes flat water and '
+        'IN 16+ kn ~85% IS FLEET PACE: Wowla made 86% of its own cert upwind in 16+ kn, we made 85%. ORC\'s heavy-air target assumes flat water and '
         'ideal depowering; nobody we can measure reaches it. The gains there are heel, tacks, roundings and position, not the last knot.',
     ]
     for w in watch:
@@ -1034,7 +1043,7 @@ def chart_cheatsheet(v, up, m, heel_fast, floor, power, held, cal, hours, outdir
         y -= 2.2 * (_wrap(w, 108).count('\n') + 1) + 0.9
 
     # --- where the speed is: best vs worst stretches, and the order to work on things. The numbers
-    # come from tools/upwind_insights.py --only best,pointing (2026-09-25); rerun it and update these
+    # come from tools/upwind_insights.py --only best,pointing (2026-09-26); rerun it and update these
     # lines after a new regatta. The how-to lives in the rules above, so this only points at them.
     y -= 3
     T(5, y, 'WHERE THE SPEED IS', fontsize=12, fontweight='bold'); y -= 4.2
@@ -1042,7 +1051,7 @@ def chart_cheatsheet(v, up, m, heel_fast, floor, power, held, cal, hours, outdir
     for lab, txt in [
         ('13+ kn', 'BEST: 3° higher at the same speed, 0.6° flatter, less leeway, lighter helm.  WORST: 2.5° wider, more heel, '
                    'rougher water, often outside the Gate. In breeze, pointing comes from staying flat.'),
-        ('< 13 kn', 'BEST: 0.3 kn faster at the same angle, quieter helm, smoother water.  WORST: slower, 1° wider, busy helm, '
+        ('< 13 kn', 'BEST: 0.3 kn faster at the same angle, quieter helm, smoother water.  WORST: 0.5 kn slower and no wider, busy helm, '
                     'too little weather helm (short of power), sailing on in headers, mostly outside the Gate.'),
     ]:
         T(6, y, lab, fontsize=10, fontweight='bold', color=YOU)
@@ -1051,7 +1060,7 @@ def chart_cheatsheet(v, up, m, heel_fast, floor, power, held, cal, hours, outdir
     y -= 1
     T(6, y, 'In order of value:', fontsize=10, color=INK2); y -= 3.4
     for i, txt in enumerate([
-        'Heavy air: keep her flat (rule 5). ~88% is fleet pace in 16+ kn; the gain is heel, not the last knot.',
+        'Heavy air: keep her flat (rule 5). ~85% is fleet pace in 16+ kn; the gain is heel, not the last knot.',
         'Light air, most of all in chop: power up to ~15° heel, quiet helm (rules 4, 6). Consider a bigger jib under ~12 kn.',
         'Pointing in 10–13 kn: ~5° lower than Wowla bow to bow (~1° in 13–16, level in 16+). Groove, then point (playbook 1–2).',
         'Tacks and mark exits: build speed before pointing (rule 7); light-air tacks took 45–100 s to rebuild.',
@@ -1115,31 +1124,23 @@ def calibrate(g):
     g['awa'], g['aws'] = heel_correct(g.awa, g.aws, g.heel)
     print(f'\nheel-corrected wind angle: {g.awa.notna().mean() * 100:.0f}% of samples have heel '
           f'({race_mask(g)[g.awa.notna().values].sum() / race_mask(g).sum() * 100:.0f}% of race time)')
-    lw = fit_leeway(g)
-    # Paddlewheel by heel and tack. Only the difference between the tacks at the same heel is
-    # applied: the overall scale stays the per-day fit's. (Letting the heel fit set the scale too
-    # fought the per-day fit: iterated, it pushed k up 2% and every downwind speed with it, on no
-    # downwind evidence.) Leeway is refitted on the corrected speed afterwards.
-    f = fit_paddle_heel(g, lw['K'])
-    ph = f['m'] / ((f['m'] + f['m'][::-1]) / 2)          # nodes are symmetric: pair +h with -h
-    g['stw'] = g.stw * paddle_heel_factor(g.heel, ph)
-    print('\npaddlewheel by heel and tack, the tack difference only (true / per-day-corrected), from '
-          f"{f['windows']} two-tack upwind windows; + heel = heeled to starboard = PORT tack:")
-    print('  ' + '   '.join(f'{n:+d}°: {v:.3f}' for n, v in zip(PADDLE_HEEL_NODES, ph)))
-    print('  as fitted, before removing the common part (both tacks read high upwind; not applied): '
-          + '   '.join(f'{n:+d}°: {v:.3f}' for n, v in zip(PADDLE_HEEL_NODES, f['m'])))
+    # The paddlewheel is not corrected by tack. The race logs can't separate a per-tack error from
+    # the current each tack sailed in (docs/polar.md §2): the one-scale-per-day fit above is all.
     lw = fit_leeway(g)
     print(f"leeway = {leeway_str(lw['K'])} from {lw['windows']} two-tack upwind windows ({lw['hours']:.1f} h); "
           'model-free check, constant leeway per heel bin:')
     for lo, hi, L, Lm, mins in lw['bins']:
         print(f'  heel {lo:2d}-{hi:2d} deg: fitted {L:+.2f} deg, model {Lm:.1f} deg  ({mins:.0f} min)')
     cal = fit_awa(g, lw['K'])
-    cal['paddle_heel'] = ph
-    print(f"\nmasthead unit: offset {cal['offset']:+.2f} deg, symmetric upwash {cal['sym']:+.1f} deg "
-          f"from {cal['n_tacks']} tacks -> upwind TWA stbd {cal['twa_stbd']:.1f} / port {cal['twa_port']:.1f}, "
+    print(f"\nmasthead unit from {cal['n_tacks']} tacks: offset {cal['offset']:+.2f} deg (one constant), upwash "
+          f"{upwash_str(cal)} (same on both tacks) -> upwind TWA stbd {cal['twa_stbd']:.1f} / port {cal['twa_port']:.1f}, "
           f"residual TWD jump {cal['jump']:+.1f} deg")
+    print('  TWD jump at tacks per wind band: ' + ', '.join(f'{lo}-{hi} kn {j:+.1f} ({n})' for (lo, hi), n, j in cal['band_jumps'])
+          + f"   [one upwash for all winds: offset {cal['const']['offset']:+.2f}, upwash {cal['const']['sym']:.1f}]")
     g['lee'] = leeway(g.heel, g.stw, g.awa, lw['K'])
-    g['twa'], g['tws'] = true_wind(g.awa, g.aws, g.stw, cal['offset'], cal['sym'], g.lee)
+    _, t1 = true_wind(g.awa, g.aws, g.stw, cal['const']['offset'], cal['const']['sym'], g.lee)
+    g['upwash'] = upwash_at(t1 * TWS_TO_10M, cal)
+    g['twa'], g['tws'] = true_wind(g.awa, g.aws, g.stw, cal['offset'], g.upwash.values, g.lee)
     g['twa_bow'] = g.twa - np.sign(g.twa) * g.lee
     print('\nupwind TWA through the water, per tack side: compass heading change / 2 + leeway vs the vane')
     print(compass_check(g).round(1).to_string())
