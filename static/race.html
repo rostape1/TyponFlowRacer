@@ -87,6 +87,7 @@ a.review-time:hover { color: #85c1e9; }
 .race-legend.collapsed > :not(.race-legend-title) { display: none; }
 @media (max-width: 640px) {
     #rp-top h1 { display: none; }
+    #rp-method-btn { padding: 0 6px; }
     #rp-review { position: fixed; inset: 0; width: auto; border-left: none; }
     #rp-race { max-width: none; flex: 1; }
     #rp-clock { min-width: 0; }
@@ -108,6 +109,7 @@ a.review-time:hover { color: #85c1e9; }
   <h1>Typon race replay</h1>
   <select id="rp-race" aria-label="Race"></select>
   <button id="rp-review-btn" hidden>📄 Review</button>
+  <button id="rp-method-btn" title="How the numbers are made">ⓘ Methodology</button>
   <span id="rp-status">Loading races…</span>
 </div>
 <div id="rp-main">
@@ -197,27 +199,39 @@ a.review-time:hover { color: #85c1e9; }
         if (n) n.parentElement.classList.toggle('detail');
     });
 
-    function closeReview() { $('rp-review').classList.remove('open'); map.invalidateSize(); }
-    $('rp-review-close').addEventListener('click', closeReview);
-    $('rp-review-btn').addEventListener('click', () => {
+    // One side panel, two documents: the race's review, or the methodology. The same button again
+    // closes it; the other button switches.
+    let panelDoc = null;
+    function closeReview() { $('rp-review').classList.remove('open'); panelDoc = null; map.invalidateSize(); }
+    function openDoc(which, title, load, what) {
         const panel = $('rp-review'), body = $('rp-review-body');
-        if (panel.classList.contains('open')) { closeReview(); return; }
+        if (panelDoc === which) { closeReview(); return; }
+        panelDoc = which;
+        $('rp-review-title').textContent = title;
         body.textContent = 'Loading…';
+        body.scrollTop = 0;
         panel.classList.add('open');
         map.invalidateSize();
-        player.review().then(frag => {
+        load().then(frag => {
+            if (panelDoc !== which) return;
             body.textContent = '';
-            if (frag) body.appendChild(frag); else body.textContent = 'No review for this race yet.';
-        }).catch(err => { body.textContent = `The review could not be loaded (${err.message}).`; });
-    });
+            if (frag) body.appendChild(frag); else body.textContent = `No ${what} yet.`;
+        }).catch(err => { if (panelDoc === which) body.textContent = `The ${what} could not be loaded (${err.message}).`; });
+    }
+    $('rp-review-close').addEventListener('click', closeReview);
+    $('rp-review-btn').addEventListener('click', () =>
+        openDoc('review', player.race ? player.race.label : 'Race review', () => player.review(), 'review for this race'));
+    $('rp-method-btn').addEventListener('click', () =>
+        openDoc('method', 'Methodology', () => fetch('methodology.md', { cache: 'no-cache' })
+            .then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.text(); })
+            .then(md => ReviewText.render(md)), 'methodology'));
 
     function pick(id) {
         if (!player.select(id)) return false;
         const race = player.race;
         $('rp-race').value = id;
         $('rp-review-btn').hidden = !race.review;
-        $('rp-review-title').textContent = race.label;
-        closeReview();
+        if (panelDoc === 'review') closeReview();   // the methodology can stay open across races
         if (location.hash.slice(1) !== id) history.replaceState(null, '', '#' + id);
         return true;
     }
