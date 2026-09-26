@@ -55,6 +55,13 @@ above. Two results:
   angles. The angle by the bow is TWA minus leeway.
 - **True wind speed (TWS):** at 10 m height, ORC's reference. The masthead display reads about
   8% more.
+- **What to steer to on board: apparent wind (AWA).** The instruments' TWA is worked out from AWA
+  with a delay and without our calibration, so it is a check, not a steering number. ORC's target,
+  turned into apparent wind at the masthead by the bow, is **about 23–24° in every wind**: light air
+  wants a wider true angle, but the boat's speed pulls the apparent wind forward by about as much.
+  Until the masthead offset (+3.5°) and upwash (4°) are entered in the instruments, the display
+  reads that target about 7° apart by tack (roughly 31° starboard / 24° port in light air, 28° / 21°
+  in breeze); the crib sheet's "AWA to steer" row gives it per tack and wind.
 
 ### Leeway
 
