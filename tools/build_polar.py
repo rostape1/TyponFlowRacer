@@ -272,6 +272,45 @@ def fit_paddlewheel(g):
     return out
 
 
+# Paddlewheel error by heel and tack: signed heel nodes (+ = heeled to starboard = port tack), the
+# factor pinned to 1 upright. Between nodes it is linear, beyond the ends it is held.
+PADDLE_HEEL_NODES = (-30, -21, -13, 0, 13, 21, 30)
+
+
+def paddle_heel_factor(heel, m):
+    """True STW / per-day-corrected STW at this signed heel, for node factors m (PADDLE_HEEL_NODES)."""
+    h = np.clip(np.nan_to_num(np.asarray(heel, float)), PADDLE_HEEL_NODES[0], PADDLE_HEEL_NODES[-1])
+    return np.interp(h, PADDLE_HEEL_NODES, m)
+
+
+def fit_paddle_heel(g, K):
+    """The paddlewheel's error as a function of signed heel, from the leeway fit's two-tack upwind
+    windows: GPS velocity = m(heel) * STW along the course through the water + a current constant per
+    10 min. The two tacks move in different directions, so within a window scale and current separate.
+    A wheel off the centreline reads differently heeled one way than the other (docs/polar.md §2)."""
+    d = g.dropna(subset=['sog', 'cog', 'hdg', 'stw', 'heel', 'awa'])
+    d = d[(d.sog > 2.5) & (d.stw > 2.5) & (np.abs(signed(d.awa)) < 60)].copy()
+    d['s'] = np.sign(signed(d.awa))
+    d['win'] = d.index // 600
+    c = d.groupby(['win', 's']).size().unstack(fill_value=0)
+    d = d[d.win.isin(c[(c.get(1, 0) >= 90) & (c.get(-1, 0) >= 90)].index)]
+    L = leeway(d.heel, d.stw, d.awa, K)
+    U = d.stw.values * np.exp(1j * np.deg2rad(90 - d.hdg.values + d.s.values * np.asarray(L)))
+    V = d.sog.values * np.exp(1j * np.deg2rad(90 - d.cog.values))
+    nodes = np.array(PADDLE_HEEL_NODES, float)
+    hc = np.clip(d.heel.values, nodes[0], nodes[-1])
+    W = np.stack([np.interp(hc, nodes, np.eye(len(nodes))[j]) for j in range(len(nodes))], -1)   # hat functions
+    X = U[:, None] * W
+    dm = lambda a: a - pd.DataFrame(a).groupby(d.win.values).transform('mean').values
+    zero = int(np.argmin(np.abs(nodes)))
+    free = [j for j in range(len(nodes)) if j != zero]
+    Xd, yd = dm(X), dm((V - X[:, zero])[:, None])[:, 0]            # the upright node held at 1
+    A = np.vstack([Xd[:, free].real, Xd[:, free].imag]); b = np.concatenate([yd.real, yd.imag])
+    sol = np.linalg.lstsq(A, b, rcond=None)[0]
+    m = np.ones(len(nodes)); m[free] = sol
+    return dict(m=m, windows=d.win.nunique(), hours=len(d) / 3600)
+
+
 def fit_deviation(g):
     """Compass deviation vs heading, from upright sailing (heel < 4 deg, so no leeway): the rotation
     between compass heading and GPS track, current held constant per 10 min, as a 2nd-order Fourier
@@ -951,7 +990,7 @@ def chart_cheatsheet(v, up, m, heel_fast, floor, power, held, cal, hours, outdir
     y -= 1
     T(5, y, 'WATCH OUT FOR', fontsize=12, fontweight='bold'); y -= 4.2
     watch = [
-        f'Calibrated in software only: compass deviation (−4° / +1° on the beat headings), vane heel correction, +{cal["offset"]:.2f}° masthead offset, '
+        f'Calibrated in software only: compass deviation (−4° / +1° on the beat headings), paddlewheel per day and by tack (port reads ~1–2% high vs stbd when heeled), vane heel correction, +{cal["offset"]:.2f}° masthead offset, '
         f'{cal["sym"]:.1f}° upwash, leeway ≈ {cal["K"][1]:.2f}°×(heel/20)^{cal["K"][2]:.2f}×(6.5/speed)². The display is raw: upwind it reads ~7° WIDE on starboard and ~2° NARROW on port. '
         'Calibrate the instruments before steering to the target angles.',
         'ORC\'s angles are through the water; the display\'s TWA is by the bow. We slide 3–5° (most in heavy air), '
@@ -1023,11 +1062,25 @@ def calibrate(g):
     print(f'\nheel-corrected wind angle: {g.awa.notna().mean() * 100:.0f}% of samples have heel '
           f'({race_mask(g)[g.awa.notna().values].sum() / race_mask(g).sum() * 100:.0f}% of race time)')
     lw = fit_leeway(g)
+    # Paddlewheel by heel and tack. Only the difference between the tacks at the same heel is
+    # applied: the overall scale stays the per-day fit's. (Letting the heel fit set the scale too
+    # fought the per-day fit: iterated, it pushed k up 2% and every downwind speed with it, on no
+    # downwind evidence.) Leeway is refitted on the corrected speed afterwards.
+    f = fit_paddle_heel(g, lw['K'])
+    ph = f['m'] / ((f['m'] + f['m'][::-1]) / 2)          # nodes are symmetric: pair +h with -h
+    g['stw'] = g.stw * paddle_heel_factor(g.heel, ph)
+    print('\npaddlewheel by heel and tack, the tack difference only (true / per-day-corrected), from '
+          f"{f['windows']} two-tack upwind windows; + heel = heeled to starboard = PORT tack:")
+    print('  ' + '   '.join(f'{n:+d}°: {v:.3f}' for n, v in zip(PADDLE_HEEL_NODES, ph)))
+    print('  as fitted, before removing the common part (both tacks read high upwind; not applied): '
+          + '   '.join(f'{n:+d}°: {v:.3f}' for n, v in zip(PADDLE_HEEL_NODES, f['m'])))
+    lw = fit_leeway(g)
     print(f"leeway = {leeway_str(lw['K'])} from {lw['windows']} two-tack upwind windows ({lw['hours']:.1f} h); "
           'model-free check, constant leeway per heel bin:')
     for lo, hi, L, Lm, mins in lw['bins']:
         print(f'  heel {lo:2d}-{hi:2d} deg: fitted {L:+.2f} deg, model {Lm:.1f} deg  ({mins:.0f} min)')
     cal = fit_awa(g, lw['K'])
+    cal['paddle_heel'] = ph
     print(f"\nmasthead unit: offset {cal['offset']:+.2f} deg, symmetric upwash {cal['sym']:+.1f} deg "
           f"from {cal['n_tacks']} tacks -> upwind TWA stbd {cal['twa_stbd']:.1f} / port {cal['twa_port']:.1f}, "
           f"residual TWD jump {cal['jump']:+.1f} deg")
