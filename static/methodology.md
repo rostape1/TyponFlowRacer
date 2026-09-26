@@ -26,6 +26,10 @@ by hand. The corrections, in the order they are applied:
    +1° on port. Uncorrected, it would look like 2–3° of leeway on each tack.
 2. **Paddlewheel.** Boat speed through the water is compared with GPS speed once current is
    removed. The log reads 0–5% low, and the factor is fitted per day (it changes with fouling).
+   It also reads differently on each tack when heeled, as a wheel off the centreline would: port
+   about 1–2% higher than starboard at 13–24° of heel. That difference is corrected. The same fit
+   suggests both tacks read 2–3% high upwind, but that can't be separated from the daily factor
+   with our data, so it is left as an uncertainty (below).
 3. **Masthead wind angle and heel.** A heeled vane sees the wind in a tilted plane and reads a
    little narrow, about 1° at 25° of heel. Corrected per reading from the heel sensor.
 4. **Leeway** (below): fitted next, because the wind correction depends on it.
@@ -159,6 +163,8 @@ not scored.
     and the masthead wind speed reads about 6% higher downwind than upwind. Light-air figures
     carry about ±5 points.
   - *Leeway under 15° of heel.* Two methods disagree by about 1°.
+  - *Upwind boat speed.* The paddlewheel may read 2–3% high upwind on both tacks (not corrected,
+    see Calibration). If so, upwind % of ORC is up to ~2 points too high.
 - **Port vs starboard differences** in angle to the wind over a single beat mostly show wind
   shifts, not the helm. The wind direction varies 5–10° from one tack to the next within a race,
   while the instrument itself shows no jump when we tack. Pointing is judged by comparing GPS
