@@ -26,15 +26,20 @@ by hand. The corrections, in the order they are applied:
    +1° on port. Uncorrected, it would look like 2–3° of leeway on each tack.
 2. **Paddlewheel.** Boat speed through the water is compared with GPS speed once current is
    removed. The log reads 0–5% low, and the factor is fitted per day (it changes with fouling).
-   It is **not** corrected by tack. A wheel off the centreline can read differently heeled one way
-   than the other, and there are signs that ours does (below). But upwind we sail only two headings,
-   and each tack is often sailed in different water (the ebb channel on one, the shore on the
-   other), so race logs can't separate a per-tack error from the current each tack met. Several
-   ways of fitting it gave anything from 0% to 12%. It needs a test on the water (below).
+   **Heeled to port (starboard tack) it exaggerates speed changes.** This is measured without
+   needing the current: over a minute on a steady course the current doesn't change, so the change
+   in GPS speed against the change in paddlewheel speed is the wheel's true response. Heeled to
+   port, GPS moves only 0.66–0.77 kn for each 1 kn on the wheel, after tacks and on steady boards,
+   in light air and in breeze, and with the wave jitter smoothed out. Heeled the other way, and
+   downwind, it is ~1.0. The wheel's reading also wobbles twice as much on starboard. That is
+   disturbed flow, as a wheel mounted off the centreline to starboard would see when that side
+   lifts. With that slope, it reads right near 5.4 kn and about 0.4 kn (6%) high at 6.5 kn. Both
+   are corrected. (A simple per-tack scale fitted against GPS could not be: the tacks are sailed in
+   different water, and the answer changed with every choice of window.)
 3. **Masthead wind angle and heel.** A heeled vane sees the wind in a tilted plane and reads a
    little narrow, about 1° at 25° of heel. Corrected per reading from the heel sensor.
 4. **Leeway** (below): fitted next, because the wind correction depends on it.
-5. **Masthead angle offset and upwash.** The vane is not perfectly aligned: an offset of +3.0°,
+5. **Masthead angle offset and upwash.** The vane is not perfectly aligned: an offset of +2.75°,
    one physical constant. The sails also bend the wind ahead of the mast (upwash), the same on both
    tacks, and less as the sails depower: 5.6° in 8 kn, 4.2° in 12 kn, 2.9° in 16 kn, 1.5° in 20 kn.
    The test: the true wind direction should not jump when we tack. The offset shows as a difference
@@ -64,7 +69,7 @@ above. Two results:
   with a delay and without our calibration, so it is a check, not a steering number. ORC's target,
   turned into apparent wind at the masthead by the bow, is **about 23–24° in every wind**: light air
   wants a wider true angle, but the boat's speed pulls the apparent wind forward by about as much.
-  Until the masthead offset (+3.5°) and upwash (4°) are entered in the instruments, the display
+  Until the masthead offset (+2.75°) and upwash are entered in the instruments, the display
   reads that target about 6° apart by tack (roughly 33° starboard / 27° port in light air, 26° / 20°
   in breeze); the crib sheet's "AWA to steer" row gives it per tack and wind.
 
@@ -75,15 +80,15 @@ through the water. It is measured from compass heading against the GPS track, in
 stretches that include both tacks. Using both tacks separates leeway (which flips side with the
 tack) from current (which does not). The fit:
 
-**leeway = 2.75° × (heel / 20°)^2.25 × (6.5 kn / boat speed)²**
+**leeway = 3.0° × (heel / 20°)² × (6.5 kn / boat speed)²**
 
 So leeway grows faster than heel, and more at low speed. Measured directly per heel range:
 
 | Heel | under 20° | 20–23° | 23–26° | 26–28° | 28–30° | 30–34° |
 |---|---|---|---|---|---|---|
-| Leeway | 1.5° | 3.0° | 4.5° | 5.0° | 6.0° | 7.25° |
+| Leeway | 1.25–1.75° | 3.5° | 4.75° | 5.5° | 6.5° | 7.75° |
 
-Each extra degree of heel adds about 0.33° of leeway at 20°, 0.43° at 25° and 0.54° at 30°. That
+Each extra degree of heel adds about 0.32° of leeway at 20°, 0.39° at 25° and 0.47° at 30°. That
 is why the crib sheet says to keep heel at 20–25°: past that, the extra heel buys very little
 speed and costs pointing.
 
@@ -176,22 +181,21 @@ not scored.
     carry about ±5 points.
   - *Leeway under 15° of heel.* Two methods disagree by about 1°.
   - *Upwind boat speed by tack.* See the next point.
-- **Port vs starboard is not measured reliably in light air.** Under 13 kn, every beat of every
-  race reads ~6° wider and ~10 points lower on port than on starboard (over 13 kn the tacks agree).
-  A difference that regular is not wind shifts, and the crew did not sail 6° wider on port. By GPS
-  alone, against Wowla and Frequent Flyer at the same time and place, we were not faster on
-  starboard. So it is in the measurement, most likely the paddlewheel reading differently by tack,
-  possibly compass heeling error, and the logs can't pin it (see Calibration). Per-tack figures in
-  the reviews are therefore not findings. Whole-leg and whole-race figures average both tacks and
-  stand. Pointing is judged bow against bow with rivals, which doesn't depend on our wind or speed.
-- **The test that would settle it**, 15 minutes in one patch of flat water, away from the shore and
-  the channel edge, ideally near slack: 2 minutes each way on reciprocal courses upright (gives the
-  current right there), then 3 minutes on each tack at normal heel, then the reciprocal courses
-  again. With the current known on the spot, the paddlewheel and compass on each tack follow
-  directly.
+- **Port vs starboard.** With the paddlewheel corrected, the tacks differ by 4–6 points, not ~11.
+  Under 13 kn, port still reads **~6° wider** than starboard on every beat. The paddlewheel can't
+  cause that (it would take a 1.8 kn error), and our compass shows the same thing independently: bow
+  against bow in light air, Wowla was 8–9° higher than us on port and −5 to +1° on starboard, and
+  Frequent Flyer +8° on port, −2° on starboard. So it is probably real. It is not the Gate waves: the split is the same east of Crissy Field and at the
+  same pitching. The cause is open. One candidate: if the angle is set by the wind display, the
+  same number reads ~6° wider on port (the uncorrected masthead offset and upwash). Another: rig or
+  sail set-up that differs by side (mast not centred, shroud tension, jib leads, telltales). In
+  13+ kn it is the other way round and smaller: starboard ~4 points lower, with more heel.
+- **What would confirm it on the water**, 15 minutes in one patch of flat water near slack: 2
+  minutes each way on reciprocal courses upright (the current right there), then 3 minutes on each
+  tack at normal heel steering by the jib, then the reciprocal courses again.
 - **ORC's targets in breeze are not a realistic 100%.** The certificate assumes flat water and
-  ideal depowering. In 16+ kn upwind, Wowla made 86% of its own certificate across the series and we
-  made 85%. So in breeze, about 85% is fleet pace, and a leg there is judged against the rivals, not
+  ideal depowering. In 16+ kn upwind, Wowla made 88% of its own certificate across the series and we
+  made 85%. So in breeze, about 85–88% is fleet pace, and a leg there is judged against the rivals, not
   against 100%. Our best moments in 16+ kn were *higher* than ORC's angle but about 0.3 kn under its
   speed: ORC's angle and speed together happened in under 3% of them.
 - **Chop costs speed, not angle.** At the same wind, rougher water (measured by our pitch) cost

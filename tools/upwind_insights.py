@@ -61,6 +61,7 @@ def sec_leeway(g, cal):
     print('\n=== LEEWAY per heel range (heading vs GPS track, both tacks, current per 10 min) ===')
     # the fit needs the heading and paddlewheel corrected but not the leeway: redo calibrate()'s first steps
     g2 = bp.load_grid()
+    g2['bsp'] = bp.paddle_starboard(g2.bsp, g2.heel)
     with contextlib.redirect_stdout(io.StringIO()):
         pw = bp.fit_paddlewheel(g2); g2['stw'] = g2.bsp * g2.day.map({d: v[0] for d, v in pw.items()}).fillna(1.0)
         dv = bp.fit_deviation(g2)
