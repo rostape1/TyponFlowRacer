@@ -163,12 +163,15 @@ def split_legs(x):
     """Runs of upwind / downwind sailing (60 s-plus), with roundings folded into the leg before."""
     up = (np.cos(np.deg2rad(x.twa)) > 0).astype(float).rolling(91, center=True, min_periods=30).median()
     seg = (up.diff().abs() > 0).cumsum()
-    legs = []
+    legs, kinds = [], []
     for _, s in x.groupby(seg.values):
-        if len(s) < 120 and legs:
+        kind = up.loc[s.index].median() > 0.5
+        # A short blip folds into the leg before; the sailing after it, if it is of that leg's kind,
+        # continues that leg rather than starting a new one (a 95° reach wobbling across 90° is one leg).
+        if legs and (len(s) < 120 or kind == kinds[-1]):
             legs[-1] = pd.concat([legs[-1], s])
         elif len(s) >= 120:
-            legs.append(s)
+            legs.append(s); kinds.append(kind)
     return legs
 
 
@@ -231,8 +234,12 @@ def main():
         ideal, how = orc_leg_time(abs(Dw), alpha, tws)
         actual = len(s) / 3600
         end = s.index[-1]
-        if end in O.index:
-            marks.append((end, O.loc[end, 'lat'], O.loc[end, 'lon']))
+        # Our own position at the rounding: the nearest fix within 30 s (the own track has gaps, and a
+        # leg end moving by one second onto a gap used to drop the rounding and merge rivals' legs).
+        k = int(np.clip(O.index.searchsorted(end), 0, len(O) - 1)) if len(O) else -1
+        near = min((j for j in (k - 1, k) if 0 <= j < len(O)), key=lambda j: abs(O.index[j] - end), default=None)
+        if near is not None and abs(O.index[near] - end) <= 30:
+            marks.append((end, O.lat.iloc[near], O.lon.iloc[near]))
         rows.append(dict(leg=i + 1, type='up' if bp.cosd(s.twa.abs().median()) > 0 else 'down',
                          start=s.local.iloc[0].strftime('%H:%M'), min=actual * 60, tws=tws, rhumb=alpha,
                          benchmark=how, nm=abs(Dw), orc_min=ideal * 60, lost_min=(actual - ideal) * 60,

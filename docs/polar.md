@@ -54,11 +54,11 @@ table now reaches 180°.
 | Channel | Finding | Effect |
 |---|---|---|
 | Paddlewheel | Reads 0–5% low (k = 1.00–1.05 per day), fitted against GPS with current removed | corrected |
-| Paddlewheel by tack | From the 46 two-tack upwind windows (current solved per 10 min, the tacks' different directions separate scale from current), as a function of signed heel. **Port tack reads ~1.2% higher than starboard at 18–24° heel, ~2% at 13°**, as a wheel off the centreline would. Only this tack difference is applied (±0.5–1%). The fit also says both tacks read 2–3% high upwind, but that common part fights the per-day scale (iterating the two pushed k up 2% and every downwind speed with it, on no downwind evidence), so it is **not applied**: upwind % of ORC could be up to ~2 points too high. A calm-water speed test would settle it | tack difference corrected; common upwind part a caveat |
+| Paddlewheel by tack | **Not corrected: race logs can't measure it.** Upwind we sail two headings, often in different water (ebb channel on one tack, shore on the other), so a per-tack scale error can't be separated from the current each tack met. Tried 2026-09-25/26: a vector fit over two-tack 10-min windows gave port ~1–2% high (it leans on compass and leeway being exact to ~0.5°, and a 1° heading error flips it); a scalar fit over 15–30 min windows with three or more headings gave starboard reading high by anything from 0% to 12% depending on the window. Neither is used. Signs that it exists: under 13 kn every beat reads ~6° wider and ~10 points lower on port than starboard (over 13 kn the tacks agree), rivals scored against our wind and current show the same split, and by GPS alone against Wowla and Frequent Flyer we were not faster on starboard. **Per-tack figures are not findings.** The on-water test that settles it: 2 min each way on upright reciprocal courses (local current), 3 min on each tack at normal heel, reciprocal courses again, all in one patch of flat water near slack | not corrected; per-tack figures unreliable |
 | Compass deviation | Fitted from 0.9 h of upright sailing (heel under 4°, so no leeway): compass heading vs GPS track, current held constant per 10 min, as a 2nd-order curve. **−4.3° on the ~198° beat heading, +0.9° on ~273°.** Half that difference, 2.6° per side, would otherwise read as leeway. Thin data: ±1–2° | corrected before everything else |
 | Masthead heel | A heeled vane turns in the tilted plane and sees the sideways wind × cos(heel), so it reads **narrow**: ~1° of AWA at 25° heel | corrected per sample. Needs the heel sensor; samples without one are dropped, not left uncorrected |
 | Leeway | **leeway = 2.75° × (heel/20)^2.25 × (6.5/STW)²** (refit 2026-09-25; was 7.5 × heel/STW², linear, and 0.5–2° short above 26° heel). Per heel range, fitted without the formula: 1.5° below 20°, 3.0° at 20–23°, 4.5° at 23–26°, 5.0° at 26–28°, 6.0° at 28–30°, 7.25° at 30–34° (±0.5°); the formula matches within 0.2° above 20°. Below 15° two fits disagree (0.5° from the formula, 1.5° per range), so light-air upwind % carries ±2 points. Each extra degree of heel adds ~0.33° leeway at 20°, 0.43° at 25°, 0.50° at 28°, 0.54° at 30° (−0.024 to −0.039 kn VMG), while speed rises only ~0.2 kn from 20° to 34°. Fitted from heading vs GPS track in 46 upwind windows that contain both tacks, current held constant per 10 min. Current is solved as an unknown per window, so anything that is the same on both tacks (paddlewheel scale, a fixed compass offset) goes into it; only an error that flips with the tack can pass for leeway. Compass deviation was one, and is now removed. Imperfect tilt compensation in the heading sensor would be another, and the logs can't separate it | corrected: **TWA is now through the water**, as ORC's angles are |
-| Masthead angle | **+3.50° offset** plus **4.0° upwash**, from 72 tacks (residual TWD jump −0.1°). Raw data showed 45° vs 34° TWA by tack and a 7° TWD jump on every tack | corrected in software. **The instrument display is still raw**: upwind it reads ~7° wide on starboard and ~2° narrow on port (by the bow) |
+| Masthead angle | **+3.0° offset** (one physical constant) plus **upwash falling with wind: 5.6° at 8 kn, 4.2° at 12, 2.9° at 16, 1.5° at 20** (10 m wind; a straight line, held within 0–8°), fitted jointly from 72 tacks. The offset shows as a difference between the tacks' angles, the upwash as a TWD jump at the tack, so they separate. One upwash for all winds (+3.5° / 4.0°, until 2026-09-26) left the jump at +3° under 10 kn and −5° in 16+ kn; now within ±2° per band. Raw data showed 45° vs 34° TWA by tack and a 7° TWD jump on every tack | corrected in software. **The instrument display is still raw**: upwind at 12 kn it reads ~7° wide on starboard and ~1° wide on port (by the bow) |
 | Wind height | ORC's wind speeds are at 10 m (per ORC's speed guide; not checked against the VPP documentation). Our masthead is ~20.3 m up: cert BAS 1.55 + P 16.97 + ~0.5 m, plus ~1.3 m freeboard (estimate). Over-water profile, exponent 0.11: masthead wind × 0.925 (1/7 would give × 0.904) | corrected. Before it, every ORC target we compared against was for too much wind: light-air VMG read 84% instead of 89% |
 | Masthead speed | TWS reads **~6% higher downwind than upwind** (80% range 3–9%), from 9 beat→run and 7 run→beat roundings: an instrument error flips sign between the two, a building breeze doesn't, and the breeze explains only ~1% (2026-09-25). **Not heel:** it is ~13% under 15° heel, 7% at 15–22°, ~0 above 22°, so it is a light-air effect (likely the cups reading a few % low, or sail-induced flow at the masthead). Heavy-air numbers are unaffected; light-air upwind % could be ~5 points lower (if downwind is right) or light-air downwind ~5 higher (if upwind is right). Settle it with a calm-day motoring test (apparent wind = boat speed) or a shore station. Heel also lowers the masthead (18.4 m at 25°, ~1% less wind; not corrected) | not corrected: light air ±10%, breeze ±3% |
 | Wind feed | Updates every **5.2 s**, ~2 s behind the compass | steady-state filter; manoeuvres excluded |
@@ -76,9 +76,9 @@ The deviation correction moved 16+ kn from 34° bow + 7° leeway to 36° + 5°; 
 **The vane is pinned to the compass.** "No TWD jump on a tack" means the heading change through a
 tack equals the two bow angles added together, so the fitted upwash forces the vane's bow angle to
 agree with the compass on average. The script prints the check every run: half the compass tack
-angle plus leeway, against the vane. In 13+ kn they agree within 2°. **In 6–13 kn the vane reads
-~4.5° wider than the compass**, because one upwash number serves all wind speeds. If the compass is
-right there, light-air VMG is several points better than shown below.
+angle plus leeway, against the vane. In 13+ kn they agree within 0.5°. **In 6–13 kn the vane reads
+~2–3° wider than the compass** (4.5° with one upwash number for all winds). If the compass is right
+there, light-air VMG is a few points better than shown below.
 
 **Current is not an independent measurement.** It is the window average of GPS velocity minus
 water velocity, so it comes from the same sensors. With that caveat, heavy-heel leeway came out the
@@ -105,8 +105,8 @@ ORC has no leeway angle to compare ours with: side force appears only as induced
 
 | Upwind | 6–10 kn | 10–13 | 13–16 | 16+ |
 |---|---|---|---|---|
-| Median VMG, % of ORC | 93% (91–93) | 90% | 88% | 88% |
-| Our angle (ORC) | 45° (41°) | 45° (40°) | 42° (39°) | 41° (38°) |
+| Median VMG, % of ORC | 97% | 92% | 87% | 85% |
+| Our angle (ORC) | 44° (41°) | 45° (40°) | 43° (39°) | 43° (38°) |
 | Our leeway | 1.4° | 2.3° | 4.2° | 5.3° |
 | Our angle by the bow | 43° | 43° | 38° | 36° |
 | Speed, % of ORC at our angle | 101% | 96% | 92% | 90% |
@@ -116,8 +116,10 @@ ORC has no leeway angle to compare ours with: side force appears only as induced
 | Median VMG, % of ORC | 97% | **94%** | 100% | 96% |
 | Our angle (ORC) | 155° (151°) | **145° (156°)** | 159° (164°) | **156° (174°)** |
 
-- **Upwind is the bigger loss: 88% of rated VMG in 13+ kn, 90% in 10–13, ~91–93% in light air**
-  (since the 2026-09-25 leeway refit; before it, 88–89% in every band). Our best 10% of moments
+- **Upwind is the bigger loss: 85–87% of rated VMG in 13+ kn, 92% in 10–13, ~97% in light air**
+  (since the 2026-09-26 upwash-by-wind fit; 88%/90%/93% with one upwash, 88–89% in every band before
+  the 2026-09-25 leeway refit). In 16+ kn Wowla made 86% of its own certificate, so ~85% is fleet
+  pace there. Our best 10% of moments
   reach 93–107%, so the boat can get there; holding it is the gap.
 - **What we can sustain.** Best VMG held as a rolling mean (the crib sheet's "best held" rows):
 

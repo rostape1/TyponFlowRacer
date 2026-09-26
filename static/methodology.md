@@ -26,18 +26,23 @@ by hand. The corrections, in the order they are applied:
    +1° on port. Uncorrected, it would look like 2–3° of leeway on each tack.
 2. **Paddlewheel.** Boat speed through the water is compared with GPS speed once current is
    removed. The log reads 0–5% low, and the factor is fitted per day (it changes with fouling).
-   It also reads differently on each tack when heeled, as a wheel off the centreline would: port
-   about 1–2% higher than starboard at 13–24° of heel. That difference is corrected. The same fit
-   suggests both tacks read 2–3% high upwind, but that can't be separated from the daily factor
-   with our data, so it is left as an uncertainty (below).
+   It is **not** corrected by tack. A wheel off the centreline can read differently heeled one way
+   than the other, and there are signs that ours does (below). But upwind we sail only two headings,
+   and each tack is often sailed in different water (the ebb channel on one, the shore on the
+   other), so race logs can't separate a per-tack error from the current each tack met. Several
+   ways of fitting it gave anything from 0% to 12%. It needs a test on the water (below).
 3. **Masthead wind angle and heel.** A heeled vane sees the wind in a tilted plane and reads a
    little narrow, about 1° at 25° of heel. Corrected per reading from the heel sensor.
 4. **Leeway** (below): fitted next, because the wind correction depends on it.
-5. **Masthead angle offset and upwash.** The vane is not perfectly aligned (+3.5°), and the sails
-   bend the wind at the masthead (about 4° upwash). The test: the true wind direction should not
-   jump when we tack. Both numbers are chosen so that over 72 tacks it does not (residual 0.1°).
-   The instrument display on the boat is still uncorrected: upwind it reads ~7° wide on starboard
-   and ~2° narrow on port.
+5. **Masthead angle offset and upwash.** The vane is not perfectly aligned: an offset of +3.0°,
+   one physical constant. The sails also bend the wind ahead of the mast (upwash), the same on both
+   tacks, and less as the sails depower: 5.6° in 8 kn, 4.2° in 12 kn, 2.9° in 16 kn, 1.5° in 20 kn.
+   The test: the true wind direction should not jump when we tack. The offset shows as a difference
+   between the tacks' angles, upwash as a jump, so the two separate. Fitted over 72 tacks, jointly,
+   with the upwash a straight line in wind speed. With one upwash for all winds the jump was left at
+   +3° under 10 kn and −5° in 16+ kn; now it is within ±2° in every wind band. The instrument
+   display on the boat is still uncorrected: upwind at 12 kn it reads ~7° wide on starboard and
+   ~1° wide on port.
 6. **Wind height.** ORC's wind speeds are for 10 m above the water. Our masthead is about 20 m up,
    where the wind is stronger, so the masthead speed is multiplied by 0.925. Without this, every
    ORC target would be for too much wind.
@@ -60,7 +65,7 @@ above. Two results:
   turned into apparent wind at the masthead by the bow, is **about 23–24° in every wind**: light air
   wants a wider true angle, but the boat's speed pulls the apparent wind forward by about as much.
   Until the masthead offset (+3.5°) and upwash (4°) are entered in the instruments, the display
-  reads that target about 7° apart by tack (roughly 31° starboard / 24° port in light air, 28° / 21°
+  reads that target about 6° apart by tack (roughly 33° starboard / 27° port in light air, 26° / 20°
   in breeze); the crib sheet's "AWA to steer" row gives it per tack and wind.
 
 ### Leeway
@@ -170,15 +175,23 @@ not scored.
     and the masthead wind speed reads about 6% higher downwind than upwind. Light-air figures
     carry about ±5 points.
   - *Leeway under 15° of heel.* Two methods disagree by about 1°.
-  - *Upwind boat speed.* The paddlewheel may read 2–3% high upwind on both tacks (not corrected,
-    see Calibration). If so, upwind % of ORC is up to ~2 points too high.
-- **Port vs starboard differences** in angle to the wind over a single beat mostly show wind
-  shifts, not the helm. The wind direction varies 5–10° from one tack to the next within a race,
-  while the instrument itself shows no jump when we tack. Pointing is judged by comparing GPS
-  courses with rivals on the same tack at the same moment, which doesn't depend on our wind.
+  - *Upwind boat speed by tack.* See the next point.
+- **Port vs starboard is not measured reliably in light air.** Under 13 kn, every beat of every
+  race reads ~6° wider and ~10 points lower on port than on starboard (over 13 kn the tacks agree).
+  A difference that regular is not wind shifts, and the crew did not sail 6° wider on port. By GPS
+  alone, against Wowla and Frequent Flyer at the same time and place, we were not faster on
+  starboard. So it is in the measurement, most likely the paddlewheel reading differently by tack,
+  possibly compass heeling error, and the logs can't pin it (see Calibration). Per-tack figures in
+  the reviews are therefore not findings. Whole-leg and whole-race figures average both tacks and
+  stand. Pointing is judged bow against bow with rivals, which doesn't depend on our wind or speed.
+- **The test that would settle it**, 15 minutes in one patch of flat water, away from the shore and
+  the channel edge, ideally near slack: 2 minutes each way on reciprocal courses upright (gives the
+  current right there), then 3 minutes on each tack at normal heel, then the reciprocal courses
+  again. With the current known on the spot, the paddlewheel and compass on each tack follow
+  directly.
 - **ORC's targets in breeze are not a realistic 100%.** The certificate assumes flat water and
-  ideal depowering. In 16+ kn upwind, Wowla made 88% of its own certificate across the series and we
-  made 87%. So in breeze, about 88% is fleet pace, and a leg there is judged against the rivals, not
+  ideal depowering. In 16+ kn upwind, Wowla made 86% of its own certificate across the series and we
+  made 85%. So in breeze, about 85% is fleet pace, and a leg there is judged against the rivals, not
   against 100%. Our best moments in 16+ kn were *higher* than ORC's angle but about 0.3 kn under its
   speed: ORC's angle and speed together happened in under 3% of them.
 - **Chop costs speed, not angle.** At the same wind, rougher water (measured by our pitch) cost
