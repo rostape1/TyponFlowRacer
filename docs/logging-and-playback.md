@@ -288,6 +288,9 @@ The tracks are Leaflet layers, not store state, so they survive the hourly store
 auto-advance. With them drawn, a new recording does not re-centre the map on the boat. Picking a
 recording by hand, loading a local file, or Exit to Live removes them.
 
+For the crew there is a second, lighter way in: `race.html`, which plays the same race files on a
+clock with no recordings or server behind it, so it works on GitHub Pages ([polar.md](polar.md) §7).
+
 **Jumps re-read only 10 minutes.** A race-day recording is ~450k lines an hour (AIS plus 20 Hz
 attitude), and the full re-read to a gun 40 minutes into one froze the tab for over a minute. So
 race jumps call `seek(idx, { warmupMs: 10 min })`: position, wind and every contact that reported in

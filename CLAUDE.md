@@ -301,6 +301,7 @@ safely. Look up your group's IDs in [docs/pitfalls.md](docs/pitfalls.md), by ID,
 |------|---------|
 | `index.html` | Single page: tab bar (Map/Charts/Radar), map, side panel, legends, timeline, modals, playback transport |
 | `hub.html` | Navigation hub at `/hub` — links every view plus live storage figures from `/api/logs` |
+| `race.html` + `js/race-player.js` + `js/review-text.js` | **Crew race page**, static (works on GitHub Pages): races played on a clock over the coloured tracks, the fleet, Typon's instrument strip, and the race review with clickable times — [docs/polar.md](docs/polar.md) §7 |
 | `js/app.js` (~3300 lines) | Leaflet map, vessel markers, popups, CPA/TCPA, search, forecast UI, offline pre-fetch, config bootstrap, tile-layer selection |
 | `js/aisstream.js` | Browser WebSocket to AISstream.io → internal vessel format |
 | `js/vessel-store.js` | In-memory vessel DB, track history, localStorage persistence |
@@ -339,7 +340,7 @@ safely. Look up your group's IDs in [docs/pitfalls.md](docs/pitfalls.md), by ID,
 | `tools/build_polar.py` | Router polar = Typon's **ORC certificate** (`--write-js` writes both JS copies). Also measures race sailing against it from the logs (self-calibrating) and renders `docs/polar/` charts + crib sheet — [docs/polar.md](docs/polar.md) |
 | `tools/race_review.py` | Leg-by-leg race review: each leg against ORC for the leg actually sailed (beat/run/reach by rhumb line), and against AIS rivals timed between our rounding points. Reuses `build_polar.py`'s calibration — [docs/polar.md](docs/polar.md) §6 |
 | `tools/regattas.json` + `regattas.py` | **The one place races are defined**: regattas, races, results, handicaps, rivals, sailing windows; local time via zoneinfo. Every analysis tool reads it — new regatta checklist in [docs/polar.md](docs/polar.md) §10 |
-| `tools/race_tracks.py` | Writes `static/races/<regatta>.json` + `index.json` for replay's race picker: each boat's track scored against its own ORC cert (Typon: full calibration; rivals: AIS + our wind/current), with ORC target angle/speed per point — [docs/polar.md](docs/polar.md) §7 |
+| `tools/race_tracks.py` | Writes `static/races/<regatta>.json` + `index.json` for replay's race picker and `race.html` (plus per-race `-fleet.json`, and `docs/reviews/*.md` copied to `static/reviews/`): each boat's track scored against its own ORC cert (Typon: full calibration; rivals: AIS + our wind/current), with ORC target angle/speed per point — [docs/polar.md](docs/polar.md) §7 |
 | `tools/upwind_insights.py` | Reruns the upwind follow-up analyses (leeway per heel, helm, gusts, tacks vs waves, inside/outside the Gate, best vs worst moments, port vs stbd, masthead wind asymmetry) on every regatta — [docs/polar.md](docs/polar.md) §9 |
 | `tools/sea_state.py` | Sea state from our own 20 Hz pitch (spread + encounter period), and whether it explains upwind % of ORC at the same wind, with Wowla as control — [docs/polar.md](docs/polar.md) §8 |
 | `tools/fix_log_times.py` | Repairs recordings mis-dated by the Pi's clock: shifts prefixes, splits mid-file clock steps, renames to GPS truth. Never modifies its input (`P42`) |

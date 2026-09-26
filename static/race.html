@@ -1,0 +1,241 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Typon — Race replay</title>
+<link rel="stylesheet" href="lib/leaflet.css">
+<link rel="stylesheet" href="css/style.css">
+<style>
+/* The crew race page. Standalone like hub.html: no forecast, AIS-live or NMEA machinery. The track
+   legend and live race box (.race-legend*) come from style.css, shared with replay's race picker. */
+body { display: flex; flex-direction: column; height: 100vh; height: 100dvh; }
+#rp-top, #rp-bottom {
+    background: rgba(10, 22, 40, 0.94); backdrop-filter: blur(12px);
+    display: flex; align-items: center; gap: 8px; padding: 6px 10px; flex-wrap: wrap;
+    border-color: rgba(100, 150, 200, 0.28); border-style: solid; border-width: 0;
+}
+#rp-top { border-bottom-width: 1px; padding-top: max(6px, env(safe-area-inset-top)); }
+#rp-bottom { border-top-width: 1px; padding-bottom: max(6px, env(safe-area-inset-bottom)); }
+#rp-top h1 { font-size: 15px; color: #f5f6fa; font-weight: 600; margin-right: 4px; white-space: nowrap; }
+#rp-main { flex: 1; min-height: 0; display: flex; }
+#rp-map { flex: 1; min-width: 0; }
+select, button {
+    background: rgba(255, 255, 255, 0.08); color: #f5f6fa; border: 1px solid rgba(100, 150, 200, 0.35);
+    border-radius: 6px; font: inherit; font-size: 13px; height: 30px; padding: 0 8px;
+}
+button { cursor: pointer; }
+button:hover { background: rgba(255, 255, 255, 0.14); }
+#rp-follow.on { border-color: #f39c12; color: #f39c12; }
+#rp-race { max-width: 60vw; }
+#rp-play { width: 40px; font-size: 15px; }
+#rp-scrub { flex: 1; min-width: 140px; accent-color: #3498db; }
+#rp-clock { font-variant-numeric: tabular-nums; font-size: 13px; color: #f5f6fa; min-width: 118px; }
+#rp-clock span { color: #7f93a8; }
+#rp-status { font-size: 11px; color: #7f93a8; margin-left: auto; }
+#rp-status.err { color: #e74c3c; }
+#rp-strip { display: flex; gap: 14px; width: 100%; font-variant-numeric: tabular-nums; font-size: 13px; }
+#rp-strip div { display: flex; flex-direction: column; align-items: center; min-width: 42px; }
+#rp-strip b { color: #f5f6fa; font-size: 16px; font-weight: 600; }
+#rp-strip small { color: #7f93a8; font-size: 10px; letter-spacing: 0.04em; }
+#rp-strip .orc { border-left: 4px solid #7f8c8d; padding-left: 6px; }
+#rp-strip .who { color: #f39c12; font-size: 11px; justify-content: center; }
+
+/* Boats: a hull pointing along its heading, coloured by % of ORC now, with its name. */
+.rp-boat-icon { background: none; border: none; }
+.rp-boat { position: relative; width: 100%; height: 100%; }
+.rp-hull { width: 100%; height: 100%; overflow: visible; }
+.rp-hull path { stroke: #0a1628; stroke-width: 1.4; }
+.rp-boat.own .rp-hull path { stroke: #f39c12; stroke-width: 2; }
+.rp-label {
+    position: absolute; left: 100%; top: 50%; transform: translate(4px, -50%); white-space: nowrap;
+    font-size: 11px; font-weight: 600; color: #f5f6fa; text-shadow: 0 0 3px #0a1628, 0 0 3px #0a1628;
+}
+.rp-boat.own .rp-label { color: #f39c12; }
+.rp-fleet-tip { font-size: 11px; }
+
+/* The review: a side panel beside the map on a laptop, the whole screen on a phone. */
+#rp-review {
+    width: 460px; flex: none; z-index: 2000;
+    background: rgba(10, 22, 40, 0.97); border-left: 1px solid rgba(100, 150, 200, 0.28);
+    display: none; flex-direction: column;
+}
+#rp-review.open { display: flex; }
+#rp-review header {
+    display: flex; align-items: center; justify-content: space-between; gap: 8px;
+    padding: 10px 14px; padding-top: max(10px, env(safe-area-inset-top));
+    border-bottom: 1px solid rgba(100, 150, 200, 0.2); color: #f5f6fa; font-weight: 600;
+}
+#rp-review-body { overflow-y: auto; padding: 4px 16px 24px; font-size: 14px; line-height: 1.5; -webkit-overflow-scrolling: touch; }
+#rp-review-body h2 { font-size: 17px; color: #f5f6fa; margin: 14px 0 8px; }
+#rp-review-body h3 { font-size: 15px; color: #f5f6fa; margin: 18px 0 6px; }
+#rp-review-body p { margin: 8px 0; }
+#rp-review-body ul, #rp-review-body ol { margin: 6px 0 6px 20px; }
+#rp-review-body li { margin: 5px 0; }
+#rp-review-body strong { color: #f5f6fa; }
+#rp-review-body code { font-size: 12px; background: rgba(255, 255, 255, 0.08); padding: 0 3px; border-radius: 3px; }
+#rp-review-body .review-table { overflow-x: auto; margin: 10px 0; }
+#rp-review-body table { border-collapse: collapse; font-size: 12px; font-variant-numeric: tabular-nums; }
+#rp-review-body th, #rp-review-body td { border: 1px solid rgba(100, 150, 200, 0.25); padding: 4px 6px; text-align: left; vertical-align: top; }
+#rp-review-body th { color: #f5f6fa; background: rgba(255, 255, 255, 0.05); }
+a.review-time { color: #5dade2; text-decoration: none; border-bottom: 1px dotted #5dade2; }
+a.review-time:hover { color: #85c1e9; }
+
+/* Tap the legend's title to fold it away. Phone: only the live box's headline per boat; tap the box
+   for the detail. */
+.race-legend-title, .race-now { cursor: pointer; }
+.race-legend.collapsed > :not(.race-legend-title) { display: none; }
+@media (max-width: 640px) {
+    #rp-top h1 { display: none; }
+    #rp-review { position: fixed; inset: 0; width: auto; border-left: none; }
+    #rp-race { max-width: none; flex: 1; }
+    #rp-clock { min-width: 0; }
+    #rp-status { display: none; }
+    #rp-strip { gap: 8px; justify-content: space-between; }
+    #rp-strip div { min-width: 0; }
+    #rp-strip b { font-size: 14px; }
+    #rp-strip .who { display: none; }
+    .race-legend { width: 200px; font-size: 10px; padding: 6px 8px; }
+    .race-legend-ramp, .race-legend-scale, .race-legend-boat, .race-legend-note { display: none; }
+    .race-now { margin-top: 2px; }
+    .race-legend:not(.detail) .race-now-boat div + div { display: none; }
+    .race-now-boat { margin: 2px 0; }
+}
+</style>
+</head>
+<body>
+<div id="rp-top">
+  <h1>Typon race replay</h1>
+  <select id="rp-race" aria-label="Race"></select>
+  <button id="rp-review-btn" hidden>📄 Review</button>
+  <span id="rp-status">Loading races…</span>
+</div>
+<div id="rp-main">
+  <div id="rp-map"></div>
+  <aside id="rp-review" aria-label="Race review">
+    <header><span id="rp-review-title">Race review</span><button id="rp-review-close" aria-label="Close">✕</button></header>
+    <div id="rp-review-body"></div>
+  </aside>
+</div>
+<div id="rp-bottom">
+  <div id="rp-strip"></div>
+  <button id="rp-play" aria-label="Play">▶</button>
+  <select id="rp-speed" aria-label="Speed"></select>
+  <button id="rp-follow" class="on" aria-pressed="true" title="Keep Typon in view">⌖ Follow</button>
+  <input id="rp-scrub" type="range" min="0" max="1" step="1000" value="0" aria-label="Race time">
+  <span id="rp-clock">–</span>
+</div>
+
+<script src="lib/leaflet.js"></script>
+<script src="js/race-tracks.js"></script>
+<script src="js/review-text.js"></script>
+<script src="js/race-player.js"></script>
+<script>
+(function () {
+    const $ = (id) => document.getElementById(id);
+    const map = L.map('rp-map', { zoomControl: true, attributionControl: true }).setView([37.82, -122.45], 13);
+    // NOAA chart, the app's default layer (app.js): ArcGIS tile cache, lod = Leaflet z - 2.
+    const NoaaChart = L.TileLayer.extend({
+        getTileUrl(c) {
+            const lod = c.z - 2;
+            return lod < 0 ? '' : `https://gis.charttools.noaa.gov/arcgis/rest/services/MarineChart_Services/NOAACharts/MapServer/tile/${lod}/${c.y}/${c.x}`;
+        },
+    });
+    new NoaaChart('', { attribution: '&copy; NOAA', minZoom: 2, maxZoom: 16, opacity: 0.9 }).addTo(map);
+
+    const strip = $('rp-strip');
+    const ui = {
+        scrub: $('rp-scrub'),
+        status(text, err) { $('rp-status').textContent = text; $('rp-status').classList.toggle('err', !!err); },
+        playing(on) { $('rp-play').textContent = on ? '⏸' : '▶'; $('rp-play').setAttribute('aria-label', on ? 'Pause' : 'Play'); },
+        clock(now, start, min) {
+            const c = $('rp-clock');
+            c.textContent = now + ' ';
+            const s = document.createElement('span');
+            s.textContent = min >= 0 ? `+${min} min` : '';
+            c.appendChild(s);
+        },
+        strip(items, color) {
+            strip.textContent = '';
+            const who = document.createElement('div');
+            who.className = 'who';
+            who.textContent = 'Typon';
+            strip.appendChild(who);
+            for (const [k, v] of items) {
+                const d = document.createElement('div');
+                if (k === 'ORC') { d.className = 'orc'; d.style.borderLeftColor = color || '#7f8c8d'; }
+                const b = document.createElement('b'); b.textContent = v;
+                const s = document.createElement('small'); s.textContent = k;
+                d.appendChild(b); d.appendChild(s);
+                strip.appendChild(d);
+            }
+        },
+        following(on) { $('rp-follow').classList.toggle('on', on); $('rp-follow').setAttribute('aria-pressed', String(on)); },
+        reviewJumped() { if (window.innerWidth <= 640) closeReview(); },
+    };
+    const player = new RacePlayer(map, ui);
+
+    for (const x of RacePlayer.SPEEDS) {
+        const o = document.createElement('option');
+        o.value = x; o.textContent = `${x}×`;
+        if (x === RacePlayer.DEFAULT_SPEED) o.selected = true;
+        $('rp-speed').appendChild(o);
+    }
+    $('rp-speed').addEventListener('change', (e) => player.setSpeed(+e.target.value));
+    $('rp-play').addEventListener('click', () => player.toggle());
+    $('rp-follow').addEventListener('click', () => player.setFollow(!player.follow));
+    $('rp-scrub').addEventListener('input', (e) => player.seek(+e.target.value));
+    document.addEventListener('keydown', (e) => {
+        if (e.code === 'Space' && e.target.tagName !== 'SELECT' && e.target.tagName !== 'INPUT') { e.preventDefault(); player.toggle(); }
+    });
+
+    // The legend is re-created per race; tap its title to fold it away (it covers a phone's chart).
+    map.getContainer().addEventListener('click', (e) => {
+        const t = e.target.closest && e.target.closest('.race-legend-title');
+        if (t) t.parentElement.classList.toggle('collapsed');
+        const n = e.target.closest && e.target.closest('.race-now');
+        if (n) n.parentElement.classList.toggle('detail');
+    });
+
+    function closeReview() { $('rp-review').classList.remove('open'); map.invalidateSize(); }
+    $('rp-review-close').addEventListener('click', closeReview);
+    $('rp-review-btn').addEventListener('click', () => {
+        const panel = $('rp-review'), body = $('rp-review-body');
+        if (panel.classList.contains('open')) { closeReview(); return; }
+        body.textContent = 'Loading…';
+        panel.classList.add('open');
+        map.invalidateSize();
+        player.review().then(frag => {
+            body.textContent = '';
+            if (frag) body.appendChild(frag); else body.textContent = 'No review for this race yet.';
+        }).catch(err => { body.textContent = `The review could not be loaded (${err.message}).`; });
+    });
+
+    function pick(id) {
+        if (!player.select(id)) return false;
+        const race = player.race;
+        $('rp-race').value = id;
+        $('rp-review-btn').hidden = !race.review;
+        $('rp-review-title').textContent = race.label;
+        closeReview();
+        if (location.hash.slice(1) !== id) history.replaceState(null, '', '#' + id);
+        return true;
+    }
+    $('rp-race').addEventListener('change', (e) => pick(e.target.value));
+    window.addEventListener('hashchange', () => pick(decodeURIComponent(location.hash.slice(1))));
+
+    player.load().then(data => {
+        const sel = $('rp-race');
+        for (const r of data.races) {
+            const o = document.createElement('option');
+            o.value = r.id; o.textContent = r.label + (r.review ? ' 📄' : '');
+            sel.appendChild(o);
+        }
+        ui.status(`${data.races.length} races`);
+        const want = decodeURIComponent(location.hash.slice(1));
+        if (!pick(want) && data.races.length) pick(data.races[data.races.length - 1].id);
+    }).catch(err => ui.status(`Races could not be loaded (${err.message})`, true));
+})();
+</script>
+</body>
+</html>

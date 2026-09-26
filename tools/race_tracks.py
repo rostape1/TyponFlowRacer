@@ -21,7 +21,7 @@ moment (GPS minus through-water, 5 min mean), against Typon's wind (2 min mean).
 carries two assumptions a boat's own instruments would not: the same current and the same wind as
 us. A report either side of a tack or gybe is left unscored.
 """
-import contextlib, io, json, math, os, sys
+import contextlib, io, json, math, os, shutil, sys
 import numpy as np
 import pandas as pd
 
@@ -44,6 +44,14 @@ TURN_BLANK_S = (5, 15)
 # further than this from us, or implying a faster jump from its previous kept report, is dropped.
 AIS_MAX_FROM_US_NM = 10
 AIS_MAX_JUMP_KN = 25
+OWN_MMSI = 338361814
+# The rest of the fleet, for the crew race page (static/race.html): unscored grey boats. A vessel is
+# kept if it came within FLEET_RADIUS_NM of us while moving; positions are thinned to FLEET_STEP_S.
+FLEET_RADIUS_NM = 3.0
+FLEET_MIN_SOG = 1.0         # median kn while near us: drops boats on moorings and in marinas
+FLEET_STEP_S = 30
+REVIEWS_SRC = os.path.join(bp.REPO, 'docs', 'reviews')     # <race id>.md, e.g. BBS2026-R5.md
+REVIEWS_OUT = os.path.join(bp.REPO, 'static', 'reviews')   # copied for GitHub Pages, which serves static/ only
 
 def race_list(rid=None):
     """Races from tools/regattas.json, with the rivals we can draw: a transmitting MMSI and a
@@ -137,6 +145,67 @@ def own_frame(g):
     return g
 
 
+def own_inst(g, pts):
+    """[heel, heading] per own-track point (same order as pts), for the race page's instrument strip.
+    Heel is signed as logged (+ starboard); heading magnetic-corrected as in the grid."""
+    out = []
+    for p in pts:
+        t = p[0]
+        h = g.heel.get(t, np.nan) if t in g.index else np.nan
+        d = g.hdg.get(t, np.nan) if t in g.index else np.nan
+        out.append([round(float(h), 1) if np.isfinite(h) else None, round(float(d)) % 360 if np.isfinite(d) else None])
+    return out
+
+
+def fleet(O, A, t0, t1, skip, names):
+    """Every other AIS vessel that sailed within FLEET_RADIUS_NM of us during the race, thinned to one
+    position per FLEET_STEP_S: [{mmsi, name, pts: [[t, lat, lon, sog, cog], ...]}]. Unscored."""
+    a = A[(A.t >= t0) & (A.t <= t1) & ~A.mmsi.isin(skip)].copy()
+    if a.empty:
+        return []
+    a['s'] = np.floor(a.t).astype(np.int64)
+    idx = np.clip(O.index.searchsorted(a.s.values), 0, len(O) - 1)
+    a['d'] = rr._nm(a.lat.values, a.lon.values, O.lat.values[idx], O.lon.values[idx])
+    out = []
+    for mmsi, v in a.groupby('mmsi'):
+        near = v[v.d <= FLEET_RADIUS_NM]
+        if len(near) < 3 or near.sog.median() < FLEET_MIN_SOG:
+            continue
+        v = v[v.d <= AIS_MAX_FROM_US_NM]                   # corrupt fixes, as for rivals
+        v = v.groupby(v.s // FLEET_STEP_S).first()
+        pts = [[int(q.s), round(q.lat, 5), round(q.lon, 5),
+                round(q.sog, 1) if np.isfinite(q.sog) else None,
+                round(q.cog) if np.isfinite(q.cog) else None] for q in v.itertuples()]
+        out.append(dict(mmsi=int(mmsi), name=names.get(str(int(mmsi))), pts=pts))
+    return out
+
+
+def vessel_names():
+    """MMSI -> name, the same database the app uses (tools/build_vessel_names.mjs)."""
+    try:
+        with open(os.path.join(bp.REPO, 'static', 'vessel_names.json')) as f:
+            return json.load(f).get('names', {})
+    except (OSError, ValueError):
+        return {}
+
+
+def write_fleet(race_id, fl):
+    name = f'{race_id}-fleet.json'
+    with open(os.path.join(RACES_DIR, name), 'w') as f:
+        json.dump(dict(fields=['t', 'lat', 'lon', 'sog', 'cog'], vessels=fl), f, separators=(',', ':'))
+    return name
+
+
+def attach_review(race):
+    """Copy docs/reviews/<race id>.md next to the page and point the race at it, if there is one."""
+    src = os.path.join(REVIEWS_SRC, f"{race['id']}.md")
+    if not os.path.exists(src):
+        return
+    os.makedirs(REVIEWS_OUT, exist_ok=True)
+    shutil.copyfile(src, os.path.join(REVIEWS_OUT, f"{race['id']}.md"))
+    race['review'] = f"reviews/{race['id']}.md"
+
+
 def own_track(g, O, t0, t1):
     x = g.loc[t0:t1]
     raw = [score(s, abs(a), w, bp.TYPON) for s, a, w in zip(x.stw, x.twa, x.tws)]
@@ -216,18 +285,18 @@ def summary(pts):
 
 def build(g, rid):
     """Score every race of one regatta; returns the races list for its JSON file."""
-    races, positions = [], {}
+    races, positions, names = [], {}, vessel_names()
     for R in race_list(rid):
         rid_, day, rivals = R['race']['id'], R['day'], R['rivals']
         t0, t1 = _utc_s(day, R['start']), _utc_s(day, R['finish'])
-        mm = frozenset(v[0] for v in rivals.values())
-        if (day, mm) not in positions:
-            positions[(day, mm)] = rr.read_positions(day, set(mm))
-        O, A = positions[(day, mm)]
+        if day not in positions:
+            positions[day] = rr.read_positions(day, None)     # every vessel: rivals and the fleet
+        O, A = positions[day]
         if O.empty:
             print(f'{R["id"]}: no GPS positions in the logs for {day} (was the logger running?)')
             continue
-        boats = [dict(name='Typon', mmsi=338361814, source='instruments', pts=own_track(g, O, t0, t1))]
+        own = own_track(g, O, t0, t1)
+        boats = [dict(name='Typon', mmsi=OWN_MMSI, source='instruments', pts=own, inst=own_inst(g, own))]
         print(f'{R["id"]} Typon {summary(boats[0]["pts"])}')
         for name, (mmsi, fin) in rivals.items():
             if fin:
@@ -246,7 +315,14 @@ def build(g, rid):
                 print(f'{R["id"]} {name} {summary(pts)}')
             else:
                 print(f'{R["id"]} {name}: no AIS reports in the race window')
-        races.append(dict(id=R['id'], label=R['label'], start=t0 * 1000, finish=t1 * 1000, boats=boats))
+        skip = {OWN_MMSI} | {v[0] for v in rivals.values()}
+        fl = fleet(O, A, t0, t1, skip, names)
+        print(f'{R["id"]} fleet: {len(fl)} other vessel(s) within {FLEET_RADIUS_NM:g} nm')
+        race = dict(id=R['id'], label=R['label'], start=t0 * 1000, finish=t1 * 1000, boats=boats)
+        # Its own file: only the crew page draws the fleet, and replay's picker loads every race at once.
+        race['fleet'] = write_fleet(R['id'], fl)
+        attach_review(race)
+        races.append(race)
     return races
 
 
@@ -264,11 +340,14 @@ def main():
         if args.regatta and reg['id'] != args.regatta:
             continue
         doc = dict(series=reg['id'], name=reg['name'], generated=pd.Timestamp.now().strftime('%Y-%m-%d'),
-                   fields=FIELDS,
+                   fields=FIELDS, timezone=regattas._load()['timezone'],
+                   inst_fields=['heel', 'hdg'],
                    note='pct = % of the boat\'s own ORC certificate: VMG upwind (u) and downwind (d), speed on a '
                         'reach (r); null = tack/gybe or no data. twa through the water, tws at 10 m; tgt_twa/tgt_spd = ORC '
                         'target angle (beat/gybe; null on a reach, where the course sets it) and speed. Rivals: AIS, '
-                        'scored with Typon\'s current and wind. tools/race_tracks.py, docs/polar.md §7.',
+                        'scored with Typon\'s current and wind. Typon inst = [heel, hdg] per point. fleet = the '
+                        'race\'s <id>-fleet.json (other AIS vessels, unscored); review = its narrative, if any. '
+                        'tools/race_tracks.py, docs/polar.md §7.',
                    races=build(g, reg['id']))
         out = os.path.join(RACES_DIR, f"{reg['id']}.json")
         with open(out, 'w') as f:
