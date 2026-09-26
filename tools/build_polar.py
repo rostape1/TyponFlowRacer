@@ -1015,6 +1015,35 @@ def chart_cheatsheet(v, up, m, heel_fast, floor, power, held, cal, hours, outdir
         T(6, y, '▲', color=ORC_C, fontsize=10)
         T(10, y, _wrap(w, 108), fontsize=9.5, color=INK2, linespacing=1.35)
         y -= 2.2 * (_wrap(w, 108).count('\n') + 1) + 0.9
+
+    # --- where the speed is: best vs worst stretches, and the order to work on things. The numbers
+    # come from tools/upwind_insights.py --only best,pointing (2026-09-25); rerun it and update these
+    # lines after a new regatta. The how-to lives in the rules above, so this only points at them.
+    y -= 3
+    T(5, y, 'WHERE THE SPEED IS', fontsize=12, fontweight='bold'); y -= 4.2
+    T(6, y, 'Our best vs worst 2-min upwind stretches, same tack and wind:', fontsize=10, color=INK2); y -= 3.4
+    for lab, txt in [
+        ('13+ kn', 'BEST: 3° higher at the same speed, 0.6° flatter, less leeway, lighter helm.  WORST: 2.5° wider, more heel, '
+                   'rougher water, often outside the Gate. In breeze, pointing comes from staying flat.'),
+        ('< 13 kn', 'BEST: 0.3 kn faster at the same angle, quieter helm, smoother water.  WORST: slower, 1° wider, busy helm, '
+                    'too little weather helm (short of power), sailing on in headers, mostly outside the Gate.'),
+    ]:
+        T(6, y, lab, fontsize=10, fontweight='bold', color=YOU)
+        T(17, y, _wrap(txt, 98), fontsize=9.5, color=INK2, linespacing=1.35)
+        y -= 2.2 * (_wrap(txt, 98).count('\n') + 1) + 1.2
+    y -= 1
+    T(6, y, 'In order of value:', fontsize=10, color=INK2); y -= 3.4
+    for i, txt in enumerate([
+        'Heavy air: keep her flat (rule 5). ~88% is fleet pace in 16+ kn; the gain is heel, not the last knot.',
+        'Light air, most of all in chop: power up to ~15° heel, quiet helm (rules 4, 6). Consider a bigger jib under ~12 kn.',
+        'Pointing in 10–13 kn: ~5° lower than Wowla bow to bow (~1° in 13–16, level in 16+). Groove, then point (playbook 1–2).',
+        'Tacks and mark exits: build speed before pointing (rule 7); light-air tacks took 45–100 s to rebuild.',
+        'Downwind: sail deeper (rule 3). Check the starboard-gybe set-up: ~1 kn slower than port in R4.',
+        'Marks: call laylines once, give the bridge towers room, practise sets.',
+    ]):
+        T(6, y, f'{i + 1}.', fontsize=10, fontweight='bold', color=YOU)
+        T(9, y, txt, fontsize=9.5)
+        y -= 3.0
     # The page grows to fit the notes: a fixed length cut the last watch-out off twice.
     bottom = min(-113.7, y - 4)
     ax.set_ylim(bottom, 200)
