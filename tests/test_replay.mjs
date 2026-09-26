@@ -470,6 +470,100 @@ console.log('race tracks:');
     assert(failed404, 'a listed file that is missing fails loudly, naming the file');
 }
 
+// --- crew race page: the player's clock and positions, and the review text ---
+console.log('race page:');
+
+{
+    // A minimal DOM: enough for ReviewText to build into and for the assertions to read back.
+    class Node {
+        constructor(tag) { this.tag = tag; this.children = []; this.className = ''; this.dataset = {}; this._t = ''; this.on = {}; }
+        appendChild(c) { this.children.push(c); return c; }
+        set textContent(v) { this.children = []; this._t = String(v); }
+        get textContent() { return this._t + this.children.map(c => c.textContent).join(''); }
+        addEventListener(type, f) { this.on[type] = f; }
+        all(tag, out = []) { for (const c of this.children) { if (c.tag === tag) out.push(c); if (c.all) c.all(tag, out); } return out; }
+    }
+    const fakeDoc = {
+        createElement: (t) => new Node(t),
+        createDocumentFragment: () => new Node('#fragment'),
+        createTextNode: (s) => ({ tag: '#text', textContent: String(s) }),
+    };
+    const box = {};
+    new Function('module', 'document', readFileSync(join(__dirname, '../static/js/review-text.js'), 'utf8') +
+        '\nmodule.ReviewText = ReviewText;')(box, fakeDoc);
+    new Function('module', 'RaceTracks', 'L', 'document', readFileSync(join(__dirname, '../static/js/race-player.js'), 'utf8') +
+        '\nmodule.RacePlayer = RacePlayer;')(box, { NOW_TOL_S: { instruments: 10 } }, {}, fakeDoc);
+    const { ReviewText, RacePlayer } = box;
+
+    // Positions between points. Rows: [t, lat, lon, ...].
+    const P = [[100, 37.80, -122.40], [110, 37.81, -122.42], [120, 37.82, -122.44], [400, 37.90, -122.50]];
+    const at = (t, gap = 30) => RacePlayer.position(P, t, gap);
+    const near = (a, b) => Math.abs(a - b) < 1e-9;
+    assert(near(at(105).lat, 37.805) && near(at(105).lon, -122.41), 'halfway between two points is halfway along the line');
+    assert(at(110).lat === 37.81 && at(110).i === 1, 'on a point, exactly that point');
+    assert(at(95).lat === 37.80, 'just before the first point: sits at it (the gun is 5 s before the first 5 s point)');
+    assert(at(50) === null, 'long before its track starts, a boat is not drawn');
+    assert(at(200) === null, 'inside a hole longer than the gap limit: hidden, never slid across it');
+    assert(at(200, 300) !== null, 'the same hole within a longer limit (AIS) is interpolated');
+    assert(at(420).lat === 37.90 && at(500) === null, 'after its last point: there briefly, then gone');
+    assert(RacePlayer.position([], 100, 30) === null, 'no points -> null');
+
+    assert(RacePlayer.nearestIndex(P, 104, 10) === 0 && RacePlayer.nearestIndex(P, 106, 10) === 1, 'nearest point by time');
+    assert(RacePlayer.nearestIndex(P, 250, 10) === -1, 'none within tolerance -> -1, never a stale reading');
+    assert(RacePlayer.nearestIndex(P, 95, 10) === 0, 'before the first point, within tolerance');
+
+    assert(Math.round(RacePlayer.bearing([0, 37.8, -122.4], [0, 37.9, -122.4])) === 0, 'due north is 0°');
+    assert(Math.round(RacePlayer.bearing([0, 37.8, -122.4], [0, 37.8, -122.3])) === 90, 'due east is 90°');
+    assert(RacePlayer.bearing([0, 1, 1], [0, 1, 1]) === null, 'no movement, no bearing');
+
+    assert(RacePlayer.advance(1000, 100, 30, 0, 1e9) === 4000, '100 ms of real time at 30× is 3 s of race');
+    assert(RacePlayer.advance(9000, 1000, 30, 0, 10000) === 10000, 'the clock stops at the finish');
+
+    // Review times are local (the club's zone), whatever zone the reader's phone is in.
+    const tz = 'America/Los_Angeles';
+    const race = { start: Date.UTC(2026, 8, 19, 20, 0, 0), finish: Date.UTC(2026, 8, 19, 22, 36, 0) };   // 13:00-15:36 PDT
+    assert(RacePlayer.clock(race.start, tz) === '13:00:00', `clock in the race's zone, got ${RacePlayer.clock(race.start, tz)}`);
+    assert(RacePlayer.timeOnRaceDay(race, tz, 15, 6) === race.start + (2 * 3600 + 6 * 60) * 1000, '"15:06" in the review is 2h06 after a 13:00 gun');
+    assert(RacePlayer.timeOnRaceDay(race, tz, 13, 53, 9) === race.start + (53 * 60 + 9) * 1000, 'seconds are kept');
+    assert(RacePlayer.timeOnRaceDay(race, tz, 18, 17) === null, '"18:17 behind" (a gap, not a moment) is not a link');
+    assert(RacePlayer.timeOnRaceDay(race, tz, 12, 40) !== null && RacePlayer.timeOnRaceDay(race, tz, 11, 0) === null,
+        'the pre-start is linkable, the morning is not');
+
+    const S = Object.fromEntries(RacePlayer.strip([0, 0, 0, 88, 43, 14.5, 6.5, 'u', 39, 6.9], [-27.4, 7]));
+    assert(S.Heel === '27°' && S.HDG === '007°' && S.TWS === '14.5' && S.TWA === '43°' && S.STW === '6.50' && S.ORC === '88%',
+        `instrument strip, got ${JSON.stringify(S)}`);
+    const S0 = Object.fromEntries(RacePlayer.strip(null, null));
+    assert(Object.values(S0).every(v => v === '–'), 'no data at this moment: dashes, not the last reading');
+
+    // The review markdown.
+    const md = [
+        '# Title', '', 'Intro with **bold** and *italic* and `code`.', 'Second line of the para.', '',
+        '| Leg | Time |', '|---|---|', '| Beat | 13:53:09 |', '',
+        '- **One.** first item', '  continues here', '- two at 15:06, and 18:17 behind', '',
+        '1. numbered', '2. again', '', 'A <img src=x onerror=alert(1)> tag stays text.',
+    ].join('\n');
+    const clicked = [];
+    const frag = ReviewText.render(md, {
+        linkTime: (h, m, s) => (h === 18 ? null : h * 3600 + m * 60 + s),
+        onTime: (ms) => clicked.push(ms),
+    });
+    const top = frag.children.map(c => c.tag);
+    assert(top.join(',') === 'h2,p,div,ul,ol,p', `blocks in order, got ${top}`);
+    assert(frag.children[1].textContent === 'Intro with bold and italic and code. Second line of the para.', 'a paragraph joins its lines');
+    assert(frag.all('strong').length === 2 && frag.all('em').length === 1 && frag.all('strong')[0].textContent === 'bold' && frag.all('code').length === 1, 'bold, italic, code');
+    const rows = frag.all('tr');
+    assert(rows.length === 2 && rows[0].children[0].tag === 'th' && rows[1].children[0].tag === 'td', 'table: header row, the |---| line dropped');
+    const li = frag.children[3].children;
+    assert(li.length === 2 && li[0].textContent === 'One. first item continues here', 'a list item takes its indented continuation');
+    assert(frag.children[4].children.length === 2, 'numbered list');
+    const links = frag.all('a');
+    assert(links.map(a => a.textContent).join(',') === '13:53:09,15:06', `only race times link, got ${links.map(a => a.textContent)}`);
+    links[1].on.click({ preventDefault() {} });
+    assert(clicked[0] === 15 * 3600 + 6 * 60, 'tapping a time seeks to it');
+    assert(frag.all('img').length === 0 && frag.children[5].textContent.includes('<img src=x'),
+        'markup in the file stays text: it is fetched data (P19)');
+}
+
 // --- loadUrl -------------------------------------------------------------
 console.log('loadUrl:');
 

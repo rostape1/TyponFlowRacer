@@ -126,7 +126,8 @@ CERTS = {
 
 
 def read_positions(day, mmsis):
-    """Own track ($GPRMC, 1 Hz) and AIS positions (with reported SOG/COG) for the given MMSIs, on one log day."""
+    """Own track ($GPRMC, 1 Hz) and AIS positions (with reported SOG/COG) for the given MMSIs (None = every
+    vessel heard), on one log day."""
     own, ais = [], []
     for f in sorted(glob.glob(os.path.join(LOGS, f'nmea_{day}*.txt'))):
         for line in open(f, errors='replace'):
@@ -147,7 +148,7 @@ def read_positions(day, mmsis):
             if len(p) < 6 or p[1] != '1':      # positions are single-fragment
                 continue
             msg = decode_ais(p[5])
-            if msg['mmsi'] in mmsis and msg['lat'] is not None and msg['lon'] is not None:
+            if (mmsis is None or msg['mmsi'] in mmsis) and msg['lat'] is not None and msg['lon'] is not None:
                 ais.append((t, msg['mmsi'], msg['lat'], msg['lon'], msg['sog'], msg['cog']))
     O = pd.DataFrame(own, columns=['t', 'lat', 'lon'])
     O = O.groupby(np.floor(O.t).astype(np.int64)).mean()

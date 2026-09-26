@@ -506,6 +506,23 @@ Per-point medians (Typon / Wowla, after the 2026-09-25 leeway refit): R1 95/104,
 R4 87/105, R5 89/95, R6 95/104 (FF 96). These are higher than the leg-level 94/91/86/82/92/90 in §6, which also charge tacks and
 route choice. New regatta or rival: §10.
 
+**The crew race page, `static/race.html`** (on GitHub Pages at `…/TyponFlowRacer/race.html#<race id>`;
+linked from the hub). The same tracks and live race box, played on a clock rather than from the logs,
+so it needs no server: `static/js/race-player.js` (clock, moving boats, Follow, Typon's strip:
+TWS/TWA/STW/heel/heading/% of ORC) and `static/js/review-text.js` (the review). `race_tracks.py` also
+writes, for it:
+
+- Typon's `inst` = `[heel, hdg]` per track point (heel as logged, the strip shows its size);
+- `<race id>-fleet.json`: every other AIS vessel that came within 3 nm of us while moving (median
+  SOG ≥ 1 kn near us, so moored boats drop out), one position per 30 s, named from
+  `static/vessel_names.json`. Unscored grey dots, 70–110 vessels a race in 2026 (ferries and ships
+  included), 0.2–1 MB each. A separate file because replay's picker loads every race at once;
+- `docs/reviews/<race id>.md`, if it exists, copied to `static/reviews/` (Pages serves `static/`
+  only) and linked from the race as `review`. The page shows it beside the map (full screen on a
+  phone); clock times in the text that fall within the race (±30 min) jump the replay there.
+
+The repo is public, so everything on that page already is: tracks, the fleet's AIS and the reviews.
+
 ## 8. Sea state: does chop cost us upwind?
 
 `python3 tools/sea_state.py [--cache]`. No wave sensor is aboard, but the heading unit logs
@@ -573,7 +590,7 @@ check a recording is growing: no log, no analysis (Swiftsure 29–30 Aug 2026 ha
 4. **Run, in order:**
    ```bash
    python3 tools/build_polar.py            # re-parse all logs, recalibrate, charts + crib sheet (~35 s)
-   python3 tools/race_tracks.py            # static/races/<regatta>.json + index.json for the replay picker
+   python3 tools/race_tracks.py            # static/races/ (tracks, fleet) + static/reviews/, for replay and race.html
    python3 tools/sea_state.py              # pitch cache for the new races (no --cache after adding races)
    python3 tools/race_review.py --race R1 --regatta <id>   # per race: legs, rivals, rating vs sailing
    python3 tools/upwind_insights.py        # the §9 analyses across every regatta
@@ -584,6 +601,8 @@ check a recording is growing: no log, no analysis (Swiftsure 29–30 Aug 2026 ha
    day, leeway per heel range (the model should track the fitted column within ~0.5°), masthead
    offset and residual TWD jump (should be within ±1°). A new mast unit, paddlewheel or compass
    position invalidates the old fits: they are refitted, but check the printout.
-6. **Commit** `tools/regattas.json`, `static/races/`, `docs/polar/*.png` and any doc changes.
+6. **Review (optional)**: write `docs/reviews/<race id>.md` (e.g. `BBS2026-R5.md`, the template), in
+   local times, then rerun `race_tracks.py` to publish it on the race page.
+7. **Commit** `tools/regattas.json`, `static/races/`, `static/reviews/`, `docs/polar/*.png` and any doc changes.
    Different crew or sails (e.g. 8 crew, big jib): put it in the regatta's `crew`/name and compare
    regattas with `upwind_insights.py`; the tools don't yet split results by crew or sail.

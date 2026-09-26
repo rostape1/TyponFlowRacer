@@ -186,6 +186,7 @@ class RaceTracks {
         this.layers = [];
         this.legend = null;
         this.renderer = L.canvas({ padding: 0.5 });
+        this.timeZone = undefined;     // clock text: undefined = the browser's own
     }
 
     /** Every regatta the index lists, merged into one { races } list in index order. */
@@ -196,7 +197,12 @@ class RaceTracks {
         const base = indexUrl.slice(0, indexUrl.lastIndexOf('/') + 1);
         return get(indexUrl)
             .then(idx => Promise.all((idx.regattas || []).map(e => get(base + e.file))))
-            .then(docs => (this.data = { races: docs.flatMap(d => d.races || []) }));
+            .then(docs => (this.data = {
+                races: docs.flatMap(d => d.races || []),
+                // Race times are the club's local time (tools/regattas.json); the crew page shows
+                // them in it wherever the reader is.
+                timezone: (docs.find(d => d.timezone) || {}).timezone,
+            }));
     }
 
     race(id) {
@@ -222,7 +228,7 @@ class RaceTracks {
                 const p = RaceTracks.nearest(boat.pts, e.latlng.lat, e.latlng.lng);
                 if (!p) return;
                 const tip = document.createElement('div');
-                const t = new Date(p[0] * 1000).toLocaleTimeString([], { hour12: false });
+                const t = new Date(p[0] * 1000).toLocaleTimeString([], { hour12: false, timeZone: this.timeZone });
                 for (const line of [t, ...RaceTracks.lines(boat, p)]) {
                     const d = document.createElement('div');
                     d.textContent = line;
@@ -252,7 +258,7 @@ class RaceTracks {
         if (ms === this._lastNow) return;
         this._lastNow = ms;
         this._nowClock.textContent = ms == null ? 'Replay: –'
-            : 'Replay ' + new Date(ms).toLocaleTimeString([], { hour12: false });
+            : 'Replay ' + new Date(ms).toLocaleTimeString([], { hour12: false, timeZone: this.timeZone });
         for (const { boat, box } of this._nowEls) {
             const tol = RaceTracks.NOW_TOL_S[boat.source] || 10;
             const p = ms == null ? null : RaceTracks.atTime(boat.pts, ms, tol);
