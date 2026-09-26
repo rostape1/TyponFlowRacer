@@ -567,7 +567,7 @@ on any regatta in `tools/regattas.json`. BBS 2026 results, wind at 10 m:
 | `tacks` | Tack loss grows ~1.3 s per knot of wind, not with chop, except 16+ kn: ~20 s in rougher vs ~12 s in calmer water (5 + 5 tacks, a lead). |
 | `gate` | Upwind, Typon 90% inside vs 88% outside the Gate; Wowla 95% vs 101%. Outside we sailed ~4° wider than target and still under target speed: footing in waves did not buy speed. Light air outside (swell) is the worst case: 91% vs 102% inside. |
 | `best` | Best vs worst quarter of upwind minutes, same tack and wind: in 13+ kn the best are **2.5° higher by the bow at the same speed**, ~0.5° flatter, less leeway (the groove exists, we hold it a quarter of the time). Under 13 kn the best are **~0.5 kn faster at the same angle**, in flat water, quieter helm; the worst were 60% outside the Gate and in headers. It also lists the best moments to replay. |
-| `sides` | We look 6–8 points better on starboard in light air, but Wowla shows the same gap against our wind: a wind/current reference bias, not our port-tack sailing. |
+| `sides` | We look 6–8 points better on starboard in light air, but Wowla shows the same gap against our wind, so it is not our port-tack sailing. Not the instrument either: over 61 race tacks the true-wind direction jumps under 1° on average when we tack, while within a race it differs 5–10° tack to tack. So the split is the wind itself, shifts timed with the tacks or a regular bend in the Bay; one beat's split mostly says which tack got the headers. |
 | `wind` | Masthead wind reads ~6% higher downwind than upwind (§2 row "Masthead speed"). |
 
 No sail-trim sensors are logged, so these say *what* the good moments looked like, not the
