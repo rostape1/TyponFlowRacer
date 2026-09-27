@@ -182,17 +182,18 @@ not scored.
   - *Leeway under 15° of heel.* Two methods disagree by about 1°.
   - *Upwind boat speed by tack.* See the next point.
 - **Port vs starboard.** With the paddlewheel corrected, the tacks differ by 4–6 points, not ~11.
-  Under 13 kn, port still reads **~6° wider** than starboard on every beat. The paddlewheel can't
-  cause that (it would take a 1.8 kn error), and our compass shows the same thing independently: bow
-  against bow in light air, Wowla was 8–9° higher than us on port and −5 to +1° on starboard, and
-  Frequent Flyer +8° on port, −2° on starboard. So it is probably real. It is not the Gate waves: the split is the same east of Crissy Field and at the
-  same pitching. The cause is open. One candidate: if the angle is set by the wind display, the
-  same number reads ~6° wider on port (the uncorrected masthead offset and upwash). Another: rig or
-  sail set-up that differs by side (mast not centred, shroud tension, jib leads, telltales). In
-  13+ kn it is the other way round and smaller: starboard ~4 points lower, with more heel.
-- **What would confirm it on the water**, 15 minutes in one patch of flat water near slack: 2
-  minutes each way on reciprocal courses upright (the current right there), then 3 minutes on each
-  tack at normal heel steering by the jib, then the reciprocal courses again.
+  What is left: under 13 kn port and starboard differ by ~3° of apparent wind, which is ~6° of true
+  wind angle (in light air boat speed is a big share of the apparent wind, so TWA moves ~1.5–1.7× as
+  much as AWA; port was also a little faster, which adds ~1°). On the display, port actually read
+  1–3° narrower; it comes out wider only after the vane correction (±2.75°). So it is either ~1.5°
+  of vane error in light air or port sailed slightly wider on the apparent wind. The logs can't
+  separate the two, so it is not a finding. It is not the paddlewheel (corrected) and not the Gate
+  waves (the same east of Crissy Field and at the same pitching). The bow-to-bow compass comparison
+  with Wowla leans towards real, but it depends on Wowla's heading sensor too.
+  In 13+ kn it is the other way round and smaller: starboard ~4 points lower, with more heel.
+- **What would settle it on the water, in light air:** after a tack, once settled, the helm sails by
+  the jib telltales on each tack and someone notes the display AWA on each. The same number on both
+  tacks means the vane's light-air offset is ~1°, and the calibration gets refitted with that.
 - **ORC's targets in breeze are not a realistic 100%.** The certificate assumes flat water and
   ideal depowering. In 16+ kn upwind, Wowla made 88% of its own certificate across the series and we
   made 85%. So in breeze, about 85–88% is fleet pace, and a leg there is judged against the rivals, not

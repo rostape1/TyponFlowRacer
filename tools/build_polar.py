@@ -1034,9 +1034,9 @@ def chart_cheatsheet(v, up, m, heel_fast, floor, power, held, cal, hours, outdir
         f'Calibrated in software only: compass deviation (−4° / +1° on the beat headings), paddlewheel per day and heeled to port (it exaggerates speed changes there), vane heel correction, +{cal["offset"]:.2f}° masthead offset, '
         f'upwash {upwash_at(8, cal):.1f}° in 8 kn to {upwash_at(20, cal):.1f}° in 20 kn, leeway ≈ {cal["K"][1]:.2f}°×(heel/20)^{cal["K"][2]:.2f}×(6.5/speed)². The display is raw: upwind at 12 kn it reads ~{cal["offset"] + upwash_at(12, cal):.0f}° wide on starboard and ~{upwash_at(12, cal) - cal["offset"]:.0f}° wide on port. '
         'Calibrate the instruments before steering to the target angles.',
-        'PORT IS ~6° WIDER THAN STARBOARD UNDER 13 kn, every beat. Not the paddlewheel (corrected; it can\'t move the angle that much) and not the Gate '
-        'waves: our compass shows it too, bow to bow against Wowla. If the angle is set by the display, the same AWA number is ~6° wider on port: '
-        'use the stbd/port row above. Otherwise check the rig and jib leads side to side.',
+        'PORT vs STARBOARD UNDER 13 kn: ~3° of apparent wind apart (= ~6° true: in light air TWA moves ~1.5x AWA). Either ~1.5° of vane error '
+        'in light air or port sailed slightly wider; the logs can\'t tell which, so it is not a finding. Test: sail by the jib telltales on '
+        'each tack in light air and note the display AWA on both.',
         'ORC\'s angles are through the water; the display\'s TWA is by the bow. We slide 3–5° (most in heavy air), '
         'so a calibrated display reads narrower than ORC\'s angle: the "on display" target row allows for it.',
         'Leeway is fitted from heading vs GPS track, current removed per 10 min. If it is off by 2°, every upwind angle and VMG moves with it. '
