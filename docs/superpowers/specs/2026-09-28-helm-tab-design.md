@@ -185,9 +185,10 @@ The 60 s window runs from that moment.
   in replay. Never `Date.now()` against replayed data (cf. `P33`).
 - **Fail visibly** — grey banner, the affected number blanked, no VMG, never the last good value:
   - NO NMEA — no connection / nothing received;
-  - NO WIND — AWA or AWS older than 5 s;
-  - NO SPEED — BSP older than 5 s;
-  - NO HEEL — heel older than 5 s (calibration impossible, §5);
+  - NO WIND — AWA or AWS older than 12 s (as built: the instruments send wind every ~4.7 s, max
+    5.2, so 5 s flickered);
+  - NO SPEED — BSP older than 8 s (sent every ~2.2 s, max 2.6);
+  - NO HEEL — heel older than 5 s (20 Hz; calibration impossible without it, §5);
   - TWS below 4 kn — "TOO LIGHT", no targets: the certificate's table covers 4–24 kn, and below it
     would be extrapolation. Above 24 kn the 24 kn row is used and the footer says "above ORC range".
 

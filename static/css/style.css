@@ -2604,13 +2604,14 @@ body.panel-collapsed #panel-toggle {
 /* ===== Helm tab (js/helm.js, docs/helm.md) =====
    Palette C: cyan = spend speed, magenta = build speed, green = groove, grey = no data. Dark text on
    bright banners so it reads in sun. Landscape preferred (the half-dial's size follows the width);
-   portrait stacks. */
+   portrait stacks. iOS 12 compatible: plain font sizes before clamp(), grid-gap before gap. */
 #helm-view {
     background: #161d2b;
     color: #e8edf5;
     padding: 8px;
     box-sizing: border-box;
     display: grid;
+    grid-gap: 8px;
     gap: 8px;
     grid-template-columns: 1.35fr 1fr;
     grid-template-rows: auto 1fr auto;
@@ -2625,8 +2626,8 @@ body.panel-collapsed #panel-toggle {
     background: #5d6880;
     line-height: 1.1;
 }
-.helm-banner-main { font-size: clamp(26px, 7vmin, 64px); font-weight: 800; letter-spacing: 0.5px; }
-.helm-banner-sub { font-size: clamp(15px, 3.6vmin, 30px); font-weight: 600; margin-left: 0.7em; opacity: 0.9; }
+.helm-banner-main { font-size: 7vmin; font-size: clamp(26px, 7vmin, 64px); font-weight: 800; letter-spacing: 0.5px; }
+.helm-banner-sub { font-size: 3.6vmin; font-size: clamp(15px, 3.6vmin, 30px); font-weight: 600; margin-left: 0.7em; opacity: 0.9; }
 .helm-dial {
     grid-area: dial;
     background: #252e42;
@@ -2642,6 +2643,7 @@ body.panel-collapsed #panel-toggle {
     grid-area: tiles;
     display: grid;
     grid-template-rows: 1fr 1fr;
+    grid-gap: 8px;
     gap: 8px;
     min-height: 0;
 }
@@ -2654,15 +2656,15 @@ body.panel-collapsed #panel-toggle {
     justify-content: center;
     min-height: 0;
 }
-.helm-tile-k { font-size: clamp(13px, 2.6vmin, 20px); font-weight: 600; color: #3fe0f5; }
+.helm-tile-k { font-size: 2.6vmin; font-size: clamp(13px, 2.6vmin, 20px); font-weight: 600; color: #3fe0f5; }
 .helm-tile:nth-child(2) .helm-tile-k { color: #35d49a; }
-.helm-tile-v { font-size: clamp(40px, 13vmin, 110px); font-weight: 600; line-height: 1.05; }
-.helm-tile-t { font-size: clamp(13px, 2.6vmin, 20px); color: #8a97ad; }
+.helm-tile-v { font-size: 13vmin; font-size: clamp(40px, 13vmin, 110px); font-weight: 600; line-height: 1.05; }
+.helm-tile-t { font-size: 2.6vmin; font-size: clamp(13px, 2.6vmin, 20px); color: #8a97ad; }
 .helm-foot {
     grid-area: foot;
     text-align: center;
     color: #8a97ad;
-    font-size: clamp(12px, 2.4vmin, 17px);
+    font-size: 2.4vmin; font-size: clamp(12px, 2.4vmin, 17px);
 }
 @media (orientation: portrait) {
     #helm-view {

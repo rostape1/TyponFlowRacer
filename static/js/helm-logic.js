@@ -22,7 +22,12 @@ const HelmLogic = (() => {
         SMOOTH_S: 5,         // s average for AWA, speed, wind
         VMG_S: 15,           // s average for VMG %, which jumps with waves and puffs
         HOLD_S: 3,           // s a new instruction must persist before the banner changes
-        STALE_S: 5,          // s without a reading before that input counts as missing
+        // s without a reading before that input counts as missing. Set from the measured sentence
+        // rates in the BBS logs: apparent wind ($IIMWV,R) every ~4.7 s (max 5.2), boat speed ($IIVHW)
+        // every ~2.2 s (max 2.6), heel ($YXXDR) at 20 Hz. A single 5 s limit flickered NO WIND.
+        STALE_WIND_S: 12,
+        STALE_SPEED_S: 8,
+        STALE_S: 5,          // heel, and "nothing at all" (heel's silence is the first sign of a dead feed)
         MIN_TWS: 4,          // kn: below the certificate's first column there are no targets
         MODE_DOWN: 100,      // TWA over which upwind switches to downwind...
         MODE_UP: 80,         // ...and under which it switches back (hysteresis)
@@ -170,8 +175,8 @@ const HelmLogic = (() => {
             const aW = age(st.awaAt), aB = age(st.bspAt), aR = age(st.rollAt);
             if (aW === Infinity && aB === Infinity && aR === Infinity) return noData('NO NMEA', 'no instrument data');
             if (Math.min(aW, aB, aR) > C.STALE_S) return noData('NO NMEA', `nothing for ${Math.round(Math.min(aW, aB, aR))} s`);
-            if (aW > C.STALE_S || st.awa == null || st.aws == null) return noData('NO WIND', aW === Infinity ? 'no wind reading' : `wind ${Math.round(aW)} s old`);
-            if (aB > C.STALE_S || st.bsp == null) return noData('NO SPEED', aB === Infinity ? 'no boat speed' : `speed ${Math.round(aB)} s old`);
+            if (aW > C.STALE_WIND_S || st.awa == null || st.aws == null) return noData('NO WIND', aW === Infinity ? 'no wind reading' : `wind ${Math.round(aW)} s old`);
+            if (aB > C.STALE_SPEED_S || st.bsp == null) return noData('NO SPEED', aB === Infinity ? 'no boat speed' : `speed ${Math.round(aB)} s old`);
             if (aR > C.STALE_S || st.roll == null) return noData('NO HEEL', 'heel needed to correct wind and leeway');
 
             const t = Math.max(st.awaAt, st.bspAt, st.rollAt);

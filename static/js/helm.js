@@ -82,15 +82,6 @@ class HelmView {
     }
 
     // ------------------------------------------------------------ dial geometry
-    // Each mode maps its AWA range onto the half circle; off(a) = degrees from the top of the dial.
-    static MODES = {
-        up:   { lo: 0,  hi: 45,  step: 10, off: a => a,       top: 'WIND',          name: 'UPWIND' },
-        down: { lo: 60, hi: 180, step: 20, off: a => 180 - a, top: 'DEAD DOWNWIND', name: 'DOWNWIND' },
-    };
-    static C = { x: 200, y: 300, r: 185 };
-    static NS = 'http://www.w3.org/2000/svg';
-    static COLORS = { spend: '#3fe0f5', build: '#ff4fd8', groove: '#35d49a', nodata: '#5d6880' };
-
     _pt(side, a, r) {
         const M = HelmView.MODES[this.mode], C = HelmView.C;
         const t = side * M.off(a) * (90 / (M.hi - M.lo)) * Math.PI / 180;
@@ -99,7 +90,7 @@ class HelmView {
 
     _drawScale() {
         const g = this.gScale, M = HelmView.MODES[this.mode], C = HelmView.C;
-        g.replaceChildren();
+        HelmView.clear(g);
         const edge = this.mode === 'up' ? M.hi : M.lo;
         const [x0, y0] = this._pt(-1, edge, C.r), [x1, y1] = this._pt(1, edge, C.r);
         this._svg('path', { d: `M${x0},${y0} A${C.r},${C.r} 0 0 1 ${x1},${y1}`, fill: 'none', stroke: '#56627c', 'stroke-width': 3 }, g);
@@ -129,8 +120,8 @@ class HelmView {
         this.banner.style.color = vm.ok ? '#0c111b' : '#e8edf5';
         this.bMain.textContent = vm.main;
         this.bSub.textContent = vm.sub;
-        this.gMarks.replaceChildren();
-        this.gSpeed.replaceChildren();
+        HelmView.clear(this.gMarks);
+        HelmView.clear(this.gSpeed);
         this._drawLabels(vm);
         if (!vm.ok) {
             // fail visibly: no marker, no numbers, never the last good value
@@ -143,14 +134,14 @@ class HelmView {
 
         const word = vm.up ? (vm.dA > 0 ? 'wide' : 'high') : (vm.dA > 0 ? 'deep' : 'hot');
         this.tAwa.v.textContent = `${Math.round(vm.awa)}°`;
-        this.tAwa.t.replaceChildren();
+        HelmView.clear(this.tAwa.t);
         this.tAwa.t.append(vm.reach ? 'reach · no angle target' : `target ${Math.round(vm.tAwa)}°`);
         if (!vm.reach && Math.abs(vm.dA) >= 0.5) {
             const b = this._el('b', null, this.tAwa.t, ` · ${Math.round(Math.abs(vm.dA))}° ${word}`);
             b.style.color = col;
         }
         this.tBsp.v.textContent = vm.stw.toFixed(1);
-        this.tBsp.t.replaceChildren();
+        HelmView.clear(this.tBsp.t);
         this.tBsp.t.append(`${vm.reach ? 'polar' : 'target'} ${vm.tSpeed.toFixed(1)} · `);
         const d = this._el('b', null, this.tBsp.t, `${vm.dS >= 0 ? '+' : ''}${vm.dS.toFixed(1)}`);
         d.style.color = vm.kind === 'build' ? HelmView.COLORS.build : HelmView.COLORS.groove;
@@ -220,3 +211,15 @@ class HelmView {
         text(X + W + 16, y(-F) + 14, `min ${vm.floor.toFixed(1)}`, { fill: HelmView.COLORS.build, 'font-size': 13, 'font-weight': 700 });
     }
 }
+
+// Plain assignments, not `static` class fields: the tab must run on iPads stuck at iOS 12
+// (static fields need Safari 14.5). docs/helm.md
+// Each mode maps its AWA range onto the half circle; off(a) = degrees from the top of the dial.
+HelmView.MODES = {
+    up:   { lo: 0,  hi: 45,  step: 10, off: a => a,       top: 'WIND',          name: 'UPWIND' },
+    down: { lo: 60, hi: 180, step: 20, off: a => 180 - a, top: 'DEAD DOWNWIND', name: 'DOWNWIND' },
+};
+HelmView.C = { x: 200, y: 300, r: 185 };
+HelmView.NS = 'http://www.w3.org/2000/svg';
+HelmView.COLORS = { spend: '#3fe0f5', build: '#ff4fd8', groove: '#35d49a', nodata: '#5d6880' };
+HelmView.clear = el => { while (el.firstChild) el.removeChild(el.firstChild); };   // replaceChildren() needs iOS 14

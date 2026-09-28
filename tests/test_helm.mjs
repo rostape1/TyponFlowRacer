@@ -153,10 +153,15 @@ console.log('engine');
     assert(!v.ok && v.main === 'NO NMEA', 'nothing received -> NO NMEA');
     v = e.update(state(10000, { rollAt: null }), 10000);
     assert(!v.ok && v.main === 'NO HEEL', 'no heel -> NO HEEL, not uncorrected numbers');
-    v = e.update(state(10000, { awaAt: 4000 }), 10000);
-    assert(!v.ok && v.main === 'NO WIND', 'wind 6 s old -> NO WIND');
-    v = e.update(state(10000, { bspAt: 4900 }), 10000);
-    assert(!v.ok && v.main === 'NO SPEED', 'speed over 5 s old -> NO SPEED');
+    // the instruments send apparent wind every ~4.7 s (max 5.2) and speed every ~2.2 s (max 2.6)
+    v = e.update(state(20000, { awaAt: 14500 }), 20000);
+    assert(v.ok, 'wind 5.5 s old is normal for this boat (a sentence every ~4.7 s), not NO WIND');
+    v = e.update(state(30000, { awaAt: 17500 }), 30000);
+    assert(!v.ok && v.main === 'NO WIND', 'wind 12.5 s old (two missed sentences) -> NO WIND');
+    v = e.update(state(40000, { bspAt: 33500 }), 40000);
+    assert(v.ok, 'speed 6.5 s old still counts');
+    v = e.update(state(50000, { bspAt: 41500 }), 50000);
+    assert(!v.ok && v.main === 'NO SPEED', 'speed 8.5 s old -> NO SPEED');
     v = e.update(state(10000), 17000);
     assert(!v.ok && v.main === 'NO NMEA', 'feed silent 7 s -> NO NMEA (checked against now, not the last sentence)');
     v = e.update(state(10000, { aws: 2, bsp: 1 }), 10000);
@@ -284,6 +289,24 @@ console.log('heel sign');
     assert(store.state.roll === Number(real.split(',')[10]) && store.state.rollAt === 1000, 'roll = YXXDR field 10, as build_polar.py reads it');
     store.ingest(withCk('YXXDR,A,-100.00,D,Yaw,A,0.50,D,Pitch,A,-24.30,D,Roll'), 2000);
     assert(store.state.roll === -24.3 && store.state.heel === 24.3, 'negative roll kept signed; heel stays the magnitude');
+}
+
+// ---------------------------------------------------------------- old iPads (iOS 12)
+// The helm must run on iPads stuck at iOS 12 (Safari 12). These features would stop a helm file from
+// even parsing there, leaving an empty tab: class static fields (Safari 14.5), optional chaining and
+// ?? (13.1); replaceChildren() (14) fails at runtime. Checked with acorn --ecma2018 on 2026-09-28.
+console.log('iOS 12');
+{
+    for (const f of ['static/js/helm.js', 'static/js/helm-logic.js', 'static/js/helm-targets.js']) {
+        const src = readFileSync(join(root, f), 'utf8').replace(/\/\/.*$/gm, '').replace(/\/\*[\s\S]*?\*\//g, '');
+        assert(!/\bstatic\s+[A-Za-z_$][\w$]*\s*[=;]/.test(src), `${f}: no class static fields`);
+        assert(!/\?\.[A-Za-z_$(\[]/.test(src) && !/\?\?/.test(src), `${f}: no ?. or ??`);
+        assert(!/replaceChildren|structuredClone|\.at\(/.test(src), `${f}: no replaceChildren / structuredClone / .at()`);
+    }
+    const css = readFileSync(join(root, 'static/css/style.css'), 'utf8');
+    const helmCss = css.slice(css.indexOf('/* ===== Helm tab')).replace(/\/\*[\s\S]*?\*\//g, '');
+    const bare = helmCss.split('\n').filter(l => l.includes('clamp(') && !/font-size: [^;]+; font-size: clamp\(/.test(l));
+    assert(bare.length === 0, `helm CSS: every clamp() has a plain fallback before it (${bare.length} without)`);
 }
 
 console.log(`\n${passed} passed, ${failed} failed`);

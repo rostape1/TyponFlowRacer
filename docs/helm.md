@@ -61,8 +61,11 @@ going deeper paid in 10+ kn and lost in 6–10), §8 (chop costs speed, not angl
 ## Failing visibly
 
 Grey banner, numbers blanked, never the last good value: **NO NMEA** (nothing, or nothing for 5 s,
-checked against the clock rather than the last sentence), **NO WIND**, **NO SPEED**, **NO HEEL**
-(without heel the wind angle cannot be corrected), **TOO LIGHT** (under 4 kn, the certificate's first
+checked against the clock rather than the last sentence), **NO WIND** (12 s), **NO SPEED** (8 s),
+**NO HEEL** (5 s; without heel the wind angle cannot be corrected). The limits are per input because
+the instruments send at very different rates (measured in the BBS logs): apparent wind every ~4.7 s
+(max 5.2), boat speed every ~2.2 s (max 2.6), heel at 20 Hz. A single 5 s limit flickered NO WIND
+on 44% of wind gaps. **TOO LIGHT** (under 4 kn, the certificate's first
 column). Ages use the stream clock: wall time live, log time in replay, so a paused replay is not
 stale.
 
@@ -100,6 +103,15 @@ The calibration exists twice, in Python and JS (the `P20` trap); the parity fixt
 them together.
 
 ## Known limitations
+
+- **The wind angle updates only every ~5 s.** That is the rate the instruments put `$IIMWV` on the
+  NMEA feed, so the banner and dial cannot react to a wind change faster. If the B&G can be set to
+  output apparent wind more often, the display gets proportionally quicker; that is an instrument
+  setting, not the Pi.
+- **Old iPads.** The helm files stay at Safari 12 syntax (iPads stuck at iOS 12.5: Air 1, mini 2/3):
+  no class static fields, `?.`, `??` or `replaceChildren`, and a plain `font-size` before every
+  `clamp()`. `tests/test_helm.mjs` guards it. If the code still fails to load, the tab says HELM
+  UNAVAILABLE instead of staying empty. Not tested on a physical iOS 12 device.
 
 - **Port vs starboard.** Under 13 kn port reads a few degrees wider than starboard (probably
   paddlewheel or vane; [polar.md](polar.md) §2). The tab inherits it: port tends to show "wide",

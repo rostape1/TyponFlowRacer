@@ -2849,7 +2849,16 @@ if (nmeaStore && nmeaClient) {
     }
 
     // Initialize helm view (docs/helm.md); reopen it if it was the last tab used
-    if (typeof HelmView !== 'undefined' && typeof HelmLogic !== 'undefined' && typeof HELM_TARGETS !== 'undefined') {
+    const helmReady = typeof HelmView !== 'undefined' && typeof HelmLogic !== 'undefined' && typeof HELM_TARGETS !== 'undefined';
+    if (!helmReady) {
+        // a file that failed to load or parse (an old browser) must not leave an empty dark tab
+        const hv = document.getElementById('helm-view');
+        if (hv) {
+            hv.textContent = 'HELM UNAVAILABLE: its code did not load in this browser. Needs iOS 12 or later; reload once, then check window.__bootFailures.';
+            hv.style.cssText += ';padding:24px;font-size:20px;color:#ff4fd8';
+        }
+    }
+    if (helmReady) {
         window._helmView = new HelmView(nmeaStore, nmeaClient);
         window._helmView.init();
         let reopen = false;
