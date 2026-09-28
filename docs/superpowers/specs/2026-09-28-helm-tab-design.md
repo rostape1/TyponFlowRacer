@@ -114,7 +114,8 @@ router's polar table (between marker comments, never hand-edited). Recalibration
 commit, deploy. Nothing adapts on its own.
 
 **Paddlewheel scale:** `fit_paddlewheel` fits `k` per day. The generator writes the **median of the
-race days** and prints the spread; a single live number is required.
+per-day fits** (currently the four BBS race days: 1.024, range 1.021–1.048) and prints them; a single
+live number is required.
 
 **Heel sign:** the store's `heel` comes from the same `YXXDR` roll field `build_polar.py` parses
 (negative = heeled to port). A test asserts the convention on a real log line.

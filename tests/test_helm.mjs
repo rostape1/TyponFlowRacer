@@ -209,6 +209,27 @@ console.log('engine');
     assert(v.ok && v.kind === 'build', 'after a seek back, no hold carried over from the other time');
 }
 
+// ---------------------------------------------------------------- heel sign, on real log lines
+// build_polar.py reads roll from YXXDR field 10 and treats negative as heeled to port. The store
+// must keep that signed number (it used to keep only |roll|, which loses the tack).
+console.log('heel sign');
+{
+    const parserSrc = readFileSync(join(root, 'static/js/nmea-parser.js'), 'utf8');
+    const storeSrc = readFileSync(join(root, 'static/js/nmea-store.js'), 'utf8');
+    const sb = {};
+    new Function('module', 'requestAnimationFrame', 'CustomEvent', 'AISDecoder',
+        parserSrc + '\n' + storeSrc + '\nmodule.NmeaStore = NmeaStore;')(
+        sb, () => 0, class { constructor(type, o) { this.type = type; this.detail = o && o.detail; } }, { processSentence: () => null });
+    const withCk = body => { let c = 0; for (const ch of body) c ^= ch.charCodeAt(0); return `$${body}*${c.toString(16).toUpperCase().padStart(2, '0')}`; };
+    const store = new sb.NmeaStore();
+    // verbatim from nmea_2026-09-19_125203.txt (R5)
+    const real = '$YXXDR,A,-110.04,D,Yaw,A,0.06,D,Pitch,A,1.62,D,Roll*4A';
+    store.ingest(real, 1000);
+    assert(store.state.roll === Number(real.split(',')[10]) && store.state.rollAt === 1000, 'roll = YXXDR field 10, as build_polar.py reads it');
+    store.ingest(withCk('YXXDR,A,-100.00,D,Yaw,A,0.50,D,Pitch,A,-24.30,D,Roll'), 2000);
+    assert(store.state.roll === -24.3 && store.state.heel === 24.3, 'negative roll kept signed; heel stays the magnitude');
+}
+
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failed) process.exit(1);
 console.log('all passed');
