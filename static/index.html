@@ -21,6 +21,7 @@
         <button class="tab-btn active" data-tab="map-view">Map</button>
         <button class="tab-btn" data-tab="charts-view">Charts</button>
         <button class="tab-btn" data-tab="radar-view">Radar</button>
+        <button class="tab-btn" data-tab="helm-view">Helm</button>
         <span id="nmea-status" class="nmea-status">NMEA: Off</span>
     </div>
 
@@ -335,6 +336,9 @@
     </div>
 
     <!-- Radar view -->
+    <!-- Helm view: race steering display, built by js/helm.js (docs/helm.md) -->
+    <div id="helm-view" class="view-container" style="display:none"></div>
+
     <div id="radar-view" class="view-container" style="display:none">
         <div id="radar-container">
             <div id="radar-header">
@@ -436,6 +440,9 @@
             .then(() => loadScript('js/nmea-client.js'))
             .then(() => loadScript('js/sailing-charts.js'))
             .then(() => loadScript('js/radar-view.js'))
+            .then(() => loadScript('js/helm-targets.js'))
+            .then(() => loadScript('js/helm-logic.js'))
+            .then(() => loadScript('js/helm.js'))
             .then(() => loadScript('js/vessel-names.js'))
             .then(() => loadScript('js/competitor-labels.js'))
             .then(() => loadScript('js/race-tracks.js'))

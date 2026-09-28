@@ -111,7 +111,8 @@ const HelmLogic = (() => {
         }
         if (dS < -C.FLOOR && vmgPct < 100) return { key: 'heat', main: 'HEAT UP', sub: 'build', kind: 'build', steer: -1 };
         if (dS >= 0 && dA < -C.HOT_DOWN) return { key: 'deeper', main: 'SAIL DEEPER', sub: 'down', kind: 'spend', steer: 1 };
-        const tryDeeper = vmgPct >= 100 && tws10 >= C.TRY_DEEPER_TWS && dS >= -C.FLOOR;
+        // only a suggestion while not already deeper than the target (a dead run at 111% is deep enough)
+        const tryDeeper = vmgPct >= 100 && tws10 >= C.TRY_DEEPER_TWS && dS >= -C.FLOOR && dA <= C.HOT_DOWN;
         return { key: tryDeeper ? 'groove-deeper' : 'groove', main: 'IN THE GROOVE', sub: tryDeeper ? 'tryDeeper' : 'hold', kind: 'groove', steer: 0 };
     }
     function subtitle(code, tSpeed, tAwa) {

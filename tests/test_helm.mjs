@@ -112,6 +112,8 @@ console.log('rules');
     assert(D(0, 0, 100) === 'groove-deeper', 'downwind: VMG at ORC in 11 kn -> try a degree deeper');
     assert(D(0, 0, 100, { tws10: 8 }) === 'groove', 'downwind: not in light air, where deeper lost');
     assert(D(0, -0.31, 101) === 'groove', 'downwind: under the floor, no "try deeper"');
+    assert(D(2, 0.2, 105) === 'groove-deeper', 'downwind: within the groove band, try deeper');
+    assert(D(38, 1.0, 111) === 'groove', 'downwind: already 38 deg deeper than target (R6 12:42) -> no "try deeper"');
 
     // arrows: upwind up/down; downwind the way to turn the bow
     assert(L.label('POINT HIGHER', -1, true, 1) === '▲ POINT HIGHER' && L.label('BEAR OFF', 1, true, -1) === '▼ BEAR OFF', 'upwind arrows');

@@ -188,7 +188,7 @@ The 60 s window runs from that moment.
 | `static/js/helm-targets.js` | **new, generated** by `build_polar.py --write-js`: ORC arrays + calibration constants |
 | `static/index.html` | Helm tab button + view container; script tags versioned like the others (`P41`) |
 | `static/css/style.css` | Helm layout, landscape/portrait, palette C |
-| `static/sw.js` | add the three JS files to `ASSETS` — they must be committed first (`P43`) |
+| `static/sw.js` | **no change**: like the other NMEA modules the helm files are not precached (the tab needs the Pi's feed anyway), so they cannot trip `P43` |
 | `tools/build_polar.py` | `--write-js` also writes `helm-targets.js` and a parity fixture (§9) |
 | `tests/test_helm.mjs` | **new**, added to `deploy.yml` |
 | `docs/helm.md` | **new** topic doc; row in CLAUDE.md's file map, tests table and documentation map |

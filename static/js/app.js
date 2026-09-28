@@ -2801,6 +2801,13 @@ if (nmeaStore && nmeaClient) {
             document.getElementById('charts-view').style.display = targetId === 'charts-view' ? '' : 'none';
             const radarEl = document.getElementById('radar-view');
             if (radarEl) radarEl.style.display = targetId === 'radar-view' ? '' : 'none';
+            const helmEl = document.getElementById('helm-view');
+            if (helmEl) helmEl.style.display = targetId === 'helm-view' ? '' : 'none';
+            if (window._helmView) {
+                if (targetId === 'helm-view') window._helmView.show(); else window._helmView.hide();
+            }
+            // Remember the Helm tab so a home-screen launch at the wheel opens straight to it
+            try { localStorage.setItem('helmTabOpen', targetId === 'helm-view' ? '1' : '0'); } catch (e) { /* private mode */ }
 
             // Map elements visibility
             const mapOnly = ['status-bar', 'timeline-strip', 'layers-tray', 'forecast-quick-btns',
@@ -2821,7 +2828,7 @@ if (nmeaStore && nmeaClient) {
         const hash = (location.hash || '').replace('#', '');
         if (!hash) return;
         const tabFor = { map: 'map-view', charts: 'charts-view', radar: 'radar-view',
-                         playback: 'map-view' };
+                         helm: 'helm-view', playback: 'map-view' };
         const targetId = tabFor[hash];
         if (!targetId) return;
         const btn = document.querySelector(`.tab-btn[data-tab="${targetId}"]`);
@@ -2839,6 +2846,18 @@ if (nmeaStore && nmeaClient) {
     if (typeof RadarView !== 'undefined') {
         window._radarView = new RadarView(vesselStore);
         window._radarView.init();
+    }
+
+    // Initialize helm view (docs/helm.md); reopen it if it was the last tab used
+    if (typeof HelmView !== 'undefined' && typeof HelmLogic !== 'undefined' && typeof HELM_TARGETS !== 'undefined') {
+        window._helmView = new HelmView(nmeaStore, nmeaClient);
+        window._helmView.init();
+        let reopen = false;
+        try { reopen = localStorage.getItem('helmTabOpen') === '1'; } catch (e) { /* private mode */ }
+        if (reopen && !location.hash) {
+            const b = document.querySelector('.tab-btn[data-tab="helm-view"]');
+            if (b) setTimeout(() => b.click(), 0);
+        }
     }
 
     // NMEA status display
