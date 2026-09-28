@@ -32,7 +32,11 @@ class NmeaStore extends _EventEmitter {
             twa: null, twd: null, tws: null,
             depth: null,
             heel: null, pitch: null,
+            roll: null,         // signed heel, negative = heeled to port (heel is its magnitude)
             rot: null,
+            // stream time (ms) of the last reading of each, so a consumer can tell which input went
+            // stale (the Helm tab: docs/helm.md). Stream time = log time in replay.
+            awaAt: null, bspAt: null, rollAt: null,
             lastUpdate: null,
         };
 
@@ -134,6 +138,7 @@ class NmeaStore extends _EventEmitter {
                 if (parsed.reference === 'R') {
                     this.state.awa = parsed.angle;
                     this.state.aws = parsed.speed;
+                    this.state.awaAt = t;
                     this._recordHistory('awa', parsed.angle, t);
                     this._recordHistory('aws', parsed.speed, t);
                     this._computeTrueWind(t);
@@ -162,6 +167,7 @@ class NmeaStore extends _EventEmitter {
 
             case 'VHW':
                 this._update('bsp', parsed.bsp, t);
+                this.state.bspAt = t;
                 break;
 
             case 'DPT':
@@ -178,7 +184,11 @@ class NmeaStore extends _EventEmitter {
                 break;
 
             case 'XDR':
-                if (parsed.roll != null) this.state.heel = Math.abs(parsed.roll);
+                if (parsed.roll != null) {
+                    this.state.heel = Math.abs(parsed.roll);
+                    this.state.roll = parsed.roll;
+                    this.state.rollAt = t;
+                }
                 if (parsed.pitch != null) this.state.pitch = parsed.pitch;
                 break;
         }
