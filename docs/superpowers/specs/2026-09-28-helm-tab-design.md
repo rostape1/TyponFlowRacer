@@ -160,6 +160,17 @@ in 10+ kn (0.01–0.05 kn per degree, partly puffs) and lost it in 6–10 kn, wh
 deeper than ORC; slow-but-deep with good VMG is fine. **Provisional:** 70 minutes of downwind data,
 and the 0.3 kn floor was only measured upwind.
 
+### Reach
+
+Replay of R5 and R6 showed reach legs (100° TWA) being judged against the run's gybe angle ("sail
+deeper by 77°"). The tab cannot tell a reach leg from a broad run without the mark, so: when TWA is
+more than **25°** from the current target angle (beat angle upwind, gybe angle downwind) it is a
+**REACH**, and it stays one until back within **20°**. On a reach there is no angle advice and no
+target on the dial; the speed bar and BSP tile compare with **ORC's polar speed at the angle
+sailed** (bilinear on the router's table, `polar_speed()` in `build_polar.py`), and the footer shows
+% of polar instead of VMG. Banner: **REACH** · polar *X* kn, green at or above polar − 0.3 kn,
+magenta below, never an arrow. Entering or leaving a reach counts as a rounding (§ below).
+
 ### Tack / rounding detection
 
 A tack, gybe or rounding = the sign of smoothed AWA flips and holds for 10 s, or the mode switches.

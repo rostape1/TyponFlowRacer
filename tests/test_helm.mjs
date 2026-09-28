@@ -47,6 +47,10 @@ console.log('parity with build_polar.py');
     let tbad = 0;
     for (const f of fixture.target) if (!near(L.awaByBow(f.twa, f.tws10, f.stw, f.lee), f.awa, 1e-4)) tbad++;
     assert(tbad === 0, `target AWA: ${tbad} of ${fixture.target.length} cases differ from Python`);
+
+    let pbad = 0;
+    for (const f of fixture.polar) if (!near(L.polarSpeed(f.twa, f.tws10), f.bsp, 1e-4)) pbad++;
+    assert(pbad === 0 && fixture.polar.length > 50, `polar speed: ${pbad} of ${fixture.polar.length} cases differ from Python`);
 }
 
 // the same sailing on either tack reads the same corrected AWA: the vane offset is really removed.
@@ -114,6 +118,13 @@ console.log('rules');
     assert(D(0, -0.31, 101) === 'groove', 'downwind: under the floor, no "try deeper"');
     assert(D(2, 0.2, 105) === 'groove-deeper', 'downwind: within the groove band, try deeper');
     assert(D(38, 1.0, 111) === 'groove', 'downwind: already 38 deg deeper than target (R6 12:42) -> no "try deeper"');
+
+    const R = (dS) => L.decide({ up: false, reach: true, dA: 0, dS, vmgPct: 16, tws10: 12, sinceTack: 999 });
+    assert(R(0.1).key === 'reach' && R(0.1).steer === 0 && R(0.1).kind === 'groove', 'reach at polar speed: no angle advice');
+    assert(R(-0.5).key === 'reach-slow' && R(-0.5).kind === 'build' && R(-0.5).steer === 0, 'reach under polar: build colour, still no steering arrow');
+    assert(L.decide({ up: true, reach: true, dA: 40, dS: 0.5, vmgPct: 60, tws10: 12, sinceTack: 999 }).key === 'reach',
+        'a close reach in upwind mode is a reach, not "point higher by 40"');
+    assert(L.subtitle('polar', 7.43, null) === 'polar 7.4 kn', 'reach subtitle names the polar speed');
 
     // arrows: upwind up/down; downwind the way to turn the bow
     assert(L.label('POINT HIGHER', -1, true, 1) === '▲ POINT HIGHER' && L.label('BEAR OFF', 1, true, -1) === '▼ BEAR OFF', 'upwind arrows');
@@ -201,6 +212,51 @@ console.log('engine');
     assert(mode(70) === 'down', 'TWA ~112 -> downwind');
     assert(mode(36) === 'down', 'TWA ~85 stays downwind (switch back under 80, not 90)');
     assert(mode(28) === 'up', 'close-hauled again -> upwind');
+
+    // REACH: TWA more than 25 deg from the target angle. Find the corrected AWA that gives a wanted TWA.
+    const awaFor = (twaWanted, aws, bsp) => {
+        let lo = 1, hi = 179;
+        for (let i = 0; i < 60; i++) {
+            const mid = (lo + hi) / 2, c = L.chain(rawAwa(mid, aws), aws, bsp, 0);
+            if (Math.abs(c.twa) < twaWanted) lo = mid; else hi = mid;
+        }
+        return (lo + hi) / 2;
+    };
+    // corrected AWA whose TWA is `off` deg from the gybe target at that point's own wind (true wind
+    // speed changes with the angle here, since the apparent wind is held fixed)
+    const awaOff = (off, aws, bsp) => {
+        let lo = 61, hi = 179;
+        for (let i = 0; i < 60; i++) {
+            const mid = (lo + hi) / 2, c = L.chain(rawAwa(mid, aws), aws, bsp, 0);
+            if (Math.abs(c.twa) - L.targets(c.tws10, false).twa < off) lo = mid; else hi = mid;
+        }
+        return (lo + hi) / 2;
+    };
+    {
+        const aws = 9, bsp = 7.0;
+        e = L.create();
+        v = run(e, 0, 20000, { A: awaFor(100, aws, bsp), aws, bsp });
+        assert(v.mode === 'down' && v.reach && v.key.startsWith('reach') && v.tAwa === null,
+            `100 TWA, far from the gybe target -> REACH, no angle target (${v.key})`);
+        assert(Math.abs(v.tSpeed - L.polarSpeed(v.twa, v.tws10)) < 1e-9, 'reach target speed = ORC polar at the angle sailed');
+        const offOf = v => v.twa - L.targets(v.tws10, false).twa;
+        v = run(e, 20250, 40000, { A: awaOff(-22, aws, bsp), aws, bsp });
+        assert(v.reach, `from a reach, 22 deg off the target stays a reach (out at 20; off ${offOf(v).toFixed(1)})`);
+        v = run(e, 40250, 60000, { A: awaOff(-15, aws, bsp), aws, bsp });
+        assert(!v.reach && v.mode === 'down', `within 20 deg of the target -> downwind rules again (off ${offOf(v).toFixed(1)})`);
+        v = run(e, 60250, 80000, { A: awaOff(-22, aws, bsp), aws, bsp });
+        assert(!v.reach, `from a run, 22 deg off the target is still a run (in at 25; off ${offOf(v).toFixed(1)})`);
+        v = run(e, 80250, 100000, { A: awaOff(-28, aws, bsp), aws, bsp });
+        assert(v.reach, `past 25 deg off -> REACH (off ${offOf(v).toFixed(1)})`);
+    }
+    {
+        // a close reach in upwind mode, then rounding onto the beat: the after-tack window opens
+        e = L.create();
+        v = run(e, 0, 20000, { A: awaFor(80, 12, 7.0), aws: 12, bsp: 7.0 });
+        assert(v.mode === 'up' && v.reach, `close reach (80 TWA) in upwind mode -> REACH (${v.key})`);
+        v = run(e, 20250, 40000, { A: 28, aws: 16, bsp: 4.5 });
+        assert(!v.reach && v.sinceTack < 25, `rounding from the reach onto the beat opens the post-tack window (${v.sinceTack.toFixed(0)} s)`);
+    }
 
     // a replay seek backwards starts clean: the first banner shows immediately
     e = L.create();

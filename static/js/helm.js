@@ -144,18 +144,19 @@ class HelmView {
         const word = vm.up ? (vm.dA > 0 ? 'wide' : 'high') : (vm.dA > 0 ? 'deep' : 'hot');
         this.tAwa.v.textContent = `${Math.round(vm.awa)}°`;
         this.tAwa.t.replaceChildren();
-        this.tAwa.t.append(`target ${Math.round(vm.tAwa)}°`);
-        if (Math.abs(vm.dA) >= 0.5) {
+        this.tAwa.t.append(vm.reach ? 'reach · no angle target' : `target ${Math.round(vm.tAwa)}°`);
+        if (!vm.reach && Math.abs(vm.dA) >= 0.5) {
             const b = this._el('b', null, this.tAwa.t, ` · ${Math.round(Math.abs(vm.dA))}° ${word}`);
             b.style.color = col;
         }
         this.tBsp.v.textContent = vm.stw.toFixed(1);
         this.tBsp.t.replaceChildren();
-        this.tBsp.t.append(`target ${vm.tSpeed.toFixed(1)} · `);
+        this.tBsp.t.append(`${vm.reach ? 'polar' : 'target'} ${vm.tSpeed.toFixed(1)} · `);
         const d = this._el('b', null, this.tBsp.t, `${vm.dS >= 0 ? '+' : ''}${vm.dS.toFixed(1)}`);
         d.style.color = vm.kind === 'build' ? HelmView.COLORS.build : HelmView.COLORS.groove;
 
-        const parts = [`TWS ${vm.tws10.toFixed(1)} kn`, `TWA ${Math.round(vm.twa)}°`, `VMG ${Math.round(vm.vmgPct)}% of ORC`];
+        const parts = [`TWS ${vm.tws10.toFixed(1)} kn`, `TWA ${Math.round(vm.twa)}°`,
+            vm.reach ? `${Math.round(vm.polarPct)}% of polar` : `VMG ${Math.round(vm.vmgPct)}% of ORC`];
         if (vm.sinceTack < HelmLogic.C.TACK_S) parts.push(`tacked ${Math.round(vm.sinceTack)} s ago`);
         if (vm.aboveRange) parts.push('above ORC range');
         this.foot.textContent = parts.join(' · ');
@@ -166,7 +167,7 @@ class HelmView {
         const M = HelmView.MODES[this.mode], g = this.gMarks, z = 90 / (M.hi - M.lo);
         for (const sd of [-1, 1]) for (let a = M.lo; a <= M.hi; a += M.step) {
             if (M.off(a) === 0 || a === M.lo) continue;
-            if (vm.ok && sd === vm.side && Math.abs(a - vm.tAwa) * z < 14) continue;
+            if (vm.ok && vm.tAwa != null && sd === vm.side && Math.abs(a - vm.tAwa) * z < 14) continue;
             const [lx, ly] = this._pt(sd, a, HelmView.C.r - 32);
             this._svg('text', { x: lx, y: ly + 6, 'text-anchor': 'middle', fill: '#aab5c9', 'font-size': 15 }, g).textContent = a;
         }
@@ -176,7 +177,14 @@ class HelmView {
         const g = this.gMarks, C = HelmView.C, M = HelmView.MODES[this.mode], z = 90 / (M.hi - M.lo);
         const side = vm.side, band = vm.up ? HelmLogic.C.GROOVE_UP : HelmLogic.C.HOT_DOWN;
         const clampA = a => Math.max(M.lo - 1, Math.min(M.hi + 1, a));
-        const tA = clampA(vm.tAwa), aA = clampA(vm.awa);
+        const aA = clampA(vm.awa);
+        if (vm.reach) {
+            // reaching: the mark sets the course, so only where we are, no target to steer to
+            const [ax, ay] = this._pt(side, aA, C.r - 14), [bx, by] = this._pt(side, aA, C.r + 16);
+            this._svg('line', { x1: ax, y1: ay, x2: bx, y2: by, stroke: col, 'stroke-width': 12, 'stroke-linecap': 'round' }, g);
+            return;
+        }
+        const tA = clampA(vm.tAwa);
         // groove band
         const [g0x, g0y] = this._pt(side, tA - band, C.r + 4), [g1x, g1y] = this._pt(side, tA + band, C.r + 4);
         const cw = (vm.up ? 1 : -1) * side > 0 ? 1 : 0;

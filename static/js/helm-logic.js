@@ -29,6 +29,8 @@ const HelmLogic = (() => {
         BREEZE_TWS: 13,      // kn (10 m): upwind cues change to flatten / feather
         TRY_DEEPER_TWS: 10,  // kn (10 m): going deeper paid from here, lost below (docs/polar.md §3)
         SAMPLE_MS: 200,      // one smoothing sample per this much stream time
+        REACH_IN: 25,        // deg of TWA from the target angle: past this we are reaching, not beating/running...
+        REACH_OUT: 20,       // ...and back under this we are sailing to the target again (hysteresis)
     };
 
     const rad = d => d * Math.PI / 180, deg = r => r * 180 / Math.PI;
@@ -97,9 +99,18 @@ const HelmLogic = (() => {
         return { twa, vmg, speed: vmg / -Math.cos(rad(twa)) };
     }
 
+    /** ORC rated speed at any TWA: bilinear on the router's table, clamped (polar_speed() in Python). */
+    function polarSpeed(twa, tws10) {
+        const P = H.orc.polar, a = clip(Math.abs(twa), P.twa[0], P.twa[P.twa.length - 1]);
+        const col = P.tws.map((_, j) => interp(a, P.twa, P.bsp.map(row => row[j])));
+        return interp(tws10, P.tws, col);
+    }
+
     // ---- the instruction. Upwind: speed first, never foot below the target angle when slow.
     // Downwind: slow only matters if VMG suffers too. docs/helm.md has the table and the evidence.
-    function decide({ up, dA, dS, vmgPct, tws10, sinceTack }) {
+    function decide({ up, reach, dA, dS, vmgPct, tws10, sinceTack }) {
+        // reaching: the mark sets the course, so no angle advice; speed against the polar at this angle
+        if (reach) return { key: dS < -C.FLOOR ? 'reach-slow' : 'reach', main: 'REACH', sub: 'polar', kind: dS < -C.FLOOR ? 'build' : 'groove', steer: 0 };
         if (up) {
             if (dS < -C.FLOOR) {
                 if (sinceTack < C.TACK_S) return { key: 'bearoff-accel', main: 'BEAR OFF', sub: 'build', kind: 'build', steer: 1 };
@@ -116,8 +127,9 @@ const HelmLogic = (() => {
         return { key: tryDeeper ? 'groove-deeper' : 'groove', main: 'IN THE GROOVE', sub: tryDeeper ? 'tryDeeper' : 'hold', kind: 'groove', steer: 0 };
     }
     function subtitle(code, tSpeed, tAwa) {
-        const V = `${tSpeed.toFixed(1)} kn`, A = `${Math.round(tAwa)}°`;
+        const V = `${tSpeed.toFixed(1)} kn`, A = tAwa == null ? '' : `${Math.round(tAwa)}°`;
         return {
+            polar: `polar ${V}`,
             build: `build to ${V}`, toAngle: `to ${A}`, down: `down to ${V}`,
             holdTrim: 'hold angle · trim for speed', holdChop: 'hold angle · flatten · power through chop',
             hold: 'hold it', flat: 'stay flat · feather gusts', tryDeeper: 'try a degree deeper · watch VMG',
@@ -141,11 +153,11 @@ const HelmLogic = (() => {
     /** The live engine: feed it the store's state and the current time, get the view model back. */
     function create() {
         let buf = [], lastT = null, mode = null, side = 0, flipSide = 0, flipSince = null;
-        let lastTackT = -Infinity, shown = null, cand = null, candSince = null;
+        let lastTackT = -Infinity, shown = null, cand = null, candSince = null, reach = false;
 
         function reset() {
             buf = []; lastT = null; mode = null; side = 0; flipSide = 0; flipSince = null;
-            lastTackT = -Infinity; shown = null; cand = null; candSince = null;
+            lastTackT = -Infinity; shown = null; cand = null; candSince = null; reach = false;
         }
         function noData(main, sub) {
             shown = null; cand = null; candSince = null;
@@ -193,8 +205,14 @@ const HelmLogic = (() => {
             } else flipSide = 0;
 
             const tg = targets(tws10, up);
-            const tAwa = awaByBow(tg.twa, tws10, stw, lee);
-            const awa = Math.abs(awaCorr), dA = awa - tAwa, dS = stw - tg.speed;
+            // reaching: TWA far from the target angle (hysteresis); entering or leaving counts as a rounding
+            const off = Math.abs(aTwa - tg.twa);
+            const nowReach = reach ? off > C.REACH_OUT : off > C.REACH_IN;
+            if (nowReach !== reach && buf.length > 1) lastTackT = t;
+            reach = nowReach;
+            const tSpeed = reach ? polarSpeed(aTwa, tws10) : tg.speed;
+            const tAwa = reach ? null : awaByBow(tg.twa, tws10, stw, lee);
+            const awa = Math.abs(awaCorr), dA = reach ? 0 : awa - tAwa, dS = stw - tSpeed;
             const vmgs = buf.map(b => {
                 const g = targets(b.tws10, up);
                 return 100 * b.stw * Math.cos(rad(Math.abs(b.twa))) * (up ? 1 : -1) / g.vmg;
@@ -202,7 +220,7 @@ const HelmLogic = (() => {
             const vmgPct = mean(vmgs);
             const sinceTack = (t - lastTackT) / 1000;
 
-            const d = decide({ up, dA, dS, vmgPct, tws10, sinceTack });
+            const d = decide({ up, reach, dA, dS, vmgPct, tws10, sinceTack });
             // banner hold: a new instruction must persist before it replaces the shown one
             if (!shown) { shown = d; cand = null; }
             else if (d.key !== shown.key) {
@@ -212,9 +230,9 @@ const HelmLogic = (() => {
 
             return {
                 ok: true, mode, up, side,
-                main: label(shown.main, shown.steer, up, side), sub: subtitle(shown.sub, tg.speed, tAwa),
-                kind: shown.kind, key: shown.key,
-                awa, tAwa, dA, stw, tSpeed: tg.speed, floor: tg.speed - C.FLOOR, dS,
+                main: label(shown.main, shown.steer, up, side), sub: subtitle(shown.sub, tSpeed, tAwa),
+                kind: shown.kind, key: shown.key, reach,
+                awa, tAwa, dA, stw, tSpeed, floor: tSpeed - C.FLOOR, dS, polarPct: 100 * stw / tSpeed,
                 tws10, twa: aTwa, vmgPct, sinceTack, aboveRange: tws10 > H.orc.tws[H.orc.tws.length - 1],
             };
         }
@@ -222,7 +240,7 @@ const HelmLogic = (() => {
     }
 
     return {
-        C, signed, interp, paddleStarboard, heelCorrect, leeway, trueWind, upwashAt, chain, awaByBow, targets,
+        C, signed, interp, paddleStarboard, heelCorrect, leeway, trueWind, upwashAt, chain, awaByBow, targets, polarSpeed,
         decide, subtitle, label, create, setTargets: t => { H = t; },
     };
 })();
