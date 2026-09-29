@@ -1,0 +1,269 @@
+<!doctype html>
+<html><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Helm mockup (throwaway)</title>
+<style>
+  :root { --bg:#161d2b; --panel:#252e42; --tile:#2c3650; --ink:#e8edf5; --dim:#8a97ad;
+          --green:#35d49a; --amber:#ff4fd8; --red:#ef5f5a; --blue:#3fe0f5; --grey:#5d6880; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:#0c111b; font-family:-apple-system,"SF Pro Display",system-ui,sans-serif;
+         color:var(--ink); display:flex; gap:28px; justify-content:center; padding:24px; flex-wrap:wrap; }
+  .phone { width:420px; background:var(--bg); border-radius:28px; padding:14px; box-shadow:0 10px 40px #0008; }
+  .cmd { border-radius:18px; padding:14px 10px 12px; text-align:center; }
+  .cmd .main { font-size:40px; font-weight:800; letter-spacing:.5px; line-height:1; }
+  .cmd .sub  { font-size:20px; font-weight:600; margin-top:6px; opacity:.9; }
+  .dial { background:var(--panel); border-radius:18px; margin-top:10px; padding:4px 0 0; }
+  svg text { font-family:inherit; }
+  .tiles { display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-top:10px; }
+  .tile { background:var(--tile); border-radius:16px; padding:10px 8px; text-align:center; }
+  .tile .k { font-size:17px; font-weight:600; color:var(--dim); }
+  .tile .v { font-size:54px; font-weight:600; line-height:1.05; }
+  .tile .t { font-size:17px; color:var(--dim); }
+  .demo { width:300px; color:var(--dim); font-size:14px; line-height:1.45; }
+  .demo button { display:block; width:100%; margin:6px 0; padding:10px; border-radius:10px; border:1px solid #33405c;
+                 background:#1c2436; color:var(--ink); font-size:15px; text-align:left; cursor:pointer; }
+  .demo button.on { border-color:var(--blue); background:#243152; }
+  .demo h3 { color:var(--ink); margin:0 0 6px; }
+
+  /* device frames for comparison: ?layout=portrait|landscape */
+  body.dev { padding:0; background:var(--bg); display:block; }
+  body.dev .demo { display:none; }
+  body.dev .phone { width:100vw; height:100vh; border-radius:0; box-shadow:none; padding:10px; display:flex; flex-direction:column; }
+  body.dev .dial { flex:1; display:flex; align-items:center; justify-content:center; }
+  body.dev .dial svg { width:100%; height:100%; }
+  body.land .phone { display:grid; grid-template-columns: 1.35fr 1fr; grid-template-rows:auto 1fr auto;
+                     grid-template-areas:"cmd cmd" "dial tiles" "foot foot"; gap:0 10px; }
+  body.land .cmd { grid-area:cmd; padding:8px 10px; }
+  body.land .cmd .main { font-size:34px; display:inline; }
+  body.land .cmd .sub { font-size:22px; display:inline; margin-left:14px; }
+  body.land .dial { grid-area:dial; }
+  body.land .tiles { grid-area:tiles; grid-template-columns:1fr; margin-top:10px; }
+  body.land .tile .v { font-size:60px; }
+  body.land #foot { grid-area:foot; }
+  body.port .cmd { padding:20px 10px 16px; }
+  body.port .cmd .main { font-size:46px; }
+  body.port .cmd .sub { font-size:24px; }
+  body.port .tile { padding:16px 8px; }
+  body.port .tile .v { font-size:84px; }
+  body.port .tile .t { font-size:18px; }
+  .pulse { animation: pulse 1.2s ease-in-out infinite; }
+  @keyframes pulse { 50% { opacity:.45; } }
+</style></head>
+<body>
+<div class="phone">
+  <div class="cmd" id="cmd"><div class="main" id="cmdMain">—</div><div class="sub" id="cmdSub">—</div></div>
+
+  <div class="dial">
+    <svg id="svg" viewBox="-16 70 432 256" width="392">
+      <!-- arc, ticks and labels are drawn by script -->
+      <g id="scale"></g>
+      <g id="marks"></g>
+      <!-- speed bar in the core of the dial -->
+      <g id="speed"></g>
+    </svg>
+  </div>
+
+  <div class="tiles">
+    <div class="tile"><div class="k" style="color:var(--blue)">AWA</div>
+      <div class="v" id="awaV">—</div><div class="t" id="awaT">target —</div></div>
+    <div class="tile"><div class="k" style="color:var(--green)">BSP</div>
+      <div class="v" id="bspV">—</div><div class="t" id="bspT">target —</div></div>
+  </div>
+  <div style="text-align:center;color:var(--dim);font-size:15px;margin:10px 0 2px" id="foot">—</div>
+</div>
+
+<div class="demo">
+  <h3>Mockup — pick a state</h3>
+  <b style="color:#c8d6e5">Upwind</b>
+  <button data-s="tack">20 s after a tack, slow → BEAR OFF, build speed</button>
+  <button data-s="higher">Wide, at speed → POINT HIGHER (spend speed on height)</button>
+  <button data-s="slow">Slow, at/wide of angle → BUILD SPEED (steer target, trim)</button>
+  <button data-s="pinch">Slow and pinching → BEAR OFF to target angle</button>
+  <button data-s="chop">16 kn chop, slow → BUILD SPEED (flatten, power through chop)</button>
+  <button data-s="breeze">16 kn, on target → IN THE GROOVE + feather cue</button>
+  <b style="color:#c8d6e5">Downwind</b>
+  <button data-s="dHot">Hot, at speed → SAIL DEEPER</button>
+  <button data-s="dSlow">Slow and VMG below ORC → HEAT UP</button>
+  <button data-s="dDeepOk">Slow but deep, VMG ≥ ORC → hold it</button>
+  <button data-s="dGroove">On target, 11 kn → GROOVE, try a degree deeper</button>
+  <button data-s="dLight">On target, 8 kn → GROOVE, hold it (deeper lost in light air)</button>
+  <button data-s="dBroad">Broad reach, at target → IN THE GROOVE</button>
+  <b style="color:#c8d6e5">Other</b>
+  <button data-s="stale">Wind data 20 s old → NO WIND</button>
+  <button data-s="live">Live wobble (simulated)</button>
+  <p>Numbers are illustrative. Targets come from the ORC cert per TWS (beat angle upwind, gybe angle downwind); the target AWA is ORC's true angle converted at the boat speed you are actually doing.</p>
+  <p>Mode switches on TWA: upwind under 90°, downwind over. Upwind dial = 0–45° AWA,
+     downwind dial = 60–180° AWA with dead downwind at the top (a broad reach with the kite up reads well forward of 90°).
+     Speed bar spans target ±1 kn: white line = target, fill = your speed (number on the left), dashed = min, the speed floor (target − 0.3 kn).</p>
+</div>
+<script>
+const $ = id => document.getElementById(id);
+const NS = 'http://www.w3.org/2000/svg';
+const C = { x:200, y:300, r:185 }, FLOOR = 0.3, TACK_S = 60;
+// each mode maps its AWA range onto the half circle; `off` = degrees from the top of the dial
+const MODES = {
+  up:   { lo: 0,   hi: 45,  off: a => a,       name: 'UPWIND' },    // bow at the top
+  down: { lo: 60,  hi: 180, off: a => 180 - a, name: 'DOWNWIND' },  // stern at the top
+};
+let M = MODES.up;
+const zoom = () => 90 / (M.hi - M.lo);
+const el = (tag, a, parent) => { const e = document.createElementNS(NS, tag);
+  for (const k in a) e.setAttribute(k, a[k]); parent.appendChild(e); return e; };
+// side = +1 stbd (right), -1 port (left); a = AWA magnitude
+const pt = (side, a, r) => { const t = side * M.off(a) * zoom() * Math.PI / 180;
+  return [C.x + r * Math.sin(t), C.y - r * Math.cos(t)]; };
+const clampA = a => Math.max(M.lo - 1, Math.min(M.hi + 1, a));
+
+function drawScale() {
+  const g = $('scale'); g.innerHTML = '';
+  const edge = M === MODES.up ? M.hi : M.lo;
+  const [x0, y0] = pt(-1, edge, C.r), [x1, y1] = pt(1, edge, C.r);
+  el('path', { d:`M${x0},${y0} A${C.r},${C.r} 0 0 1 ${x1},${y1}`, fill:'none', stroke:'#56627c', 'stroke-width':3 }, g);
+  el('line', { x1:20, y1:C.y, x2:380, y2:C.y, stroke:'#3b4660', 'stroke-width':2 }, g);
+  for (const side of [-1, 1]) for (let a = M.lo; a <= M.hi; a += 1) {
+    const top = M.off(a) === 0; if (top && side < 0) continue;
+    const big = a % 5 === 0, [ax, ay] = pt(side, a, C.r - (big ? 16 : 7)), [bx, by] = pt(side, a, C.r);
+    el('line', { x1:ax, y1:ay, x2:bx, y2:by, stroke: top ? '#ef5f5a' : '#9aa6bd', 'stroke-width': big ? 3 : 1 }, g);
+
+  }
+  el('text', { x:200, y:C.y - C.r - 10, 'text-anchor':'middle', fill:'#ef5f5a', 'font-size':13, 'font-weight':700 }, g)
+    .textContent = M === MODES.up ? 'WIND' : 'DEAD DOWNWIND';
+  el('text', { x:22, y:C.y + 17, fill:'#ef5f5a', 'font-size':15, 'font-weight':700 }, g).textContent = 'PORT';
+  el('text', { x:378, y:C.y + 17, fill:'#35d49a', 'font-size':15, 'font-weight':700, 'text-anchor':'end' }, g).textContent = 'STBD';
+  el('text', { x:200, y:C.y + 17, 'text-anchor':'middle', fill:'#8a97ad', 'font-size':14, 'font-weight':700, 'letter-spacing':1 }, g).textContent = M.name;
+}
+
+function decide(s, dA, dS) {
+  const up = s.twa < 90, T = `${s.tAwa.toFixed(0)}°`, V = `${s.tBsp.toFixed(1)} kn`;
+  if (s.age >= 5) return ['NO WIND', `data ${s.age.toFixed(0)} s old`, 'var(--grey)', 0];
+  if (up) {
+    // slow: steer to the target angle, never below it. Bear off only when pinching; otherwise the
+    // speed has to come from trim (chop costs speed, not angle; footing lost: docs/polar.md)
+    // exception: coming out of a tack or rounding, footing briefly to accelerate is right
+    if (dS < -FLOOR) return s.sinceTack < TACK_S ? ['BEAR OFF', `build to ${V}`, 'var(--amber)', 1]
+      : dA < -1.5 ? ['BEAR OFF', `to ${T}`, 'var(--amber)', 1]
+      : ['BUILD SPEED', s.tws >= 13 ? 'hold angle · flatten · power through chop' : 'hold angle · trim for speed', 'var(--amber)', 0];
+    // spare speed: spend it on height, down to target speed
+    if (dS >= 0 && dA > 1.5) return ['POINT HIGHER', `down to ${V}`, 'var(--blue)', -1];
+    return ['IN THE GROOVE', s.tws >= 13 ? 'stay flat · feather gusts' : 'hold it', 'var(--green)', 0];
+  }
+  // downwind: slow only matters if VMG suffers too (slow but deep can be fine). Going deeper paid a
+  // little in 10+ kn and lost in 6-10, where we are already deeper than ORC (docs/polar.md section 3)
+  if (dS < -FLOOR && s.vmg < 100) return ['HEAT UP', `build to ${V}`, 'var(--amber)', -1];
+  if (dS >= 0 && dA < -2)         return ['SAIL DEEPER', `down to ${V}`, 'var(--blue)', 1];
+  const tryDeeper = s.vmg >= 100 && s.tws >= 10 && dS >= -FLOOR;
+  return ['IN THE GROOVE', tryDeeper ? 'try a degree deeper · watch VMG' : 'hold it', 'var(--green)', 0];
+}
+
+// apparent wind angle from true wind angle, true wind speed and boat speed (no leeway/upwash here;
+// the real build uses build_polar.py's calibration so it matches what the display reads)
+function apparent(twa, tws, bsp) {
+  const r = twa * Math.PI / 180;
+  return Math.atan2(tws * Math.sin(r), tws * Math.cos(r) + bsp) * 180 / Math.PI;
+}
+
+function render(s) {
+  s = { sinceTack: 999, ...s };
+  s.awa = Math.sign(s.twa) * apparent(Math.abs(s.twa), s.tws, s.bsp);
+  s.tAwa = apparent(s.tTwa, s.tws, s.bsp);            // ORC's true angle, at the speed we're actually doing
+  s.vmg = Math.round(100 * s.bsp * Math.cos(s.twa * Math.PI / 180) / (s.tBsp * Math.cos(s.tTwa * Math.PI / 180)));
+  s.twa = Math.abs(s.twa);
+  const mode = s.twa < 90 ? MODES.up : MODES.down;
+  if (mode !== M) { M = mode; drawScale(); }
+  const marks = $('marks'), sp = $('speed'); marks.innerHTML = ''; sp.innerHTML = '';
+  const fresh = s.age < 5, up = M === MODES.up;
+  const side = Math.sign(s.awa) || 1, awa = Math.abs(s.awa), awaD = clampA(awa);
+  const dA = awa - s.tAwa, dS = s.bsp - s.tBsp;       // dA > 0: wider/lower upwind, deeper downwind
+  const [main, sub, col, steer] = decide(s, dA, dS);
+  $('cmd').style.background = col; $('cmd').style.color = fresh ? '#0c111b' : '#e8edf5';
+  // upwind: ▲ head up / ▼ bear away. Downwind: the way to turn the bow, which is also the way the
+  // bar moves on the dial (stbd gybe: deeper = turn to port = bar moves left toward dead downwind)
+  const turn = side * -steer;                        // +1 = turn to starboard, -1 = to port
+  $('cmdMain').textContent = !steer ? main : up ? (steer < 0 ? '▲ ' : '▼ ') + main
+                           : turn < 0 ? '◀ ' + main : main + ' ▶'; $('cmdSub').textContent = sub;
+
+  const dim = fresh ? 1 : 0.25, band = up ? 1.5 : 2;
+  // groove band on the arc: target ± band, bright enough to read in sun
+  const [g0x, g0y] = pt(side, s.tAwa - band, C.r + 4), [g1x, g1y] = pt(side, s.tAwa + band, C.r + 4);
+  const cw = (up ? 1 : -1) * side > 0 ? 1 : 0;
+  el('path', { d:`M${g0x},${g0y} A${C.r + 4},${C.r + 4} 0 0 ${cw} ${g1x},${g1y}`, fill:'none',
+               stroke:'#35d49a', 'stroke-width':16, opacity:.6 * dim }, marks);
+  // target line across the arc, then a large triangle and the target number outside it
+  const [l0x, l0y] = pt(side, s.tAwa, C.r - 22), [l1x, l1y] = pt(side, s.tAwa, C.r + 12);
+  el('line', { x1:l0x, y1:l0y, x2:l1x, y2:l1y, stroke:'#ffffff', 'stroke-width':4, opacity:dim }, marks);
+  const w = 5 / zoom();
+  const [tx, ty] = pt(side, s.tAwa, C.r + 12), [lx, ly] = pt(side, s.tAwa - w, C.r + 38), [rx, ry] = pt(side, s.tAwa + w, C.r + 38);
+  el('polygon', { points:`${tx},${ty} ${lx},${ly} ${rx},${ry}`, fill:'#ffffff', stroke:'#0c111b', 'stroke-width':2, opacity:dim }, marks);
+  // scale numbers, except where the target pill sits
+  for (const sd of [-1, 1]) for (let a = M.lo; a <= M.hi; a += (M === MODES.up ? 10 : 20)) {
+    if (M.off(a) === 0 || a === M.lo) continue;
+    if (sd === side && Math.abs(a - s.tAwa) * zoom() < 14) continue;
+    const [lx, ly] = pt(sd, a, C.r - 32);
+    el('text', { x:lx, y:ly + 6, 'text-anchor':'middle', fill:'#aab5c9', 'font-size':15 }, marks).textContent = a;
+  }
+  // actual AWA bar
+  const [ax, ay] = pt(side, awaD, C.r - 14), [bx, by] = pt(side, awaD, C.r + 16);   // on the arc, clear of the number ring
+  el('line', { x1:ax, y1:ay, x2:bx, y2:by, stroke: fresh ? col : '#5d6880', 'stroke-width':12, 'stroke-linecap':'round' }, marks);
+  // target number: a white pill on the scale-number ring, at the target angle
+  const [nx, ny] = pt(side, s.tAwa, C.r - 34), txt = `${s.tAwa.toFixed(0)}°`, pw = 14 * txt.length + 10;
+  el('rect', { x:nx - pw / 2, y:ny - 16, width:pw, height:32, rx:16, fill:'#ffffff', opacity:dim }, marks);
+  el('text', { x:nx, y:ny + 9, 'text-anchor':'middle', fill:'#0c111b', 'font-size':24, 'font-weight':800, opacity:dim }, marks).textContent = txt;
+  // wedge from target to actual
+  if (fresh && Math.abs(dA) > 0.3) {
+    const r = C.r - 9, [p0x, p0y] = pt(side, s.tAwa, r), [p1x, p1y] = pt(side, awaD, r);
+    const vis = a => side * M.off(a);
+    el('path', { d:`M${p0x},${p0y} A${r},${r} 0 0 ${vis(awaD) > vis(s.tAwa) ? 1 : 0} ${p1x},${p1y}`, fill:'none', stroke:col, 'stroke-width':5, opacity:.8 }, marks);
+  }
+
+  // speed bar: target ±1 kn, target line mid-height
+  const X = 165, W = 70, TOP = 175, BOT = 295, H = BOT - TOP, y = v => BOT - (Math.max(-1, Math.min(1, v)) + 1) / 2 * H;
+  el('rect', { x:X, y:TOP, width:W, height:H, rx:8, fill:'#1a2233', stroke:'#56627c', 'stroke-width':2 }, sp);
+  el('rect', { x:X + 4, y:y(dS), width:W - 8, height:Math.max(4, BOT - y(dS) - 3), rx:5, style:`fill:${fresh ? (col === 'var(--amber)' ? 'var(--amber)' : 'var(--green)') : '#5d6880'}`, opacity:.9 }, sp);
+  el('line', { x1:X - 12, y1:y(0), x2:X + W + 12, y2:y(0), stroke:'#e8edf5', 'stroke-width':3 }, sp);
+  el('line', { x1:X - 6, y1:y(-FLOOR), x2:X + W + 6, y2:y(-FLOOR), style:'stroke:var(--amber)', 'stroke-width':2.5, 'stroke-dasharray':'5 4' }, sp);
+  el('text', { x:X + W + 16, y:y(0) + 6, fill:'#e8edf5', 'font-size':17, 'font-weight':600 }, sp).textContent = s.tBsp.toFixed(1);
+  el('text', { x:X - 16, y:y(dS) + 6, fill:'#e8edf5', 'font-size':17, 'font-weight':600, 'text-anchor':'end' }, sp)
+    .textContent = s.bsp.toFixed(1);
+  // floor label, small, under the target label
+  el('text', { x:X + W + 16, y:y(-FLOOR) + 14, style:'fill:var(--amber)', 'font-size':13, 'font-weight':700 }, sp)
+    .textContent = `min ${(s.tBsp - FLOOR).toFixed(1)}`;
+
+  const word = up ? (dA > 0 ? 'wide' : 'high') : (dA > 0 ? 'deep' : 'hot');
+  $('awaV').textContent = fresh ? `${awa.toFixed(0)}°` : '—';
+  $('awaT').innerHTML = `target ${s.tAwa.toFixed(0)}°` + (fresh && Math.abs(dA) > 0.5 ? ` · <b style="color:${col}">${Math.abs(dA).toFixed(0)}° ${word}</b>` : '');
+  $('bspV').textContent = s.bsp.toFixed(1);
+  $('bspT').innerHTML = `target ${s.tBsp.toFixed(1)} · <b style="color:${dS < -FLOOR ? 'var(--amber)' : 'var(--green)'}">${dS >= 0 ? '+' : ''}${dS.toFixed(1)}</b>`;
+  $('foot').textContent = `TWS ${s.tws.toFixed(1)} kn · TWA ${s.twa.toFixed(0)}°` + (s.sinceTack < TACK_S ? ` · tacked ${s.sinceTack} s ago` : '') + (fresh ? ` · VMG ${s.vmg}% of ORC` : ' · VMG — (no wind)');
+}
+
+const S = {
+  tack:    { twa: 47,   tTwa: 40,  bsp: 5.3, tBsp: 6.4, tws: 11, age: 1, sinceTack: 20 },
+  higher:  { twa: 44,   tTwa: 40,  bsp: 6.5, tBsp: 6.4, tws: 11, age: 1 },
+  slow:    { twa: 43,   tTwa: 40,  bsp: 5.9, tBsp: 6.4, tws: 11, age: 1 },
+  pinch:   { twa: -35,  tTwa: 40,  bsp: 5.8, tBsp: 6.4, tws: 11, age: 1 },
+  chop:    { twa: 41,   tTwa: 38,  bsp: 6.3, tBsp: 7.0, tws: 16, age: 1 },
+  breeze:  { twa: 38,   tTwa: 38,  bsp: 7.0, tBsp: 7.0, tws: 16, age: 1 },
+  dHot:    { twa: 140,  tTwa: 150, bsp: 6.6, tBsp: 6.3, tws: 11, age: 1 },
+  dDeepOk: { twa: -163, tTwa: 150, bsp: 5.8, tBsp: 6.3, tws: 11, age: 1 },
+  dSlow:   { twa: -152, tTwa: 150, bsp: 5.6, tBsp: 6.3, tws: 11, age: 1 },
+  dLight:  { twa: -152, tTwa: 145, bsp: 5.1, tBsp: 5.0, tws: 8, age: 1 },
+  dGroove: { twa: -150, tTwa: 150, bsp: 6.3, tBsp: 6.3, tws: 11, age: 1 },
+  dBroad:  { twa: 119,  tTwa: 120, bsp: 7.4, tBsp: 7.3, tws: 12, age: 1 },
+  stale:   { twa: 43,   tTwa: 40,  bsp: 6.2, tBsp: 6.4, tws: 11, age: 20 },
+};
+let timer = null;
+document.querySelectorAll('.demo button').forEach(b => b.onclick = () => {
+  document.querySelectorAll('.demo button').forEach(x => x.classList.toggle('on', x === b));
+  clearInterval(timer);
+  if (b.dataset.s !== 'live') return render(S[b.dataset.s]);
+  let t = 0; timer = setInterval(() => { t += 0.1;
+    render({ twa: 42 + 3 * Math.sin(t / 2) + Math.sin(t * 1.7), tTwa: 40, bsp: 6.3 + 0.35 * Math.sin(t / 3 + 1), tBsp: 6.4, tws: 11, age: 1 }); }, 100);
+});
+drawScale();
+const q = new URLSearchParams(location.search);
+const PAL = { A: ['#f4f7fb', '#ff4fd8'], B: ['#3fe0f5', '#ffd60a'], C: ['#3fe0f5', '#ff4fd8'] }[q.get('pal')];
+if (PAL) { document.documentElement.style.setProperty('--blue', PAL[0]); document.documentElement.style.setProperty('--amber', PAL[1]); }
+if (q.get('layout')) document.body.classList.add('dev', q.get('layout') === 'landscape' ? 'land' : 'port');
+document.querySelector(`[data-s=${q.get('s') || 'higher'}]`).click();
+</script>
+</body></html>

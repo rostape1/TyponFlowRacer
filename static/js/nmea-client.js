@@ -29,6 +29,9 @@ class NmeaClient {
 
     setStatusCallback(cb) { this._onStatus = cb; }
 
+    /** True while a recording is loaded (playing or paused): the store's clock is then log time. */
+    get isReplay() { return this._replayLines !== null; }
+
     _setStatus(s) {
         this._status = s;
         if (this._onStatus) this._onStatus(s, this._sentenceRate);

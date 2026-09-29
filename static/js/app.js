@@ -2801,6 +2801,13 @@ if (nmeaStore && nmeaClient) {
             document.getElementById('charts-view').style.display = targetId === 'charts-view' ? '' : 'none';
             const radarEl = document.getElementById('radar-view');
             if (radarEl) radarEl.style.display = targetId === 'radar-view' ? '' : 'none';
+            const helmEl = document.getElementById('helm-view');
+            if (helmEl) helmEl.style.display = targetId === 'helm-view' ? '' : 'none';
+            if (window._helmView) {
+                if (targetId === 'helm-view') window._helmView.show(); else window._helmView.hide();
+            }
+            // Remember the Helm tab so a home-screen launch at the wheel opens straight to it
+            try { localStorage.setItem('helmTabOpen', targetId === 'helm-view' ? '1' : '0'); } catch (e) { /* private mode */ }
 
             // Map elements visibility
             const mapOnly = ['status-bar', 'timeline-strip', 'layers-tray', 'forecast-quick-btns',
@@ -2821,7 +2828,7 @@ if (nmeaStore && nmeaClient) {
         const hash = (location.hash || '').replace('#', '');
         if (!hash) return;
         const tabFor = { map: 'map-view', charts: 'charts-view', radar: 'radar-view',
-                         playback: 'map-view' };
+                         helm: 'helm-view', playback: 'map-view' };
         const targetId = tabFor[hash];
         if (!targetId) return;
         const btn = document.querySelector(`.tab-btn[data-tab="${targetId}"]`);
@@ -2839,6 +2846,27 @@ if (nmeaStore && nmeaClient) {
     if (typeof RadarView !== 'undefined') {
         window._radarView = new RadarView(vesselStore);
         window._radarView.init();
+    }
+
+    // Initialize helm view (docs/helm.md); reopen it if it was the last tab used
+    const helmReady = typeof HelmView !== 'undefined' && typeof HelmLogic !== 'undefined' && typeof HELM_TARGETS !== 'undefined';
+    if (!helmReady) {
+        // a file that failed to load or parse (an old browser) must not leave an empty dark tab
+        const hv = document.getElementById('helm-view');
+        if (hv) {
+            hv.textContent = 'HELM UNAVAILABLE: its code did not load in this browser. Needs iOS 12 or later; reload once, then check window.__bootFailures.';
+            hv.style.cssText += ';padding:24px;font-size:20px;color:#ff4fd8';
+        }
+    }
+    if (helmReady) {
+        window._helmView = new HelmView(nmeaStore, nmeaClient);
+        window._helmView.init();
+        let reopen = false;
+        try { reopen = localStorage.getItem('helmTabOpen') === '1'; } catch (e) { /* private mode */ }
+        if (reopen && !location.hash) {
+            const b = document.querySelector('.tab-btn[data-tab="helm-view"]');
+            if (b) setTimeout(() => b.click(), 0);
+        }
     }
 
     // NMEA status display
@@ -3124,8 +3152,17 @@ if (nmeaStore && nmeaClient) {
     // in mid-air everywhere else.
     const REPLAY_BAR_STACK = ['layers-tray', 'timeline-strip', 'forecast-quick-btns', 'status-bar'];
 
+    // How much of the screen bottom the transport covers, as --replay-cover. The
+    // bar floats over the views so scrubbing never resizes a chart, but the Helm
+    // tab pads itself by this much: its tiles and footer sat under the bar.
+    function setReplayCover() {
+        const shown = replayBar && !replayBar.classList.contains('hidden');
+        const px = shown ? Math.max(0, window.innerHeight - replayBar.getBoundingClientRect().top) : 0;
+        document.documentElement.style.setProperty('--replay-cover', px + 'px');
+    }
+
     function positionReplayBar() {
-        if (!replayBar || replayBar.classList.contains('hidden')) return;
+        if (!replayBar || replayBar.classList.contains('hidden')) { setReplayCover(); return; }
         let topmost = window.innerHeight;
         for (const id of REPLAY_BAR_STACK) {
             const el = document.getElementById(id);
@@ -3144,6 +3181,7 @@ if (nmeaStore && nmeaClient) {
             if (r.height > 0) topmost = Math.min(topmost, r.top);
         }
         replayBar.style.bottom = (window.innerHeight - topmost + 8) + 'px';
+        setReplayCover();
     }
     window.addEventListener('resize', positionReplayBar);
     // The hamburger collapse is a CSS transform, invisible to both the resize
@@ -3398,6 +3436,7 @@ if (nmeaStore && nmeaClient) {
     // real toggle. Leaving replay entirely is what "Exit to Live" is for.
     function closePlaybackBar() {
         if (replayBar) replayBar.classList.add('hidden');
+        setReplayCover();
         const btn = document.getElementById('replay-toggle');
         if (btn) { btn.classList.add('replay-off'); btn.textContent = 'Replay'; }
     }

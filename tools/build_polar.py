@@ -2,7 +2,8 @@
 """Typon's polar: the ORC certificate for the router, plus a measured check of how we sail against it.
 
     python3 tools/build_polar.py                  # analyse the logs -> charts + report in docs/polar/
-    python3 tools/build_polar.py --write-js       # ...and write the ORC table into router.js + route-worker.js
+    python3 tools/build_polar.py --write-js       # ...and write the ORC table into router.js + route-worker.js,
+                                                  #    and static/js/helm-targets.js (Helm tab calibration)
     python3 tools/build_polar.py --cache          # reuse the parsed 1 Hz grid (tools/polar_out/grid.pkl)
 
 The router polar is Typon's ORC International certificate (ORC_* below), expanded onto a regular
@@ -19,7 +20,7 @@ Log pipeline:
   3. Keep race windows only, beats (TWA <= 55) and runs (TWA >= 130) only, steady 60 s stretches,
      60 s averages (1 Hz binning puts a boat still carrying a gust's speed into the lull's bin).
 """
-import argparse, glob, math, os, re, sys, warnings
+import argparse, glob, json, math, os, re, sys, warnings
 import numpy as np
 import pandas as pd
 
@@ -727,6 +728,94 @@ def write_js(table):
         print(f'wrote polar table into {rel}')
 
 
+# ---------------------------------------------------------------- 5b. helm tab
+def helm_chain(awa, aws, bsp, roll, cal, k=None):
+    """calibrate()'s correction chain for ONE set of raw readings, as the Helm tab runs it live
+    (static/js/helm-logic.js mirrors this line by line). roll is signed, negative = heeled to port.
+    Returns stw, awa_corr (apparent by the bow, offset/upwash/heel removed, signed), twa (through the
+    water, signed), tws10, lee. k defaults to the single live paddlewheel scale."""
+    k = cal['paddle_k'] if k is None else k
+    stw = paddle_starboard(bsp, roll) * k
+    awa_h, aws_h = heel_correct(awa, aws, roll)
+    lee = leeway(roll, stw, awa_h, cal['K'])
+    _, t1 = true_wind(awa_h, aws_h, stw, cal['const']['offset'], cal['const']['sym'], lee)
+    up = upwash_at(t1 * TWS_TO_10M, cal)
+    twa, tws = true_wind(awa_h, aws_h, stw, cal['offset'], up, lee)
+    s = signed(awa_h)
+    taper = np.clip((90 - np.abs(s)) / 60, 0, 1)
+    awa_corr = s - cal['offset'] - up * taper * np.sign(s)
+    return stw, awa_corr, twa, tws * TWS_TO_10M, lee
+
+
+def check_helm_chain(raw, g, cal):
+    """helm_chain() on the raw grid must reproduce calibrate() exactly (per-day paddlewheel scale),
+    or the Helm tab would steer by different numbers than the analysis. Exits on a mismatch."""
+    r = raw.dropna(subset=['awa', 'aws', 'bsp', 'heel'])
+    k = r.day.astype(str).map(cal['paddle_k_days']).fillna(1.0).values
+    stw, _, twa, tws10, lee = helm_chain(r.awa.values, r.aws.values, r.bsp.values, r.heel.values, cal, k)
+    ref = g.loc[r.index]
+    err = max(np.nanmax(np.abs(stw - ref.stw.values)), np.nanmax(np.abs(signed(twa - ref.twa.values))),
+              np.nanmax(np.abs(tws10 - ref.tws.values)), np.nanmax(np.abs(lee - ref.lee.values)))
+    if not err < 1e-6:
+        sys.exit(f'helm_chain() differs from calibrate() by {err:.3g}: fix helm_chain before writing helm-targets.js')
+    print(f'helm_chain matches calibrate() on {len(r)} samples (max diff {err:.1e})')
+
+
+def polar_speed(twa, tws10, table=None):
+    """ORC rated speed at any TWA and 10 m wind: bilinear on the router's table (orc_table()),
+    clamped at its edges. The Helm tab's REACH mode compares boat speed with this."""
+    table = orc_table() if table is None else table
+    twa = min(max(abs(twa), OUT_TWA[0]), OUT_TWA[-1])
+    col = [float(np.interp(twa, OUT_TWA, table[:, j])) for j in range(len(OUT_TWS))]
+    return float(np.interp(tws10, OUT_TWS, col))
+
+
+HELM_JS = os.path.join(REPO, 'static', 'js', 'helm-targets.js')
+HELM_FIXTURE = os.path.join(REPO, 'tests', 'fixtures', 'helm_parity.json')
+
+
+def write_helm_js(cal):
+    """static/js/helm-targets.js (ORC certificate + frozen calibration) and the parity fixture that
+    tests/test_helm.mjs checks the JS against. Recalibrate = rerun --write-js after a race."""
+    c = dict(paddleK=cal['paddle_k'], paddleKDays=cal['paddle_k_days'],
+             paddleSlope=PADDLE_STBD_SLOPE, paddlePivot=PADDLE_STBD_PIVOT, paddleHeel=list(PADDLE_STBD_HEEL),
+             leeK=[float(x) for x in cal['K']], leeRampHeel=LEE_RAMP_HEEL, leeRefHeel=LEE_REF_HEEL,
+             leeRefStw=LEE_REF_STW, leeMax=LEE_MAX,
+             offset=float(cal['offset']), upwashSym=float(cal['sym']), upwashSlope=float(cal.get('sym_slope', 0.0)),
+             upwashRefTws=UPWASH_REF_TWS, upwashMin=UPWASH_MIN, upwashMax=UPWASH_MAX,
+             constOffset=float(cal['const']['offset']), constSym=float(cal['const']['sym']), twsTo10m=TWS_TO_10M)
+    table = orc_table()
+    orc = dict(tws=ORC_TWS, beatAngle=ORC_BEAT_ANGLE, beatVmg=ORC_BEAT_VMG, runVmg=ORC_RUN_VMG, gybeAngle=ORC_GYBE_ANGLE,
+               polar=dict(twa=OUT_TWA, tws=OUT_TWS, bsp=[[float(x) for x in row] for row in table]))
+    body = json.dumps(dict(orc=orc, cal=c), indent=2)
+    with open(HELM_JS, 'w') as f:
+        f.write('// GENERATED by tools/build_polar.py --write-js. Do not edit: rerun the script after recalibrating.\n'
+                '// Typon\'s ORC certificate and the frozen calibration the Helm tab corrects raw NMEA with.\n'
+                f'const HELM_TARGETS = {body};\n'
+                "if (typeof module !== 'undefined') module.exports = HELM_TARGETS;\n")
+    print(f'wrote {os.path.relpath(HELM_JS, REPO)} (paddlewheel k={cal["paddle_k"]:.3f}, per day '
+          + ', '.join(f'{d} {v:.3f}' for d, v in cal['paddle_k_days'].items()) + ')')
+
+    # raw inputs across both tacks, up and down, heeled either way -> the Python outputs
+    A, S, V, R = np.meshgrid([20, 25, 30, 40, 60, 90, 120, 150, 170, 190, 210, 240, 270, 300, 320, 330, 335, 340],
+                             [8.0, 12.0, 18.0], [4.0, 6.5, 8.0], [-25.0, -12.0, -3.0, 0.0, 8.0, 20.0])
+    A, S, V, R = (x.ravel() for x in (A, S, V, R))
+    stw, awa_c, twa, tws10, lee = helm_chain(A, S, V, R, cal)
+    chain = [dict(awa=float(a), aws=float(s), bsp=float(v), roll=float(r), stw=round(float(o1), 6), awaCorr=round(float(o2), 6),
+                  twa=round(float(o3), 6), tws10=round(float(o4), 6), lee=round(float(o5), 6))
+             for a, s, v, r, o1, o2, o3, o4, o5 in zip(A, S, V, R, stw, awa_c, twa, tws10, lee)]
+    target = [dict(twa=t, tws10=w, stw=v, lee=l, awa=round(awa_by_bow(t, w, v, l), 6))
+              for t in (38, 40, 44, 90, 120, 150, 165) for w in (6.0, 10.0, 14.0, 20.0)
+              for v in (4.0, 6.0, 7.5) for l in (0.0, 2.0, 5.0)]
+    polar = [dict(twa=t, tws10=w, bsp=round(polar_speed(t, w, table), 6))
+             for t in (25, 30, 41, 52, 67, 90, 101, 118, 133, 147, 158, 172, 180) for w in (3.0, 5.0, 9.5, 12.0, 17.0, 26.0)]
+    os.makedirs(os.path.dirname(HELM_FIXTURE), exist_ok=True)
+    with open(HELM_FIXTURE, 'w') as f:
+        json.dump(dict(note='GENERATED by tools/build_polar.py --write-js; tests/test_helm.mjs checks helm-logic.js against it',
+                       chain=chain, target=target, polar=polar), f)
+    print(f'wrote {os.path.relpath(HELM_FIXTURE, REPO)} ({len(chain)} chain + {len(target)} target + {len(polar)} polar cases)')
+
+
 # ---------------------------------------------------------------- 6. charts
 def _style(plt):
     plt.rcParams.update({'figure.facecolor': SURFACE, 'axes.facecolor': SURFACE, 'savefig.facecolor': SURFACE,
@@ -842,14 +931,21 @@ def chart_heel_helm(up, outdir, plt):
     plt.tight_layout(); p = os.path.join(outdir, 'heel_helm.png'); plt.savefig(p, dpi=120); plt.close(); return p
 
 
+def awa_by_bow(twa, tws10, stw, lee):
+    """Corrected apparent wind angle by the bow for a TWA through the water (ORC's meaning): the true
+    wind at the masthead, the boat moving along its track at `stw`, then `lee` deg of leeway (the bow
+    points that much higher than the track). The inverse of true_wind() with the corrections applied."""
+    tm = tws10 / TWS_TO_10M
+    return math.degrees(math.atan2(tm * math.sin(math.radians(twa)), tm * math.cos(math.radians(twa)) + stw)) - lee
+
+
 def display_awa(tws10, lee, heel, cal):
     """What the RAW masthead display reads at ORC's beat target, (starboard, port): the target TWA and
     speed turned into apparent wind at the masthead, by the bow (our leeway), then our corrections
     undone: heel (the vane reads narrow), offset and upwash at this wind (true_wind subtracts off + upwash
     on starboard, off - upwash on port, for AWA under 30°)."""
     vmg, a = orc_beat(tws10)
-    v, tm = vmg / cosd(a), tws10 / TWS_TO_10M
-    awa = math.degrees(math.atan2(tm * math.sin(math.radians(a)), tm * math.cos(math.radians(a)) + v)) - lee
+    awa = awa_by_bow(a, tws10, vmg / cosd(a), lee)
     raw = math.degrees(math.atan(math.tan(math.radians(awa)) * math.cos(math.radians(heel))))
     up = float(upwash_at(tws10, cal))
     return raw + cal['offset'] + up, raw - cal['offset'] + up
@@ -1142,6 +1238,7 @@ def calibrate(g):
     g['hdg'] = (g.hdg + deviation(g.hdg.fillna(0).values, dv['coef'])).where(g.hdg.notna()) % 360
     pw = fit_paddlewheel(g)
     g['stw'] = g.bsp * g.day.map({dd: vv[0] for dd, vv in pw.items()}).fillna(1.0)
+    paddle_k_days = {str(dd): float(vv[0]) for dd, vv in pw.items()}
     g['awa'], g['aws'] = heel_correct(g.awa, g.aws, g.heel)
     print(f'\nheel-corrected wind angle: {g.awa.notna().mean() * 100:.0f}% of samples have heel '
           f'({race_mask(g)[g.awa.notna().values].sum() / race_mask(g).sum() * 100:.0f}% of race time)')
@@ -1171,6 +1268,9 @@ def calibrate(g):
     print(f'\ntrue wind converted masthead {MASTHEAD_M:.1f} m -> {ORC_REF_M:.0f} m (ORC reference): x{TWS_TO_10M:.3f} '
           f'(exponent {WIND_SHEAR_ALPHA}; 1/7 would be x{(ORC_REF_M / MASTHEAD_M) ** (1 / 7):.3f}). '
           'All TWS below, bands included, are 10 m wind.')
+    # a live display needs ONE paddlewheel scale: the median of the per-day fits (helm-targets.js)
+    cal['paddle_k_days'] = paddle_k_days
+    cal['paddle_k'] = float(np.median(list(paddle_k_days.values()))) if paddle_k_days else 1.0
     return g, cal
 
 
@@ -1180,7 +1280,7 @@ def main():
     ap.add_argument('--logs', default=os.path.expanduser('~/Documents/typon-nmea-logs'))
     ap.add_argument('--out', default=os.path.join(REPO, 'docs', 'polar'))
     ap.add_argument('--cache', action='store_true', help='reuse tools/polar_out/grid.pkl instead of re-parsing')
-    ap.add_argument('--write-js', action='store_true', help='write the ORC table into router.js and route-worker.js')
+    ap.add_argument('--write-js', action='store_true', help='write the ORC table into router.js and route-worker.js, and helm-targets.js')
     args = ap.parse_args()
     os.makedirs(args.out, exist_ok=True)
     cache = os.path.join(REPO, 'tools', 'polar_out', 'grid.pkl')
@@ -1191,6 +1291,7 @@ def main():
         os.makedirs(os.path.dirname(cache), exist_ok=True)
         g.to_pickle(cache)
 
+    raw = g
     g, cal = calibrate(g)
 
     d = steady_samples(g)
@@ -1241,6 +1342,8 @@ def main():
         print('chart:', os.path.relpath(p, REPO))
     if args.write_js:
         write_js(orc_table())
+        check_helm_chain(raw, g, cal)
+        write_helm_js(cal)
 
 
 if __name__ == '__main__':

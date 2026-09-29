@@ -46,6 +46,9 @@ jobs:
       - name: Run vessel name database tests
         run: node tests/test_vessel_names.mjs
 
+      - name: Run Helm tab tests (rules + Python parity)
+        run: node tests/test_helm.mjs
+
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
