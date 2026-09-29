@@ -202,6 +202,23 @@ console.log('engine');
     v = run(e, 22250, 30000, { A: 26, bsp: 5.0 });
     assert(v.key !== k0 && v.kind === 'build', 'after 3 s the build-speed banner shows');
 
+    // the hold is against flicker, not against being wrong: an answer alternating faster than 3 s
+    // (POINT HIGHER / BUILD SPEED at the floor) used to keep the stale banner up for good
+    {
+        const h = L.bannerHold(), K = key => ({ key });
+        h.next(K('groove'), 0);
+        let s;
+        for (let t = 1000; t <= 3000; t += 1000) s = h.next(K(t % 2000 ? 'higher' : 'build'), t);
+        assert(s.key === 'groove', 'alternating answers: held under 3 s');
+        s = h.next(K('higher'), 4000);
+        assert(s.key === 'higher', `wrong for 3 s -> the current answer shows, though none lasted 3 s (${s.key})`);
+        s = h.next(K('build'), 5000);
+        assert(s.key === 'higher', 'the new banner is held in turn');
+        s = h.next(K('higher'), 5500); s = h.next(K('build'), 8200);
+        assert(s.key === 'higher', 'being right again restarts the clock (wrong at 5 s, right at 5.5 s, wrong again at 8.2 s)');
+        assert(h.next(K('reach'), 6250, true).key === 'reach', 'a REACH or mode switch shows at once');
+    }
+
     // tack: the smoothed wind stays on the other side for 10 s; the post-tack window runs from the
     // moment it flipped (the 5 s smoothing puts that ~2.5 s after the helm turned)
     e = L.create();

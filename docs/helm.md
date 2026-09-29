@@ -122,8 +122,9 @@ on 44% of wind gaps. **TOO LIGHT** (under 4 kn, the certificate's first
 column). Ages use the stream clock: wall time live, log time in replay, so a paused replay is not
 stale.
 
-Smoothing 5 s (angle, speed, wind), 15 s (VMG); a new instruction must hold 3 s before the banner
-changes, except when REACH or the mode switches: those redraw the whole dial, so the banner switches in
+Smoothing 5 s (angle, speed, wind), 15 s (VMG); the banner changes once the
+shown instruction has been wrong for 3 s, to whatever is right then (waiting for one new instruction to
+last 3 s kept a stale IN THE GROOVE up for 16 s when POINT HIGHER and BUILD SPEED alternated), except when REACH or the mode switches: those redraw the whole dial, so the banner switches in
 the same update instead of lagging the dial by 3 s. The banner colour fades over 0.3 s. There are no
 other transitions: at 10× replay a state change every few seconds is the data, not a render glitch. All tunable in `HelmLogic.C` (`static/js/helm-logic.js`).
 

@@ -161,19 +161,39 @@ const HelmLogic = (() => {
         return prev || vm.mode;
     }
 
+    /** Banner hold: the shown instruction changes once it has been wrong for HOLD_S, to whatever is right
+     *  then. Waiting for one new instruction to last HOLD_S kept a stale banner up when the answer
+     *  alternated (POINT HIGHER / BUILD SPEED at the floor): neither lasted 3 s, so IN THE GROOVE stayed.
+     *  `now` switches at once (a REACH or mode change, which redraws the dial). */
+    function bannerHold() {
+        let shown = null, wrongSince = null;
+        return {
+            next(d, t, now) {
+                if (!shown || now || d.key === shown.key) { shown = d; wrongSince = null; }
+                else {
+                    if (wrongSince === null) wrongSince = t;
+                    if (t - wrongSince >= C.HOLD_S * 1000) { shown = d; wrongSince = null; }
+                }
+                return shown;
+            },
+            reset() { shown = null; wrongSince = null; },
+        };
+    }
+
     /** The live engine: feed it the store's state and the current time, get the view model back. */
     function create() {
         let buf = [], lastT = null, mode = null, side = 0, flipSide = 0, flipSince = null;
-        let lastTackT = -Infinity, shown = null, cand = null, candSince = null, reach = false;
+        let lastTackT = -Infinity, shown = null, reach = false;
+        const hold = bannerHold();
         let reachCand = null, reachSince = null;
 
         function reset() {
             buf = []; lastT = null; mode = null; side = 0; flipSide = 0; flipSince = null;
-            lastTackT = -Infinity; shown = null; cand = null; candSince = null; reach = false;
+            lastTackT = -Infinity; shown = null; hold.reset(); reach = false;
             reachCand = null; reachSince = null;
         }
         function noData(main, sub) {
-            shown = null; cand = null; candSince = null;
+            shown = null; hold.reset();
             return { ok: false, main, sub, kind: 'nodata' };
         }
 
@@ -243,12 +263,7 @@ const HelmLogic = (() => {
             const sinceTack = (t - lastTackT) / 1000;
 
             const d = decide({ up, reach, dA, dS, vmgPct, tws10, sinceTack });
-            // banner hold: a new instruction must persist before it replaces the shown one
-            if (!shown || switched) { shown = d; cand = null; }
-            else if (d.key !== shown.key) {
-                if (!cand || cand.key !== d.key) { cand = d; candSince = t; }
-                if (t - candSince >= C.HOLD_S * 1000) { shown = d; cand = null; }
-            } else { shown = d; cand = null; }
+            shown = hold.next(d, t, switched);
 
             return {
                 ok: true, mode, up, side,
@@ -263,7 +278,7 @@ const HelmLogic = (() => {
 
     return {
         C, signed, interp, paddleStarboard, heelCorrect, leeway, trueWind, upwashAt, chain, awaByBow, targets, polarSpeed,
-        decide, label, dialScale, create, setTargets: t => { H = t; },
+        decide, label, dialScale, bannerHold, create, setTargets: t => { H = t; },
     };
 })();
 
