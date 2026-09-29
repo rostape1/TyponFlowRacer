@@ -95,7 +95,12 @@ console.log('rules');
 
     assert(U(3, 0.1) === 'higher', 'upwind: wide and at speed -> point higher');
     assert(U(3, 0) === 'higher', 'upwind: exactly at target speed counts as at speed');
-    assert(U(3, -0.05) === 'groove', 'upwind: wide but just under target -> hold (no "down to" while below it)');
+    assert(U(3, -0.05) === 'groove', 'upwind: 3 deg wide and just under target -> hold (building speed, not footing)');
+    assert(U(3.01, -0.05) === 'higher', 'upwind: past 3 deg wide, point higher even a little under target speed');
+    // 19 Sept R2: 7 deg low at -0.2 kn, VMG 81%, and the banner said IN THE GROOVE
+    assert(U(7, -0.2) === 'higher', 'upwind: 7 deg wide at -0.2 kn is footing -> point higher, not the groove');
+    assert(U(12, -0.29) === 'higher', 'upwind: well wide, still inside the floor -> point higher');
+    assert(U(7, -0.31) === 'build', 'upwind: past the floor, speed comes first even when wide');
     assert(U(1.5, 0.2) === 'groove', 'upwind: 1.5 deg wide is still the groove');
     assert(U(1.51, 0.2) === 'higher', 'upwind: past 1.5 deg wide -> point higher');
     assert(U(0, -0.3) === 'groove', 'upwind: exactly at the floor is not yet slow');

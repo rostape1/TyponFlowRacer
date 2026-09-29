@@ -16,6 +16,7 @@ const HelmLogic = (() => {
     const C = {
         FLOOR: 0.3,          // kn under target: past this, speed is the problem (docs/polar.md §3)
         GROOVE_UP: 1.5,      // deg wide of target upwind before "point higher"
+        WIDE_UP: 3,          // deg wide past which "point higher" holds even a little under target speed
         HOT_DOWN: 2,         // deg hot of target downwind before "sail deeper"
         TACK_S: 60,          // s after a tack/rounding when footing to accelerate is right
         TACK_HOLD_S: 10,     // s the wind must stay on the new side to count as a tack
@@ -122,7 +123,9 @@ const HelmLogic = (() => {
                 if (dA < -C.GROOVE_UP) return { key: 'bearoff-pinch', main: 'BEAR OFF', kind: 'build', steer: 1 };
                 return { key: 'build', main: 'BUILD SPEED', kind: 'build', steer: 0 };
             }
-            if (dS >= 0 && dA > C.GROOVE_UP) return { key: 'higher', main: 'POINT HIGHER', kind: 'spend', steer: -1 };
+            // wide: point higher once at speed; well wide, even a little under it. Within the floor, 3+ deg
+            // wide is footing, and the lost VMG is the angle, not the speed (docs/helm.md)
+            if (dA > C.GROOVE_UP && (dS >= 0 || dA > C.WIDE_UP)) return { key: 'higher', main: 'POINT HIGHER', kind: 'spend', steer: -1 };
             // high but not slow: hold it only while it pays. polar.md §3 measured 2-4 deg high gaining,
             // nothing past that, and speed can bleed off slower than the floor catches it.
             if (dA < -C.GROOVE_UP && vmgPct < 100) return { key: 'bearoff-high', main: 'BEAR OFF', kind: 'spend', steer: 1 };

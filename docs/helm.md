@@ -69,7 +69,7 @@ Upwind under 90° TWA, downwind above, with hysteresis (switch at 100°, back at
 | more than 0.3 kn slow, within 60 s of a tack or rounding | ▼ BEAR OFF |
 | more than 0.3 kn slow, more than 1.5° high (pinching) | ▼ BEAR OFF |
 | more than 0.3 kn slow otherwise | BUILD SPEED |
-| at or above target speed, more than 1.5° low | ▲ POINT HIGHER |
+| more than 1.5° low at or above target speed, or more than 3° low and under 0.3 kn slow (footing) | ▲ POINT HIGHER |
 | not slow, more than 1.5° high, VMG under ORC | ▼ BEAR OFF |
 | otherwise (incl. high with VMG at or over ORC) | IN THE GROOVE |
 
