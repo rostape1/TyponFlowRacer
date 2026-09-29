@@ -3152,8 +3152,17 @@ if (nmeaStore && nmeaClient) {
     // in mid-air everywhere else.
     const REPLAY_BAR_STACK = ['layers-tray', 'timeline-strip', 'forecast-quick-btns', 'status-bar'];
 
+    // How much of the screen bottom the transport covers, as --replay-cover. The
+    // bar floats over the views so scrubbing never resizes a chart, but the Helm
+    // tab pads itself by this much: its tiles and footer sat under the bar.
+    function setReplayCover() {
+        const shown = replayBar && !replayBar.classList.contains('hidden');
+        const px = shown ? Math.max(0, window.innerHeight - replayBar.getBoundingClientRect().top) : 0;
+        document.documentElement.style.setProperty('--replay-cover', px + 'px');
+    }
+
     function positionReplayBar() {
-        if (!replayBar || replayBar.classList.contains('hidden')) return;
+        if (!replayBar || replayBar.classList.contains('hidden')) { setReplayCover(); return; }
         let topmost = window.innerHeight;
         for (const id of REPLAY_BAR_STACK) {
             const el = document.getElementById(id);
@@ -3172,6 +3181,7 @@ if (nmeaStore && nmeaClient) {
             if (r.height > 0) topmost = Math.min(topmost, r.top);
         }
         replayBar.style.bottom = (window.innerHeight - topmost + 8) + 'px';
+        setReplayCover();
     }
     window.addEventListener('resize', positionReplayBar);
     // The hamburger collapse is a CSS transform, invisible to both the resize
@@ -3426,6 +3436,7 @@ if (nmeaStore && nmeaClient) {
     // real toggle. Leaving replay entirely is what "Exit to Live" is for.
     function closePlaybackBar() {
         if (replayBar) replayBar.classList.add('hidden');
+        setReplayCover();
         const btn = document.getElementById('replay-toggle');
         if (btn) { btn.classList.add('replay-off'); btn.textContent = 'Replay'; }
     }

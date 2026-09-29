@@ -31,11 +31,11 @@ const HelmLogic = (() => {
         MIN_TWS: 4,          // kn: below the certificate's first column there are no targets
         MODE_DOWN: 100,      // TWA over which upwind switches to downwind...
         MODE_UP: 80,         // ...and under which it switches back (hysteresis)
-        BREEZE_TWS: 13,      // kn (10 m): upwind cues change to flatten / feather
-        TRY_DEEPER_TWS: 10,  // kn (10 m): going deeper paid from here, lost below (docs/polar.md §3)
         SAMPLE_MS: 200,      // one smoothing sample per this much stream time
         REACH_IN: 25,        // deg of TWA from the target angle: past this we are reaching, not beating/running...
         REACH_OUT: 20,       // ...and back under this we are sailing to the target again (hysteresis)
+        DIAL_DOWN_AWA: 55,   // deg corrected AWA: reaching, the dial takes the 60-180 scale above this...
+        DIAL_UP_AWA: 50,     // ...and the 0-45 one back under this (the upwind scale ends at 45)
     };
 
     const rad = d => d * Math.PI / 180, deg = r => r * 180 / Math.PI;
@@ -113,32 +113,24 @@ const HelmLogic = (() => {
 
     // ---- the instruction. Upwind: speed first, never foot below the target angle when slow.
     // Downwind: slow only matters if VMG suffers too. docs/helm.md has the table and the evidence.
-    function decide({ up, reach, dA, dS, vmgPct, tws10, sinceTack }) {
+    function decide({ up, reach, dA, dS, vmgPct, sinceTack }) {
         // reaching: the mark sets the course, so no angle advice; speed against the polar at this angle
-        if (reach) return { key: dS < -C.FLOOR ? 'reach-slow' : 'reach', main: 'REACH', sub: 'polar', kind: dS < -C.FLOOR ? 'build' : 'groove', steer: 0 };
+        if (reach) return { key: dS < -C.FLOOR ? 'reach-slow' : 'reach', main: 'REACH', kind: dS < -C.FLOOR ? 'build' : 'groove', steer: 0 };
         if (up) {
             if (dS < -C.FLOOR) {
-                if (sinceTack < C.TACK_S) return { key: 'bearoff-accel', main: 'BEAR OFF', sub: 'build', kind: 'build', steer: 1 };
-                if (dA < -C.GROOVE_UP) return { key: 'bearoff-pinch', main: 'BEAR OFF', sub: 'toAngle', kind: 'build', steer: 1 };
-                return { key: 'build', main: 'BUILD SPEED', sub: tws10 >= C.BREEZE_TWS ? 'holdChop' : 'holdTrim', kind: 'build', steer: 0 };
+                if (sinceTack < C.TACK_S) return { key: 'bearoff-accel', main: 'BEAR OFF', kind: 'build', steer: 1 };
+                if (dA < -C.GROOVE_UP) return { key: 'bearoff-pinch', main: 'BEAR OFF', kind: 'build', steer: 1 };
+                return { key: 'build', main: 'BUILD SPEED', kind: 'build', steer: 0 };
             }
-            if (dS >= 0 && dA > C.GROOVE_UP) return { key: 'higher', main: 'POINT HIGHER', sub: 'down', kind: 'spend', steer: -1 };
-            return { key: 'groove', main: 'IN THE GROOVE', sub: tws10 >= C.BREEZE_TWS ? 'flat' : 'hold', kind: 'groove', steer: 0 };
+            if (dS >= 0 && dA > C.GROOVE_UP) return { key: 'higher', main: 'POINT HIGHER', kind: 'spend', steer: -1 };
+            // high but not slow: hold it only while it pays. polar.md §3 measured 2-4 deg high gaining,
+            // nothing past that, and speed can bleed off slower than the floor catches it.
+            if (dA < -C.GROOVE_UP && vmgPct < 100) return { key: 'bearoff-high', main: 'BEAR OFF', kind: 'spend', steer: 1 };
+            return { key: 'groove', main: 'IN THE GROOVE', kind: 'groove', steer: 0 };
         }
-        if (dS < -C.FLOOR && vmgPct < 100) return { key: 'heat', main: 'HEAT UP', sub: 'build', kind: 'build', steer: -1 };
-        if (dS >= 0 && dA < -C.HOT_DOWN) return { key: 'deeper', main: 'SAIL DEEPER', sub: 'down', kind: 'spend', steer: 1 };
-        // only a suggestion while not already deeper than the target (a dead run at 111% is deep enough)
-        const tryDeeper = vmgPct >= 100 && tws10 >= C.TRY_DEEPER_TWS && dS >= -C.FLOOR && dA <= C.HOT_DOWN;
-        return { key: tryDeeper ? 'groove-deeper' : 'groove', main: 'IN THE GROOVE', sub: tryDeeper ? 'tryDeeper' : 'hold', kind: 'groove', steer: 0 };
-    }
-    function subtitle(code, tSpeed, tAwa) {
-        const V = `${tSpeed.toFixed(1)} kn`, A = tAwa == null ? '' : `${Math.round(tAwa)}°`;
-        return {
-            polar: `polar ${V}`,
-            build: `build to ${V}`, toAngle: `to ${A}`, down: `down to ${V}`,
-            holdTrim: 'hold angle · trim for speed', holdChop: 'hold angle · flatten · power through chop',
-            hold: 'hold it', flat: 'stay flat · feather gusts', tryDeeper: 'try a degree deeper · watch VMG',
-        }[code];
+        if (dS < -C.FLOOR && vmgPct < 100) return { key: 'heat', main: 'HEAT UP', kind: 'build', steer: -1 };
+        if (dS >= 0 && dA < -C.HOT_DOWN) return { key: 'deeper', main: 'SAIL DEEPER', kind: 'spend', steer: 1 };
+        return { key: 'groove', main: 'IN THE GROOVE', kind: 'groove', steer: 0 };
     }
     /** Banner text with its arrow. Upwind ▲ head up / ▼ bear away. Downwind the way to turn the bow,
      *  which is also the way the bar moves on the dial (stbd gybe: deeper = turn to port = ◀). */
@@ -155,14 +147,27 @@ const HelmLogic = (() => {
         return deg(Math.atan2(s, c));
     }
 
+    /** Which dial scale to draw, 'up' (AWA 0-45) or 'down' (60-180). Beating or running it is the
+     *  mode. Reaching there is no target to show, only where we are, and a close reach in upwind mode
+     *  (AWA 50-70) sat pinned past the end of the 0-45 scale, so the scale follows the AWA. */
+    function dialScale(prev, vm) {
+        if (!vm.ok) return prev || 'up';
+        if (!vm.reach) return vm.mode;
+        if (vm.awa > C.DIAL_DOWN_AWA) return 'down';
+        if (vm.awa < C.DIAL_UP_AWA) return 'up';
+        return prev || vm.mode;
+    }
+
     /** The live engine: feed it the store's state and the current time, get the view model back. */
     function create() {
         let buf = [], lastT = null, mode = null, side = 0, flipSide = 0, flipSince = null;
         let lastTackT = -Infinity, shown = null, cand = null, candSince = null, reach = false;
+        let reachCand = null, reachSince = null;
 
         function reset() {
             buf = []; lastT = null; mode = null; side = 0; flipSide = 0; flipSince = null;
             lastTackT = -Infinity; shown = null; cand = null; candSince = null; reach = false;
+            reachCand = null; reachSince = null;
         }
         function noData(main, sub) {
             shown = null; cand = null; candSince = null;
@@ -197,7 +202,9 @@ const HelmLogic = (() => {
             const aTwa = Math.abs(twa);
             const newMode = mode === null ? (aTwa < 90 ? 'up' : 'down')
                 : mode === 'up' && aTwa > C.MODE_DOWN ? 'down' : mode === 'down' && aTwa < C.MODE_UP ? 'up' : mode;
-            if (mode !== null && newMode !== mode) lastTackT = t;
+            // a switch redraws the whole dial, so the banner goes with it rather than 3 s later
+            let switched = mode !== null && newMode !== mode;
+            if (switched) lastTackT = t;
             mode = newMode;
             const up = mode === 'up';
 
@@ -210,11 +217,18 @@ const HelmLogic = (() => {
             } else flipSide = 0;
 
             const tg = targets(tws10, up);
-            // reaching: TWA far from the target angle (hysteresis); entering or leaving counts as a rounding
+            // reaching: TWA far from the target angle (hysteresis), held HOLD_S like the banner, since it
+            // takes the target off the dial and puts it back; entering or leaving counts as a rounding
             const off = Math.abs(aTwa - tg.twa);
             const nowReach = reach ? off > C.REACH_OUT : off > C.REACH_IN;
-            if (nowReach !== reach && buf.length > 1) lastTackT = t;
-            reach = nowReach;
+            if (nowReach === reach) reachCand = null;
+            else if (!shown || buf.length < 2) reach = nowReach;   // a fresh start shows what it sees
+            else {
+                if (reachCand !== nowReach) { reachCand = nowReach; reachSince = t; }
+                if (t - reachSince >= C.HOLD_S * 1000) {
+                    reach = nowReach; reachCand = null; lastTackT = reachSince; switched = true;
+                }
+            }
             const tSpeed = reach ? polarSpeed(aTwa, tws10) : tg.speed;
             const tAwa = reach ? null : awaByBow(tg.twa, tws10, stw, lee);
             const awa = Math.abs(awaCorr), dA = reach ? 0 : awa - tAwa, dS = stw - tSpeed;
@@ -227,7 +241,7 @@ const HelmLogic = (() => {
 
             const d = decide({ up, reach, dA, dS, vmgPct, tws10, sinceTack });
             // banner hold: a new instruction must persist before it replaces the shown one
-            if (!shown) { shown = d; cand = null; }
+            if (!shown || switched) { shown = d; cand = null; }
             else if (d.key !== shown.key) {
                 if (!cand || cand.key !== d.key) { cand = d; candSince = t; }
                 if (t - candSince >= C.HOLD_S * 1000) { shown = d; cand = null; }
@@ -235,7 +249,7 @@ const HelmLogic = (() => {
 
             return {
                 ok: true, mode, up, side,
-                main: label(shown.main, shown.steer, up, side), sub: subtitle(shown.sub, tSpeed, tAwa),
+                main: label(shown.main, shown.steer, up, side), sub: '',   // the banner is the instruction alone; the numbers are on the dial
                 kind: shown.kind, key: shown.key, reach,
                 awa, tAwa, dA, stw, tSpeed, floor: tSpeed - C.FLOOR, dS, polarPct: 100 * stw / tSpeed,
                 tws10, twa: aTwa, vmgPct, sinceTack, aboveRange: tws10 > H.orc.tws[H.orc.tws.length - 1],
@@ -246,7 +260,7 @@ const HelmLogic = (() => {
 
     return {
         C, signed, interp, paddleStarboard, heelCorrect, leeway, trueWind, upwashAt, chain, awaByBow, targets, polarSpeed,
-        decide, subtitle, label, create, setTargets: t => { H = t; },
+        decide, label, dialScale, create, setTargets: t => { H = t; },
     };
 })();
 

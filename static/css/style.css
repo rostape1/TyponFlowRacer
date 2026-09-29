@@ -2609,6 +2609,8 @@ body.panel-collapsed #panel-toggle {
     background: #161d2b;
     color: #e8edf5;
     padding: 8px;
+    /* clear the playback transport when it is open (app.js setReplayCover) */
+    padding-bottom: calc(8px + var(--replay-cover, 0px));
     box-sizing: border-box;
     display: grid;
     grid-gap: 8px;
@@ -2625,9 +2627,18 @@ body.panel-collapsed #panel-toggle {
     text-align: center;
     background: #5d6880;
     line-height: 1.1;
+    /* a colour change fades rather than snaps, so a new instruction does not read as a flash */
+    transition: background-color 0.3s, color 0.3s;
 }
 .helm-banner-main { font-size: 7vmin; font-size: clamp(26px, 7vmin, 64px); font-weight: 800; letter-spacing: 0.5px; }
 .helm-banner-sub { font-size: 3.6vmin; font-size: clamp(15px, 3.6vmin, 30px); font-weight: 600; margin-left: 0.7em; opacity: 0.9; }
+/* VMG as % of ORC, right-aligned in the banner and in its text colour: the outcome beside the instruction */
+.helm-banner { position: relative; }
+.helm-banner-vmg {
+    position: absolute; right: 16px; top: 50%;
+    transform: translateY(-50%); -webkit-transform: translateY(-50%);
+    font-size: 5vmin; font-size: clamp(20px, 5vmin, 44px); font-weight: 800;
+}
 .helm-dial {
     grid-area: dial;
     background: #252e42;
@@ -2656,8 +2667,7 @@ body.panel-collapsed #panel-toggle {
     justify-content: center;
     min-height: 0;
 }
-.helm-tile-k { font-size: 2.6vmin; font-size: clamp(13px, 2.6vmin, 20px); font-weight: 600; color: #3fe0f5; }
-.helm-tile:nth-child(2) .helm-tile-k { color: #35d49a; }
+.helm-tile-k { font-size: 2.6vmin; font-size: clamp(13px, 2.6vmin, 20px); font-weight: 600; color: #8a97ad; }
 .helm-tile-v { font-size: 13vmin; font-size: clamp(40px, 13vmin, 110px); font-weight: 600; line-height: 1.05; }
 .helm-tile-t { font-size: 2.6vmin; font-size: clamp(13px, 2.6vmin, 20px); color: #8a97ad; }
 .helm-foot {
@@ -2674,5 +2684,7 @@ body.panel-collapsed #panel-toggle {
     }
     .helm-banner-main { display: block; }
     .helm-banner-sub { display: block; margin-left: 0; }
+    /* too narrow to share a line with a long instruction: its own line under it */
+    .helm-banner-vmg { display: block; position: static; transform: none; -webkit-transform: none; }
     .helm-tiles { grid-template-columns: 1fr 1fr; grid-template-rows: auto; }
 }

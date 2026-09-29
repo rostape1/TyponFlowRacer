@@ -13,6 +13,39 @@ reasoning behind each choice: [superpowers/specs/2026-09-28-helm-tab-design.md](
 - On the Mac: `./play_logs.sh`, open `http://localhost:8080/#helm`, pick a recording in playback.
 - On GitHub Pages there is no NMEA feed, so it shows NO NMEA. Expected.
 
+## Reading the dial
+
+Two marks, told apart by shape and place rather than colour: the **boat** is a solid wedge inside
+the ring, coloured like the banner; the **target** is the same wedge, hollow and white, outside it.
+They are tall and narrow and meet tip to tip on the ring, so each reads as pointing along its radius
+(the first build had squat wedges that read as sideways triangles). A wide translucent white band on the ring
+is the groove (±1.5° up, ±2° down). Steer the solid tip under the hollow one. Reaching there is no
+target, only the boat wedge.
+
+**The big numbers are the differences, not the readings.** The helm steers on "how far off", so the
+angle difference sits under the dial (`2° HIGH` / `3° LOW` upwind, `3° DEEP` / `2° HOT` downwind,
+`ON ANGLE`; none while reaching) and the
+speed difference inside it, above the speed bar (`+0.2 kn`). The raw corrected readings and their
+targets are in the tiles, with no differences repeated there.
+
+**One colour at a time.** The only colour on screen is the banner's, and it goes only on what the
+instruction is about: the boat wedge always; the angle difference on SAIL DEEPER / POINT HIGHER
+(cyan); the speed difference and bar on BUILD / HEAT UP / BEAR OFF (magenta); everything in the
+groove (green). All else is white or grey: target wedge, groove band, floor tick, PORT/STBD, tile
+headers. An earlier build had about eight colours with green meaning four different things.
+
+The speed bar shows the boat speed itself, filling up from the bottom, zoomed to a 2 kn window
+(target ±1 kn, clamped at the ends) so a tenth of a knot is visible. The white line mid-height is the
+target, labelled on the right; the dashed line is the **floor**: boat speed at target − 0.3 kn, the
+crib sheet's "speed floor" row, labelled on the left. Above it, pointing high still pays in VMG;
+below it, speed is the problem ([polar.md](polar.md) §3). The speed difference is written under the
+bar. (It was briefly a centre-zero bar of the difference; up-and-down for faster-and-slower read
+better.)
+
+Scale numbers sit outside the ring every 10° upwind (0–45° AWA) and every 20° downwind (60–180°),
+bold, and are hidden under the target wedge. Ticks every 5°, long every 10°; finer ticks were a grey
+comb in glare. Only the current tack's PORT/STBD label is shown, on its side.
+
 ## Every number is corrected
 
 The helm steers by this display, not the B&G. Raw readings carry the vane offset, upwash, heel and
@@ -26,27 +59,27 @@ corrected frame: slower means the target reads a little wider.
 
 ## The instruction
 
-`dS` = speed − target speed, `dA` = AWA − target AWA (+ = wide upwind / deep downwind), floor 0.3 kn.
+`dS` = speed − target speed, `dA` = AWA − target AWA (+ = low upwind / deep downwind), floor 0.3 kn.
 Upwind under 90° TWA, downwind above, with hysteresis (switch at 100°, back at 80°).
 
 **Upwind** — speed first; never foot below the target angle when slow.
 
 | Situation | Banner |
 |---|---|
-| more than 0.3 kn slow, within 60 s of a tack or rounding | ▼ BEAR OFF · build to *target* kn |
-| more than 0.3 kn slow, more than 1.5° high (pinching) | ▼ BEAR OFF · to *target*° |
-| more than 0.3 kn slow otherwise | BUILD SPEED · hold angle · trim (13+ kn: flatten · power through chop) |
-| at or above target speed, more than 1.5° wide | ▲ POINT HIGHER · down to *target* kn |
-| otherwise | IN THE GROOVE (13+ kn: stay flat · feather gusts) |
+| more than 0.3 kn slow, within 60 s of a tack or rounding | ▼ BEAR OFF |
+| more than 0.3 kn slow, more than 1.5° high (pinching) | ▼ BEAR OFF |
+| more than 0.3 kn slow otherwise | BUILD SPEED |
+| at or above target speed, more than 1.5° low | ▲ POINT HIGHER |
+| not slow, more than 1.5° high, VMG under ORC | ▼ BEAR OFF |
+| otherwise (incl. high with VMG at or over ORC) | IN THE GROOVE |
 
 **Downwind** — slow only matters if VMG suffers too.
 
 | Situation | Banner |
 |---|---|
-| more than 0.3 kn slow and VMG under ORC | HEAT UP · build to *target* kn |
-| at or above target speed, more than 2° hot | SAIL DEEPER · down to *target* kn |
-| VMG at or above ORC, 10+ kn, within the groove or hot side | IN THE GROOVE · try a degree deeper · watch VMG |
-| otherwise | IN THE GROOVE · hold it |
+| more than 0.3 kn slow and VMG under ORC | HEAT UP |
+| at or above target speed, more than 2° hot | SAIL DEEPER |
+| otherwise | IN THE GROOVE |
 
 The downwind arrow is the way to turn the bow (◀ on the left of the text, ▶ on the right):
 starboard gybe, deeper = turn to port = ◀.
@@ -54,9 +87,29 @@ starboard gybe, deeper = turn to port = ◀.
 **Reach** — TWA more than 25° from the target angle (back under 20°): no angle advice, speed against
 ORC's polar at the angle sailed. The tab cannot see the mark, so it cannot tell a reach leg from a
 broad run any other way.
+Entering or leaving REACH must also hold 3 s, since it takes the target off the dial and puts it
+back. While reaching, the dial scale follows the AWA rather than the mode (downwind scale above 55°,
+upwind back under 50°): the upwind scale ends at 45°, and a close reach in upwind mode sat pinned
+past its end. AWA 45–60° is on neither scale and still pins at the edge.
 
-Evidence for each rule: [polar.md](polar.md) §3 (pointing pays while speed holds; footing loses;
-going deeper paid in 10+ kn and lost in 6–10), §8 (chop costs speed, not angle), §9.
+High while holding speed is kept only while VMG is at or over ORC: §3 measured 2–4° high gaining and
+says nothing past that, and speed can bleed off over minutes before the 0.3 kn floor notices. An
+earlier rule held any amount of high at speed, and showed "7° HIGH" under IN THE GROOVE. In the groove
+the angle difference is green only inside the groove band, white outside it.
+
+Evidence for each rule: [polar.md](polar.md) §3 (pointing pays while speed holds; footing loses),
+§8 (chop costs speed, not angle), §9. §3 also found going deeper paid in 10+ kn; the groove used to
+add "try a degree deeper · watch VMG" there, but shown on every good run it was noise to the helm, so
+the groove banner has no second line at all.
+
+**VMG as % of ORC sits at the right end of the banner** (`92% VMG`; `101% polar` while reaching),
+in the banner's text colour: the outcome next to the instruction, and the number the high-at-speed
+rule tests. In portrait it takes its own line under the instruction. Blank in the no-data states.
+
+**The banner is one instruction, never a second line.** Earlier builds added trim and target advice
+under it ("hold angle · trim for speed", "flatten · power through chop", "down to 6.4 kn", "to 26°").
+Repeated every few seconds it was noise, and every number in it is already on the dial. Only the
+grey NO-DATA states keep a reason line (e.g. "no wind for 12 s").
 
 ## Failing visibly
 
@@ -70,7 +123,9 @@ column). Ages use the stream clock: wall time live, log time in replay, so a pau
 stale.
 
 Smoothing 5 s (angle, speed, wind), 15 s (VMG); a new instruction must hold 3 s before the banner
-changes. All tunable in `HelmLogic.C` (`static/js/helm-logic.js`).
+changes, except when REACH or the mode switches: those redraw the whole dial, so the banner switches in
+the same update instead of lagging the dial by 3 s. The banner colour fades over 0.3 s. There are no
+other transitions: at 10× replay a state change every few seconds is the data, not a render glitch. All tunable in `HelmLogic.C` (`static/js/helm-logic.js`).
 
 ## Recalibrating after a race
 
@@ -114,7 +169,7 @@ them together.
   UNAVAILABLE instead of staying empty. Not tested on a physical iOS 12 device.
 
 - **Port vs starboard.** Under 13 kn port reads a few degrees wider than starboard (probably
-  paddlewheel or vane; [polar.md](polar.md) §2). The tab inherits it: port tends to show "wide",
+  paddlewheel or vane; [polar.md](polar.md) §2). The tab inherits it: port tends to show "low",
   starboard "high". The on-water calibration session is the fix.
 - **Upwash taper.** `true_wind()` tapers the upwash by the *raw* vane angle, offset included, so the
   taper starts ~2.75° earlier on starboard and the tacks differ by up to ~0.5° at 26–35° AWA. Same

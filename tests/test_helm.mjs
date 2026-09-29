@@ -105,26 +105,33 @@ console.log('rules');
     assert(U(-1.51, -0.5) === 'bearoff-pinch', 'upwind: slow and pinching -> bear off to the target angle');
     assert(U(4, -0.5, { sinceTack: 20 }) === 'bearoff-accel', 'upwind: slow after a tack -> bear off to accelerate');
     assert(U(4, -0.5, { sinceTack: 60 }) === 'build', 'upwind: the post-tack window closes at 60 s');
-    assert(U(0, 0, { tws10: 14 }) === 'groove' && L.decide({ up: true, dA: 0, dS: 0, vmgPct: 95, tws10: 14, sinceTack: 999 }).sub === 'flat',
-        'upwind: groove in 13+ kn says stay flat, feather');
-    assert(L.decide({ up: true, dA: 0, dS: -0.5, vmgPct: 80, tws10: 16, sinceTack: 999 }).sub === 'holdChop', 'upwind: slow in 13+ kn -> flatten, power through chop');
+    // high at speed: hold it only while VMG is at or over ORC
+    assert(U(-7, 0.1, { vmgPct: 92 }) === 'bearoff-high', 'upwind: 7 deg high at speed, VMG under ORC -> bear off');
+    assert(L.decide({ up: true, dA: -7, dS: 0.1, vmgPct: 92, sinceTack: 999 }).kind === 'spend', 'bear off from high at speed is an angle call (cyan)');
+    assert(U(-7, 0.1, { vmgPct: 100 }) === 'groove', 'upwind: 7 deg high with VMG at ORC -> hold it');
+    assert(U(-1.5, 0.1, { vmgPct: 80 }) === 'groove', 'upwind: 1.5 deg high is inside the groove band whatever the VMG');
+    assert(U(-1.51, -0.2, { vmgPct: 99.9 }) === 'bearoff-high', 'upwind: high and just under target speed still counts, VMG under ORC');
+    // the banner is the instruction alone: no second line of trim or target advice in any state
+    for (const d of [{ up: true, dA: 0, dS: 0 }, { up: true, dA: 0, dS: -0.5 }, { up: true, dA: -3, dS: -0.5 },
+        { up: true, dA: 0, dS: -0.5, sinceTack: 20 }, { up: true, dA: 4, dS: 0.2 }, { up: false, dA: -3, dS: 0.1 },
+        { up: false, dA: 0, dS: -0.5 }, { up: false, dA: 0, dS: 0 }, { up: false, reach: true, dA: 0, dS: -0.5 }])
+        assert(!('sub' in L.decide({ vmgPct: 95, tws10: 16, sinceTack: 999, ...d })), `no second line: ${JSON.stringify(d)}`);
+    assert(!('subtitle' in L), 'no subtitle table left to drift back in');
 
     assert(D(-3, 0.1, 95) === 'deeper', 'downwind: hot and at speed -> sail deeper');
     assert(D(-2, 0.1, 95) === 'groove', 'downwind: 2 deg hot is still the groove');
     assert(D(0, -0.5, 95) === 'heat', 'downwind: slow and VMG under ORC -> heat up');
     assert(D(8, -0.5, 102) === 'groove', 'downwind: slow but deep with VMG over ORC -> hold');
-    assert(D(0, 0, 100) === 'groove-deeper', 'downwind: VMG at ORC in 11 kn -> try a degree deeper');
-    assert(D(0, 0, 100, { tws10: 8 }) === 'groove', 'downwind: not in light air, where deeper lost');
-    assert(D(0, -0.31, 101) === 'groove', 'downwind: under the floor, no "try deeper"');
-    assert(D(2, 0.2, 105) === 'groove-deeper', 'downwind: within the groove band, try deeper');
-    assert(D(38, 1.0, 111) === 'groove', 'downwind: already 38 deg deeper than target (R6 12:42) -> no "try deeper"');
+    // no "try a degree deeper" nudge: repeated on every run it was noise to the helm
+    assert(D(0, 0, 100) === 'groove', 'downwind: VMG at ORC in 11 kn is plain IN THE GROOVE');
+    assert(D(0, -0.31, 101) === 'groove', 'downwind: just under the floor with VMG over ORC -> groove');
+    assert(D(38, 1.0, 111) === 'groove', 'downwind: 38 deg deeper than target with VMG over ORC (R6 12:42) -> groove');
 
     const R = (dS) => L.decide({ up: false, reach: true, dA: 0, dS, vmgPct: 16, tws10: 12, sinceTack: 999 });
     assert(R(0.1).key === 'reach' && R(0.1).steer === 0 && R(0.1).kind === 'groove', 'reach at polar speed: no angle advice');
     assert(R(-0.5).key === 'reach-slow' && R(-0.5).kind === 'build' && R(-0.5).steer === 0, 'reach under polar: build colour, still no steering arrow');
     assert(L.decide({ up: true, reach: true, dA: 40, dS: 0.5, vmgPct: 60, tws10: 12, sinceTack: 999 }).key === 'reach',
         'a close reach in upwind mode is a reach, not "point higher by 40"');
-    assert(L.subtitle('polar', 7.43, null) === 'polar 7.4 kn', 'reach subtitle names the polar speed');
 
     // arrows: upwind up/down; downwind the way to turn the bow
     assert(L.label('POINT HIGHER', -1, true, 1) === '▲ POINT HIGHER' && L.label('BEAR OFF', 1, true, -1) === '▼ BEAR OFF', 'upwind arrows');
@@ -132,7 +139,6 @@ console.log('rules');
     assert(L.label('SAIL DEEPER', 1, false, -1) === 'SAIL DEEPER ▶', 'port gybe, deeper = turn to starboard');
     assert(L.label('HEAT UP', -1, false, -1) === '◀ HEAT UP', 'port gybe, heat up = turn to port');
     assert(L.label('IN THE GROOVE', 0, true, 1) === 'IN THE GROOVE', 'no arrow in the groove');
-    assert(L.subtitle('down', 6.43, 25.4) === 'down to 6.4 kn' && L.subtitle('toAngle', 6.4, 25.6) === 'to 26°', 'subtitles carry the numbers');
 }
 
 // ---------------------------------------------------------------- 3. the live engine
@@ -261,6 +267,50 @@ console.log('engine');
         assert(v.mode === 'up' && v.reach, `close reach (80 TWA) in upwind mode -> REACH (${v.key})`);
         v = run(e, 20250, 40000, { A: 28, aws: 16, bsp: 4.5 });
         assert(!v.reach && v.sinceTack < 25, `rounding from the reach onto the beat opens the post-tack window (${v.sinceTack.toFixed(0)} s)`);
+    }
+
+    // REACH is held 3 s like the banner (it takes the target off the dial), and when REACH or the mode
+    // switches, the banner switches in the same update: dial, tiles and banner never disagree.
+    {
+        const aws = 9, bsp = 7.0;
+        const offOf = v => v.twa - L.targets(v.tws10, false).twa;
+        const bannerNow = v => L.decide({ up: v.up, reach: v.reach, dA: v.dA, dS: v.dS, vmgPct: v.vmgPct, tws10: v.tws10, sinceTack: v.sinceTack }).key;
+        e = L.create();
+        run(e, 0, 20000, { A: awaOff(-10, aws, bsp), aws, bsp });
+        const A = awaOff(-32, aws, bsp);
+        let over = null, entered = null, agree = true, onSwitch = null;
+        for (let t = 20250; t <= 40000; t += 250) {
+            v = e.update(state(t, { A, aws, bsp }), t);
+            if (over === null && Math.abs(offOf(v)) > L.C.REACH_IN) over = t;
+            if (v.reach !== v.key.startsWith('reach')) agree = false;
+            if (entered === null && v.reach) { entered = t; onSwitch = v.key === bannerNow(v); }
+        }
+        assert(over !== null && entered !== null, 'the run turns into a reach');
+        assert(entered - over >= L.C.HOLD_S * 1000 && entered - over < L.C.HOLD_S * 1000 + 500,
+            `REACH shows ${((entered - over) / 1000).toFixed(2)} s after the angle crosses 25 deg off (held ${L.C.HOLD_S} s)`);
+        assert(onSwitch, 'entering REACH, the banner switches in the same update, not 3 s later');
+        assert(agree, 'dial (vm.reach) and banner agree on every update');
+
+        e = L.create();
+        v = run(e, 0, 20000, { A: 27, aws: 16, bsp: 5.0 });
+        assert(v.ok && v.mode === 'up' && !v.reach && v.key === 'build', `beating slow before the bear-away (${v.key})`);
+        let flip = null;
+        for (let t = 20250; t <= 60000 && !flip; t += 250) {
+            v = e.update(state(t, { A: 165, aws: 10, bsp: 7.0 }), t);
+            if (v.mode === 'down') flip = v;
+        }
+        assert(flip && flip.key === bannerNow(flip), `on the switch to downwind the banner switches with the dial (${flip && flip.key})`);
+    }
+
+    // dial scale: the mode, except reaching, where it follows the AWA (the 0-45 upwind scale can't show 71)
+    {
+        const D = L.dialScale;
+        assert(D(null, { ok: false }) === 'up' && D('down', { ok: false }) === 'down', 'no data: keep the scale drawn');
+        assert(D('up', { ok: true, reach: false, mode: 'down', awa: 30 }) === 'down', 'beating/running: the mode decides');
+        assert(D('up', { ok: true, reach: true, mode: 'up', awa: 71 }) === 'down', 'close reach in upwind mode at AWA 71 -> 60-180 scale');
+        assert(D('down', { ok: true, reach: true, mode: 'up', awa: 52 }) === 'down', 'AWA 52 from the down scale: stays (back under 50)');
+        assert(D('up', { ok: true, reach: true, mode: 'up', awa: 52 }) === 'up', 'AWA 52 from the up scale: stays (over at 55)');
+        assert(D('down', { ok: true, reach: true, mode: 'up', awa: 44 }) === 'up', 'AWA 44 reaching -> 0-45 scale');
     }
 
     // a replay seek backwards starts clean: the first banner shows immediately
