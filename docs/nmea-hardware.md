@@ -22,6 +22,20 @@ The receiver is configured to **broadcast NMEA over UDP**, and that is what the 
 `192.168.47.201` and WiFi `192.168.47.231`. Broadcast reaches it on whichever is live, and it also
 lets any future device read the same feed simultaneously — impossible under TCP.
 
+**The cost: when both links are up, every datagram arrives twice**, once per interface, the WiFi
+copy ~0.1 s later (APs hold broadcasts for the next beacon). Measured in the logs: 0% duplicated
+sentences before the 2026-09-14 switch, ~49% after. The two links also lose *different* datagrams —
+3–4% of GPS seconds arrived only once, mostly missing the WiFi copy (~3% WiFi loss, ~0.4% wired).
+So the listener keeps **the first copy of each datagram, from whichever interface brings it**, and
+drops the other interface's copy if it lands within `UDP_COPY_WINDOW_S` (0.5 s). It reads the arrival
+interface with `IP_PKTINFO`. Nothing is lost that either link carried, and there is no failover to
+get stuck in. `/api/health` → `nmea.udp` shows `shadowed` (copies dropped) and `first_from`
+(datagrams per interface that arrived first — mostly `eth0` with a few % `wlan0` means both links
+are up and covering for each other). Matching is one-for-one and per source, never by text alone:
+at 20 Hz a steady heading repeats exactly, and those are real readings (`P40`). The one known limit:
+when each link loses a *different* one of two identical repeats inside the window, one survives
+instead of two — 0.03% of lines in a replayed race hour, each an exact duplicate of one delivered.
+
 **Verified result.** Rebooting the Pi no longer locks anything out: the feed resumed ~12 seconds
 after a reboot with no intervention. Under TCP the same reboot locked the receiver for 20+ minutes
 and required a physical power-cycle.

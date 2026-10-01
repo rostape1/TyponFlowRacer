@@ -576,7 +576,8 @@ silent on TCP.
 
 **`ENFORCED`** — `tests/test_boat_server.py` asserts `on_startup` really starts both transports,
 that the UDP source filter defaults closed and resolves hostnames, that reassembly is per-source
-and bounded, and that shedding drops the oldest line. `tests/test_replay.mjs` asserts AIS
+and bounded, that a broadcast copy is dropped only when another interface already delivered it, and
+that shedding drops the oldest line. `tests/test_replay.mjs` asserts AIS
 sentences are checksum-validated. Verified by mutation: each fix reverted fails the suite.
 
 The NMEA source at `192.168.47.10:10110` is a **Lantronix XPort** serial-to-Ethernet bridge with
@@ -610,7 +611,7 @@ design**. Its retry therefore backs off (`retry_delay()`, 5s → 60s) and logs o
 step changes. A fixed 5s retry would put ~17k lines a day into `startup.log`, which shares a
 directory with the race recordings and has no rotation (`P11`, `P34`).
 
-Five things that are easy to get wrong here, each of which shipped as a bug in the first draft:
+Six things that are easy to get wrong here (the first five shipped as bugs in the first draft):
 
 - **A datagram is not a line.** One packet may carry several sentences or split one across two, so
   a remainder is carried between packets — **per source address**, or two senders splice into each
@@ -632,6 +633,14 @@ Five things that are easy to get wrong here, each of which shipped as a bug in t
 - **No `SO_REUSEADDR` on the UDP socket.** UDP has no `TIME_WAIT`, so it buys nothing; on Linux it
   lets a second process bind the same port, after which each datagram reaches only one of them and
   both report "listening". A hard `EADDRINUSE` is the better outcome.
+- **Broadcast to a dual-homed Pi arrives once per interface.** Wired and WiFi are both on the boat
+  LAN, so from the UDP switch ~49% of logged sentences were doubled (found 2026-09-30). Keep the
+  first copy of each datagram and drop the *other interface's* copy within 0.5 s, one-for-one, per
+  source. Two tempting fixes are both wrong: a text dedupe deletes real readings (a steady heading
+  repeats exactly at 20 Hz), and sticking to one interface — the first draft — throws away each
+  link's cover for the other's losses, so one cable blip left the feed on WiFi dropping ~3% for
+  good. The listener reads its own socket because asyncio's datagram transport discards the
+  interface.
 
 Finally, the TCP path must **close its socket before reconnecting**. `asyncio.open_connection`
 returns a writer; discarding it leaves the old socket ESTABLISHED because the event loop still
