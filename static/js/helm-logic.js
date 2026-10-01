@@ -29,6 +29,7 @@ const HelmLogic = (() => {
         STALE_WIND_S: 12,
         STALE_SPEED_S: 8,
         STALE_S: 5,          // heel, and "nothing at all" (heel's silence is the first sign of a dead feed)
+        STALE_HDG_S: 1,      // heading ($HCHDG) comes at 20 Hz; older than this, the wind angle is not carried
         MIN_TWS: 4,          // kn: below the certificate's first column there are no targets
         MODE_DOWN: 100,      // TWA over which upwind switches to downwind...
         MODE_UP: 80,         // ...and under which it switches back (hysteresis)
@@ -110,6 +111,19 @@ const HelmLogic = (() => {
         const P = H.orc.polar, a = clip(Math.abs(twa), P.twa[0], P.twa[P.twa.length - 1]);
         const col = P.tws.map((_, j) => interp(a, P.twa, P.bsp.map(row => row[j])));
         return interp(tws10, P.tws, col);
+    }
+
+    /** The raw wind angle now, carried forward from the last $IIMWV by how far the bow has turned since.
+     *  The instruments send wind every ~5 s, heading at 20 Hz, and turning the boat moves the apparent
+     *  wind angle by the same amount at once. Backtested on the September logs: through turns of 20 deg+
+     *  the next wind sentence was 9 deg from this estimate against 26 deg from the held value; steady,
+     *  no difference (docs/helm.md). It cannot see a real shift or gust before the next sentence.
+     *  Without a fresh heading at both ends it is the plain reading, as before. */
+    function carryAwa(st, now) {
+        if (st.awaHeading == null || st.heading == null || st.headingAt == null
+            || now - st.headingAt > C.STALE_HDG_S * 1000) return { awa: st.awa, carried: false };
+        const turn = signed(st.heading - st.awaHeading);
+        return { awa: (((st.awa - turn) % 360) + 360) % 360, carried: true };
     }
 
     // ---- the instruction. Upwind: speed first, never foot below the target angle when slow.
@@ -209,7 +223,8 @@ const HelmLogic = (() => {
 
             const t = Math.max(st.awaAt, st.bspAt, st.rollAt);
             if (lastT !== null && (t < lastT || t - lastT > 30000)) reset();   // replay seek or a gap
-            const c = chain(st.awa, st.aws, st.bsp, st.roll);
+            const carry = carryAwa(st, now);
+            const c = chain(carry.awa, st.aws, st.bsp, st.roll);
             const sample = { t, ...c };
             if (buf.length && t - buf[buf.length - 1].t < C.SAMPLE_MS) buf[buf.length - 1] = sample;
             else buf.push(sample);
@@ -271,13 +286,14 @@ const HelmLogic = (() => {
                 kind: shown.kind, key: shown.key, reach,
                 awa, tAwa, dA, stw, tSpeed, floor: tSpeed - C.FLOOR, dS, polarPct: 100 * stw / tSpeed,
                 tws10, twa: aTwa, vmgPct, sinceTack, aboveRange: tws10 > H.orc.tws[H.orc.tws.length - 1],
+                carried: carry.carried,
             };
         }
         return { update, reset };
     }
 
     return {
-        C, signed, interp, paddleStarboard, heelCorrect, leeway, trueWind, upwashAt, chain, awaByBow, targets, polarSpeed,
+        C, signed, interp, paddleStarboard, heelCorrect, leeway, trueWind, upwashAt, chain, awaByBow, targets, polarSpeed, carryAwa,
         decide, label, dialScale, bannerHold, create, setTargets: t => { H = t; },
     };
 })();
