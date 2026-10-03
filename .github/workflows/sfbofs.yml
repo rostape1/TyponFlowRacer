@@ -2,7 +2,11 @@ name: Fetch SFBOFS Current Field
 
 on:
   schedule:
-    - cron: '20 * * * *'  # Every hour at :20 — checks for new NOAA model run (03z/09z/15z/21z), fetches up to 49 hours (0-48) incrementally
+    # NOAA posts all 49 files ~1h23m after each cycle (03/09/15/21z -> 04:23, 10:23, 16:23, 22:23
+    # UTC, measured on S3 Oct 2026). Two tries just after that; GitHub delays or drops many
+    # scheduled runs, so the hourly :20 check stays as the safety net (and is the third try).
+    - cron: '31,47 4,10,16,22 * * *'
+    - cron: '20 * * * *'  # Every hour at :20 — fetches up to 49 hours (0-48) incrementally
   workflow_dispatch:  # Manual trigger for testing
 
 permissions:
