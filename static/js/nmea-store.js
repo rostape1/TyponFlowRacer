@@ -36,7 +36,10 @@ class NmeaStore extends _EventEmitter {
             rot: null,
             // stream time (ms) of the last reading of each, so a consumer can tell which input went
             // stale (the Helm tab: docs/helm.md). Stream time = log time in replay.
-            awaAt: null, bspAt: null, rollAt: null,
+            awaAt: null, bspAt: null, rollAt: null, headingAt: null,
+            // heading when the last apparent wind arrived. The instruments send wind every ~5 s but
+            // heading at 20 Hz; the Helm tab carries the wind angle forward through turns with it.
+            awaHeading: null,
             lastUpdate: null,
         };
 
@@ -131,6 +134,7 @@ class NmeaStore extends _EventEmitter {
 
             case 'HDG':
                 this.state.heading = parsed.heading;
+                this.state.headingAt = t;
                 this._recordHistory('heading', parsed.heading, t);
                 break;
 
@@ -139,6 +143,9 @@ class NmeaStore extends _EventEmitter {
                     this.state.awa = parsed.angle;
                     this.state.aws = parsed.speed;
                     this.state.awaAt = t;
+                    // only a fresh heading describes where the bow pointed when this wind was measured
+                    const hFresh = this.state.headingAt !== null && t - this.state.headingAt <= 1000;
+                    this.state.awaHeading = hFresh ? this.state.heading : null;
                     this._recordHistory('awa', parsed.angle, t);
                     this._recordHistory('aws', parsed.speed, t);
                     this._computeTrueWind(t);

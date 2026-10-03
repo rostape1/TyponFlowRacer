@@ -809,6 +809,106 @@ _proto.datagram_received(b"-end*02\r\n", ("2.2.2.2", 5))
 eq("per-source reassembly keeps two senders from splicing",
    _q.items, ["$AAAAA,one-end*01", "$BBBBB,two-end*02"])
 
+# The receiver broadcasts and the Pi is on the boat LAN twice (wired + WiFi), so
+# every datagram arrives once per interface. From 2026-09-14 that doubled ~49%
+# of the logged sentences. Drop the other interface's copy; never filter on
+# content alone, and never stick to one link — each covers the other's losses.
+_t = [0.0]
+_q = _FakeQueue()
+_st_if = {}
+_proto = nwp._NmeaDatagramProtocol(_q, status=_st_if, clock=lambda: _t[0])
+_proto.datagram_received(b"$HCHDG,77.6*00\r\n", ("10.0.0.1", 5), ifindex=2)
+_t[0] = 0.1
+_proto.datagram_received(b"$HCHDG,77.6*00\r\n", ("10.0.0.1", 5), ifindex=3)
+eq("the other interface's copy of a datagram is dropped", _q.items, ["$HCHDG,77.6*00"])
+eq("and counted, so /api/health shows the duplication", _st_if.get("shadowed"), 1)
+_t[0] = 0.15
+_proto.datagram_received(b"$HCHDG,77.6*00\r\n", ("10.0.0.1", 5), ifindex=2)
+# A text dedupe would eat this: at 20 Hz a steady heading repeats exactly.
+eq("an identical reading on the same interface is still delivered",
+   _q.items, ["$HCHDG,77.6*00", "$HCHDG,77.6*00"])
+_t[0] = 0.25
+_proto.datagram_received(b"$HCHDG,77.6*00\r\n", ("10.0.0.1", 5), ifindex=3)
+eq("one-for-one: the second repeat's copy is dropped too", len(_q.items), 2)
+# The point of keeping both links: WiFi drops ~3% of broadcasts, wired ~0.4%.
+_t[0] = 1.0
+_proto.datagram_received(b"$GPRMC,wifi-only*00\r\n", ("10.0.0.1", 5), ifindex=3)
+eq("a datagram only WiFi carried is delivered", _q.items[-1], "$GPRMC,wifi-only*00")
+_t[0] = 1.05
+_proto.datagram_received(b"$GPRMC,next*00\r\n", ("10.0.0.1", 5), ifindex=2)
+_t[0] = 1.1
+_proto.datagram_received(b"$GPRMC,next*00\r\n", ("10.0.0.1", 5), ifindex=3)
+eq("and wired, delivering again straight after, is not blocked by it",
+   _q.items[-2:], ["$GPRMC,wifi-only*00", "$GPRMC,next*00"])
+_t[0] = 1.1 + nwp.UDP_COPY_WINDOW_S + 0.1
+_proto.datagram_received(b"$GPRMC,next*00\r\n", ("10.0.0.1", 5), ifindex=3)
+eq("the same bytes after the copy window are a new reading", _q.items[-1], "$GPRMC,next*00")
+ok("health names the interface that delivered first",
+   set(_st_if.get("first_from", {})) == {nwp._iface_name(2), nwp._iface_name(3)},
+   f"got {_st_if.get('first_from')}")
+
+# One-for-one: a repeat that only WiFi carried (wired lost it) is a reading.
+_t = [0.0]
+_q = _FakeQueue()
+_proto = nwp._NmeaDatagramProtocol(_q, clock=lambda: _t[0])
+_proto.datagram_received(b"$HCHDG,5*00\r\n", ("10.0.0.1", 5), ifindex=2)
+_t[0] = 0.1
+_proto.datagram_received(b"$HCHDG,5*00\r\n", ("10.0.0.1", 5), ifindex=3)   # copy
+_t[0] = 0.15
+_proto.datagram_received(b"$HCHDG,5*00\r\n", ("10.0.0.1", 5), ifindex=3)   # repeat
+eq("a copy absorbs one datagram only; a WiFi-only repeat is delivered", len(_q.items), 2)
+
+# Past the window the same bytes on the other interface are a new reading, even
+# when no copy of the first ever arrived.
+_t = [0.0]
+_q = _FakeQueue()
+_proto = nwp._NmeaDatagramProtocol(_q, clock=lambda: _t[0])
+_proto.datagram_received(b"$GPRMC,z*00\r\n", ("10.0.0.1", 5), ifindex=2)
+_t[0] = nwp.UDP_COPY_WINDOW_S + 0.1
+_proto.datagram_received(b"$GPRMC,z*00\r\n", ("10.0.0.1", 5), ifindex=3)
+eq("an unmatched datagram stops absorbing copies after the window", len(_q.items), 2)
+
+# Copies are per source: with --udp-allow-any, two devices on two interfaces
+# sending the same bytes are two readings, not one.
+_t = [0.0]
+_q = _FakeQueue()
+_proto = nwp._NmeaDatagramProtocol(_q, clock=lambda: _t[0])
+_proto.datagram_received(b"$IIMWV,1*00\r\n", ("10.0.0.1", 5), ifindex=2)
+_proto.datagram_received(b"$IIMWV,1*00\r\n", ("10.0.0.2", 5), ifindex=3)
+eq("identical bytes from a different source are not a copy", len(_q.items), 2)
+
+# The filter must run first: a refused sender must neither be counted as a copy
+# (hiding it from `rejected`, P39) nor leave copy-matching state behind.
+_t = [0.0]
+_q = _FakeQueue()
+_st_ord = {}
+_proto = nwp._NmeaDatagramProtocol(_q, allow_from=["10.0.0.1"], status=_st_ord,
+                                   clock=lambda: _t[0])
+_proto.datagram_received(b"$GPGGA,spoof*00\r\n", ("10.0.0.9", 5), ifindex=2)
+_proto.datagram_received(b"$GPGGA,spoof*00\r\n", ("10.0.0.9", 5), ifindex=3)
+eq("a refused sender's copies are counted as rejected, not shadowed",
+   (_st_ord.get("rejected"), _st_ord.get("shadowed", 0)), (2, 0))
+eq("and leave no copy-matching state", len(_proto._recent), 0)
+
+# Without IP_PKTINFO nothing can be told apart, so nothing is dropped.
+_q = _FakeQueue()
+_proto = nwp._NmeaDatagramProtocol(_q)
+_proto.datagram_received(b"$A,1*00\r\n", ("10.0.0.1", 5))
+_proto.datagram_received(b"$A,1*00\r\n", ("10.0.0.1", 5))
+eq("with no interface information, no datagram is treated as a copy", len(_q.items), 2)
+
+# Bounded under a flood of unique datagrams, all inside the window.
+_t = [0.0]
+_proto = nwp._NmeaDatagramProtocol(_FakeQueue(), clock=lambda: _t[0])
+for _i in range(nwp.UDP_COPY_MAX + 500):
+    _proto.datagram_received(b"$F,%d*00\r\n" % _i, ("10.0.0.1", 5), ifindex=2)
+ok("copy-matching memory is bounded",
+   len(_proto._order) <= nwp.UDP_COPY_MAX
+   and sum(len(v) for v in _proto._recent.values()) == len(_proto._order),
+   f"order={len(_proto._order)} recent={len(_proto._recent)}")
+ok("the copy window is short enough to never hide a real reading for long",
+   0 < nwp.UDP_COPY_WINDOW_S <= 1.0, f"got {nwp.UDP_COPY_WINDOW_S}")
+
 # A bare string must not degrade the membership test into a substring match.
 _q = _FakeQueue()
 nwp._NmeaDatagramProtocol(_q, allow_from="192.168.47.1").datagram_received(
@@ -930,17 +1030,25 @@ async def _udp_end_to_end():
     tx.close()
     # Snapshot before cancelling: teardown legitimately moves state to "stopped".
     state_while_running = status.get("state")
+    seen["interface"] = next(iter(status.get("first_from") or {}), None)
     task.cancel()
     try:
         await task
     except asyncio.CancelledError:
         pass
-    return state_while_running, got, seen.get("maxsize")
+    return state_while_running, got, seen.get("maxsize"), seen.get("interface")
 
 
-_udp_state, _udp_got, _udp_maxsize = asyncio.run(_udp_end_to_end())
+_udp_state, _udp_got, _udp_maxsize, _udp_iface = asyncio.run(_udp_end_to_end())
 eq("the UDP listener binds and reports itself listening", _udp_state, "listening")
 eq("a real datagram reaches the clients", _udp_got, ["!AIVDM,1,1,,A,15M,0*7B"])
+# The interface gate is only real if the socket actually reports the arrival
+# interface; without IP_PKTINFO every datagram reads as "any" and both copies pass.
+if nwp._PKTINFO is not None:
+    ok("the real socket names the arrival interface (loopback here)",
+       _udp_iface is not None and _udp_iface.startswith("lo"), f"got {_udp_iface!r}")
+else:
+    skip("the real socket names the arrival interface", "no IP_PKTINFO on this platform")
 # Without this, the real listener could be switched to an unbounded Queue and
 # every other assertion here would still pass.
 eq("the real listener queue is bounded by UDP_QUEUE_MAX",

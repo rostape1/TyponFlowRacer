@@ -18,8 +18,11 @@ CLI (`tcp_to_broadcast`) remains TCP-only and is superseded.
 
 import argparse
 import asyncio
+import collections
 import signal
+import socket
 import ssl
+import struct
 import time
 
 try:
@@ -48,6 +51,21 @@ UDP_BUFFER_MAX = 65536
 # sentence from one gets joined to the next datagram from another. Bound how many
 # we will track so an address-spraying source can't grow the dict without limit.
 UDP_MAX_SOURCES = 8
+# The receiver broadcasts, and the Pi sits on the boat LAN twice (wired .201 and
+# WiFi .231), so every datagram arrives once per interface — the WiFi copy ~0.1 s
+# late, held for the AP's beacon. Deliver whichever copy arrives first and drop
+# the other interface's copy if it lands within this window. The two links lose
+# different datagrams (WiFi ~3%, wired ~0.4%, measured 2026-09-30), so taking
+# the first copy of each keeps a datagram whenever EITHER link carried it.
+UDP_COPY_WINDOW_S = 0.5
+# Datagrams remembered for copy matching. ~100/s x 0.5 s needs ~50; this bound
+# only matters under a flood.
+UDP_COPY_MAX = 4096
+# Datagrams read per event-loop wakeup, so a burst can't starve the fan-out.
+UDP_READ_BATCH = 256
+_PKTINFO = getattr(socket, "IP_PKTINFO", None)
+# struct in_pktinfo: ifindex (4 bytes) + spec_dst + addr — same on Linux and macOS.
+_PKTINFO_ANCBUF = socket.CMSG_SPACE(12) if _PKTINFO is not None else 0
 # Reconnect backoff for the TCP client. Once the receiver is switched to UDP the
 # TCP path fails forever by design, so a fixed 5s retry would spin and log
 # indefinitely. Start responsive (a real outage recovers in 5s) and decay.
@@ -71,6 +89,8 @@ def _set_status(status, **fields):
       attempts, last_connect_ts        TCP only
       dropped, queue_depth             UDP only — lines shed under backpressure
       rejected, rejected_from          UDP only — datagrams refused by the filter
+      shadowed, first_from             UDP only — second copies dropped, and which
+                                       interface delivered each datagram first
     """
     if status is not None:
         status.update(fields)
@@ -225,9 +245,17 @@ class _NmeaDatagramProtocol(asyncio.DatagramProtocol):
     head. If a packet is lost the join still yields one malformed sentence,
     which is why `nmea-parser.js` validates the checksum on AIS sentences too
     (`P40`).
+
+    It also drops the second copy of each broadcast. The receiver broadcasts
+    and the Pi is on the boat LAN twice, so each datagram arrives once per
+    interface. A datagram is a copy only if the same bytes from the same source
+    already arrived on a DIFFERENT interface within UDP_COPY_WINDOW_S. Dropping
+    identical text regardless of interface would be wrong: at 20 Hz, heading
+    and attitude repeat the same value legitimately. Sticking to one interface
+    is wrong too — it throws away the other link's cover for its losses.
     """
 
-    def __init__(self, queue, allow_from=None, status=None):
+    def __init__(self, queue, allow_from=None, status=None, clock=time.monotonic):
         self._queue = queue
         # None means "accept anything". Normalise here rather than trusting the
         # caller: a bare string would turn the membership test below into a
@@ -243,8 +271,55 @@ class _NmeaDatagramProtocol(asyncio.DatagramProtocol):
         self._warned = {}
         self._rejected = 0
         self._dropped = 0
+        self._clock = clock
+        # (src, datagram bytes) -> [[arrival ifindex, {ifindexes whose copy it absorbed}], ...]
+        # oldest first; _order holds the same entries in global arrival order.
+        self._recent = {}
+        self._order = collections.deque()
+        self._shadowed = 0
+        self._first_from = {}
+        self._names = {}
+        _set_status(status, first_from=self._first_from)
 
-    def datagram_received(self, data, addr):
+    def _is_copy(self, src, ifindex, data):
+        """True if this datagram is another interface's copy of one already taken.
+
+        Matching is one-for-one: two identical datagrams on eth0 absorb at most
+        two copies from wlan0, so a legitimately repeated reading survives on
+        the link that carried it. `None` (no IP_PKTINFO) is never a copy — the
+        behaviour before this existed.
+        """
+        if ifindex is None:
+            return False
+        now = self._clock()
+        order = self._order
+        while order and (now - order[0][0] > UDP_COPY_WINDOW_S
+                         or len(order) >= UDP_COPY_MAX):
+            _t, old_key, _entry = order.popleft()
+            # FIFO overall and per key, so the oldest entry for old_key is first.
+            entries = self._recent[old_key]
+            entries.pop(0)
+            if not entries:
+                del self._recent[old_key]
+        key = (src, data)
+        for entry in self._recent.get(key, ()):
+            if entry[0] != ifindex and ifindex not in entry[1]:
+                entry[1].add(ifindex)
+                self._shadowed += 1
+                _set_status(self._status, shadowed=self._shadowed)
+                return True
+        entry = [ifindex, set()]
+        self._recent.setdefault(key, []).append(entry)
+        order.append((now, key, entry))
+        name = self._names.get(ifindex)
+        if name is None:
+            name = self._names[ifindex] = _iface_name(ifindex)
+        # Which link actually leads. Mostly wired with a WiFi share of a few
+        # percent means both links are up and covering for each other.
+        self._first_from[name] = self._first_from.get(name, 0) + 1
+        return False
+
+    def datagram_received(self, data, addr, ifindex=None):
         src = addr[0]
         if self._allow_from is not None and src not in self._allow_from:
             # Position and AIS data steer a boat. Take it only from the
@@ -261,6 +336,9 @@ class _NmeaDatagramProtocol(asyncio.DatagramProtocol):
                 self._warned[src] = now
                 print(f"Ignoring NMEA UDP from {src} "
                       f"(expected {sorted(self._allow_from)})")
+            return
+
+        if self._is_copy(src, ifindex, data):
             return
 
         buf = self._bufs.get(src, b"") + data
@@ -305,6 +383,55 @@ class _NmeaDatagramProtocol(asyncio.DatagramProtocol):
         _set_status(self._status, last_error=f"{type(exc).__name__}: {exc}")
 
 
+def _iface_name(ifindex):
+    if ifindex is None:
+        return "any"
+    try:
+        return socket.if_indextoname(ifindex)
+    except OSError:
+        return f"if{ifindex}"
+
+
+def _ifindex(ancdata):
+    """Arrival interface from recvmsg() ancillary data, or None."""
+    for level, kind, data in ancdata:
+        if level == socket.IPPROTO_IP and kind == _PKTINFO and len(data) >= 4:
+            return struct.unpack("=I", data[:4])[0]
+    return None
+
+
+def _open_udp_socket(bind_host, port):
+    """Non-blocking UDP socket that reports each datagram's arrival interface.
+
+    Our own socket rather than create_datagram_endpoint(), because asyncio's
+    transport reads with recvfrom() and throws away the ancillary data that
+    names the interface. Still no SO_REUSEADDR — see nmea_udp_broadcast().
+    """
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        if _PKTINFO is not None:
+            sock.setsockopt(socket.IPPROTO_IP, _PKTINFO, 1)
+        sock.setblocking(False)
+        sock.bind((bind_host, port))
+    except BaseException:
+        sock.close()
+        raise
+    return sock
+
+
+def _drain(sock, proto):
+    """Event-loop reader callback: hand queued datagrams to the protocol."""
+    for _ in range(UDP_READ_BATCH):
+        try:
+            data, anc, _flags, addr = sock.recvmsg(65535, _PKTINFO_ANCBUF)
+        except (BlockingIOError, InterruptedError):
+            return
+        except OSError as e:
+            proto.error_received(e)
+            return
+        proto.datagram_received(data, addr, _ifindex(anc))
+
+
 async def nmea_udp_broadcast(port, clients_iter, send_fn, bind_host="0.0.0.0",
                              allow_from=None, status=None):
     """Listen for NMEA over UDP and broadcast each line to all clients.
@@ -321,9 +448,10 @@ async def nmea_udp_broadcast(port, clients_iter, send_fn, bind_host="0.0.0.0",
     loop = asyncio.get_running_loop()
     allow = set(allow_from) if allow_from is not None else None
     _set_status(status, state="starting", last_error=None, dropped=0, rejected=0,
+                shadowed=0,
                 allow_from=sorted(allow) if allow else None)
     while True:
-        transport = None
+        sock = None
         try:
             queue = asyncio.Queue(maxsize=UDP_QUEUE_MAX)
             # No SO_REUSEADDR. UDP has no TIME_WAIT, so a cleanly-exited
@@ -332,12 +460,13 @@ async def nmea_udp_broadcast(port, clients_iter, send_fn, bind_host="0.0.0.0",
             # process bind the same port, after which each datagram goes to
             # only one of them and both report "listening". A hard EADDRINUSE
             # surfaces a stale instance in /api/health instead.
-            transport, _ = await loop.create_datagram_endpoint(
-                lambda: _NmeaDatagramProtocol(queue, allow, status),
-                local_addr=(bind_host, port),
-            )
+            sock = _open_udp_socket(bind_host, port)
+            proto = _NmeaDatagramProtocol(queue, allow, status)
+            loop.add_reader(sock.fileno(), _drain, sock, proto)
             print(f"Listening for NMEA UDP on {bind_host}:{port}"
-                  + (f" from {sorted(allow)}" if allow else " from any source"))
+                  + (f" from {sorted(allow)}" if allow else " from any source")
+                  + ("" if _PKTINFO is not None else
+                     " (no IP_PKTINFO: broadcast copies are not deduplicated)"))
             _set_status(status, state="listening", last_error=None)
             while True:
                 text = await queue.get()
@@ -345,15 +474,23 @@ async def nmea_udp_broadcast(port, clients_iter, send_fn, bind_host="0.0.0.0",
                 await _fanout(text, clients_iter, send_fn)
         except asyncio.CancelledError:
             _set_status(status, state="stopped")
-            if transport:
-                transport.close()
+            _close_udp(loop, sock)
             return
         except Exception as e:
             print(f"NMEA UDP listener error ({type(e).__name__}: {e}), retrying in 5s...")
             _set_status(status, state="retrying", last_error=f"{type(e).__name__}: {e}")
-            if transport:
-                transport.close()
+            _close_udp(loop, sock)
         await asyncio.sleep(5)
+
+
+def _close_udp(loop, sock):
+    if sock is None:
+        return
+    try:
+        loop.remove_reader(sock.fileno())
+    except Exception:
+        pass
+    sock.close()
 
 
 async def tcp_to_broadcast(host, port):

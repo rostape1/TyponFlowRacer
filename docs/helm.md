@@ -57,6 +57,17 @@ few tenths, differently on each tack. That is the point.
 The target AWA is ORC's true angle converted at the speed actually sailed, minus leeway, in the same
 corrected frame: slower means the target reads a little wider.
 
+**The wind angle is carried through turns by the heading.** The instruments send apparent wind only
+every ~5 s, but heading (`$HCHDG`) at 20 Hz, and turning the bow moves the apparent angle by the same
+amount at once. So the raw angle fed into the chain is the last `$IIMWV` minus how far the bow has
+turned since it arrived (`carryAwa()`; the store records the heading at each wind sentence as
+`awaHeading`). Replaying the 19 Sept races through the engine, the displayed angle just before each new
+wind sentence was ~10° from it through turns of 20°+, against 20–36° without; steering 5–20°, 4–7°
+against 4–8°; steady, no change, and the banner changed no more often. It follows the boat, not the
+wind: a real shift or gust still shows only with the next sentence. Without a heading fresh within 1 s
+(at the wind sentence and now) it falls back to the plain reading. The analysis tools don't do this;
+it only matters within seconds of a turn, which they leave out.
+
 ## The instruction
 
 `dS` = speed − target speed, `dA` = AWA − target AWA (+ = low upwind / deep downwind), floor 0.3 kn.
@@ -151,7 +162,7 @@ per-day fits.
 | `static/js/helm-targets.js` | **Generated.** ORC certificate, polar table, calibration constants |
 | `static/js/helm-logic.js` | Pure logic, no DOM: correction chain, targets, rules, smoothing, tack/reach detection |
 | `static/js/helm.js` | The view (SVG dial, speed bar, tiles, banner) |
-| `static/js/nmea-store.js` | Keeps signed `roll` and per-input timestamps (`awaAt`, `bspAt`, `rollAt`) for the tab |
+| `static/js/nmea-store.js` | Keeps signed `roll`, per-input timestamps (`awaAt`, `bspAt`, `rollAt`, `headingAt`) and the heading at each wind sentence (`awaHeading`) for the tab |
 | `tools/build_polar.py` | `helm_chain()`, `awa_by_bow()`, `polar_speed()`, `write_helm_js()` |
 | `tests/test_helm.mjs` | Python parity (chain, target, polar), every rule and boundary, the engine, heel sign on a real log line. Mutation-tested. In CI |
 
@@ -160,10 +171,12 @@ them together.
 
 ## Known limitations
 
-- **The wind angle updates only every ~5 s.** That is the rate the instruments put `$IIMWV` on the
-  NMEA feed, so the banner and dial cannot react to a wind change faster. If the B&G can be set to
-  output apparent wind more often, the display gets proportionally quicker; that is an instrument
-  setting, not the Pi.
+- **The wind angle updates only every ~5 s.** That is the rate the H1000 puts `$IIMWV` on the NMEA
+  feed. Turns are covered by the heading (above); a real wind change still shows only with the next
+  sentence. The H1000 has no output-rate setting, but its sentences can be switched off
+  (System → Remote unit setup → Selectable NMEA sentences, on the Universal Interface Box); the
+  output burst is 12 sentences, 8 of them unused or empty, and whether dropping them speeds up wind
+  is untested.
 - **Old iPads.** The helm files stay at Safari 12 syntax (iPads stuck at iOS 12.5: Air 1, mini 2/3):
   no class static fields, `?.`, `??` or `replaceChildren`, and a plain `font-size` before every
   `clamp()`. `tests/test_helm.mjs` guards it. If the code still fails to load, the tab says HELM

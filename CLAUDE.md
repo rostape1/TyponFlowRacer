@@ -291,7 +291,7 @@ safely. Look up your group's IDs in [docs/pitfalls.md](docs/pitfalls.md), by ID,
 |------|---------|
 | `scripts/fetch_sfbofs.py` | Download NOAA SFBOFS NetCDF (f000-f048), regrid (netCDF4+scipy), write per-hour JSON |
 | `scripts/fetch_ndbc.py` | NDBC buoy real-time observations (9 stations) |
-| `workflows/sfbofs.yml` | Hourly at :20 — checks from nominal run time (03/09/15/21z), retries until all 48h fetched |
+| `workflows/sfbofs.yml` | :31 and :47 past 04/10/16/22z (NOAA posts ~cycle+1h23m), plus hourly at :20 as fallback; retries until all 48h fetched |
 | `workflows/ndbc.yml` | Every 10 min; also commits the weekly keepalive heartbeat (`P02`) |
 | `workflows/deploy.yml` | Tests (JS + Python + `py_compile` + `bash -n`) → assemble data → deploy Pages |
 

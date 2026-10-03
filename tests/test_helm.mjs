@@ -340,6 +340,35 @@ console.log('engine');
     run(e, 100000, 130000, { A: 26, bsp: 7.5 });
     v = e.update(state(5000, { A: 26, bsp: 5.0 }), 5000);
     assert(v.ok && v.kind === 'build', 'after a seek back, no hold carried over from the other time');
+
+    // the wind angle is carried through turns by the 20 Hz heading: wind comes every ~5 s, and
+    // turning the bow moves the apparent angle by the same amount at once (docs/helm.md)
+    {
+        const K = (o, now) => L.carryAwa(Object.assign({ awa: 30, heading: 100, headingAt: now, awaHeading: 100 }, o), now);
+        assert(K({ heading: 110 }, 1000).awa === 20 && K({ heading: 110 }, 1000).carried,
+            'bow 10 deg to starboard -> the wind 10 deg further forward on the starboard bow');
+        assert(K({ heading: 90 }, 1000).awa === 40, 'bow 10 deg to port -> 10 deg wider');
+        assert(K({ awa: 5, heading: 5, awaHeading: 355 }, 1000).awa === 355, 'wraps through north and through the bow');
+        assert(K({ awa: 330, heading: 80 }, 1000).awa === 350, 'port tack: the same turn is the same shift');
+        const plain = (o, now = 1000) => { const r = K(o, now); return r.awa === 30 && !r.carried; };
+        assert(plain({ heading: null }), 'no heading -> the plain reading, as before');
+        assert(plain({ awaHeading: null, heading: 110 }), 'no heading when the wind was measured -> plain');
+        assert(plain({ heading: 110, headingAt: 1000 - C.STALE_HDG_S * 1000 - 1 }), 'stale heading -> plain');
+        assert(!plain({ heading: 110, headingAt: 1000 - C.STALE_HDG_S * 1000 + 1 }), 'heading just inside the limit is used');
+
+        // engine: one wind sentence at t=0, then the helm heads up 6 deg with no new wind sentence
+        const withHdg = (t, hdg) => Object.assign(state(t, { A: 26, bsp: 6.4, awaAt: Math.floor(t / 5000) * 5000 }),
+            { heading: hdg, headingAt: t, awaHeading: 100 });
+        const e1 = L.create(), e2 = L.create();
+        let a, b;
+        for (let t = 0; t <= 4750; t += 250) {
+            a = e1.update(withHdg(t, t < 2000 ? 100 : 106), t);
+            b = e2.update(Object.assign(withHdg(t, 100), { heading: null }), t);
+        }
+        assert(a.carried && !b.carried, 'the view model says whether the angle was carried');
+        assert(near(b.awa, 26, 1.0), `without heading the angle waits for the next sentence (${b.awa.toFixed(1)})`);
+        assert(a.awa < b.awa - 2.5, `with heading it follows the bow within the same sentence (${a.awa.toFixed(1)} vs ${b.awa.toFixed(1)})`);
+    }
 }
 
 // ---------------------------------------------------------------- heel sign, on real log lines
@@ -361,6 +390,15 @@ console.log('heel sign');
     assert(store.state.roll === Number(real.split(',')[10]) && store.state.rollAt === 1000, 'roll = YXXDR field 10, as build_polar.py reads it');
     store.ingest(withCk('YXXDR,A,-100.00,D,Yaw,A,0.50,D,Pitch,A,-24.30,D,Roll'), 2000);
     assert(store.state.roll === -24.3 && store.state.heel === 24.3, 'negative roll kept signed; heel stays the magnitude');
+
+    // the heading at the moment each apparent wind arrives, for carrying the angle through turns
+    store.ingest(withCk('HCHDG,77.86,,,'), 3000);
+    store.ingest(withCk('IIMWV,138,R,7.60,N,A'), 3400);
+    assert(store.state.headingAt === 3000 && store.state.awaHeading === 77.86, 'wind records the heading it was measured on');
+    store.ingest(withCk('IIHDG,,,,015,E'), 3500);   // verbatim shape from the logs: the B&G's empty heading
+    assert(store.state.heading === 77.86 && store.state.headingAt === 3000, "the B&G's empty IIHDG does not clobber the real heading");
+    store.ingest(withCk('IIMWV,140,R,7.60,N,A'), 5000);
+    assert(store.state.awaHeading === null, 'a heading older than 1 s is not recorded against the wind');
 }
 
 // ---------------------------------------------------------------- old iPads (iOS 12)
