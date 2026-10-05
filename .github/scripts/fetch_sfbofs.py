@@ -6,7 +6,7 @@ Downloads NetCDF files from the NOAA SF Bay Operational Forecast System,
 extracts surface u/v velocity, regrids to regular lat/lon, and writes
 JSON files for hours 0-48.
 
-Requires: netCDF4, scipy, numpy
+Requires: netCDF4, scipy, numpy, matplotlib
 """
 
 import json
@@ -99,6 +99,24 @@ def _find_latest_run() -> tuple[str, str] | None:
                 logger.info(f"Found SFBOFS run: {date_str} t{run}z")
                 return (date_str, run)
     return None
+
+
+def _wet_mask(ds, grid_lon_2d, grid_lat_2d):
+    """True where a grid point lies inside an FVCOM mesh triangle, else False.
+
+    Returns None (no masking) if the file has no mesh connectivity.
+    """
+    from matplotlib.tri import Triangulation
+
+    if not all(k in ds.variables for k in ("nv", "lat", "lon")):
+        logger.warning("No FVCOM mesh (nv/lat/lon) in file; land cells will not be masked")
+        return None
+    node_lat = np.array(ds.variables["lat"][:], dtype=np.float64)
+    node_lon = np.array(ds.variables["lon"][:], dtype=np.float64)
+    node_lon = np.where(node_lon > 180, node_lon - 360, node_lon)
+    tris = np.array(ds.variables["nv"][:], dtype=np.int64).T - 1  # 1-based Fortran indices
+    finder = Triangulation(node_lon, node_lat, tris).get_trifinder()
+    return finder(grid_lon_2d, grid_lat_2d) >= 0
 
 
 def _extract_and_regrid(nc_path: str, forecast_hour: int, bounds=BOUNDS, grid_spacing=GRID_SPACING) -> dict | None:
@@ -194,6 +212,15 @@ def _extract_and_regrid(nc_path: str, forecast_hour: int, bounds=BOUNDS, grid_sp
         points = np.column_stack([lons_sub, lats_sub])
         u_grid = griddata(points, u_sub, (grid_lon_2d, grid_lat_2d), method="linear", fill_value=0.0)
         v_grid = griddata(points, v_sub, (grid_lon_2d, grid_lat_2d), method="linear", fill_value=0.0)
+
+        # griddata triangulates the element centres afresh, so its convex hull
+        # spans land (the peninsula, Marin, Angel Island) and invents currents
+        # there. Keep only grid points inside one of the model's own wet
+        # triangles; 0/0 is what the browser treats as land.
+        wet = _wet_mask(ds, grid_lon_2d, grid_lat_2d)
+        if wet is not None:
+            u_grid[~wet] = 0.0
+            v_grid[~wet] = 0.0
 
         u_grid = np.round(u_grid, 3)
         v_grid = np.round(v_grid, 3)

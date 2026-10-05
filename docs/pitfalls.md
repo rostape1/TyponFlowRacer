@@ -234,7 +234,7 @@ bug.
 
 ## Local tiles exist only at z10-15, and "not github.io" is not "on the boat" [P15]
 
-**`ENFORCED`** — `tests/test_invariants.mjs`: `LOCAL_TILE_*_Z` must equal `DEFAULT_ZOOM_RANGE`, the clamp must be wired into layer options, and localhost must be excluded.
+**`ENFORCED`** — `tests/test_invariants.mjs`: `LOCAL_TILE_*_Z` must equal `DEFAULT_ZOOM_RANGE`, the clamp must be wired into layer options **and behave correctly under Leaflet's real `_clampZoom`**, the NOAA layer must pass options second, and localhost must be excluded.
 
 `download_offline.py` fetches `DEFAULT_ZOOM_RANGE = (10, 15)`. The Leaflet layers declared `maxZoom`
 16-19 with no `maxNativeZoom`, so zooming past 15 — routine when picking a slip or a mark — 404'd
@@ -246,6 +246,23 @@ not "local tiles exist". That captured **localhost**, so the documented local-de
 (`python -m http.server --directory static`) requested `tiles/*` from a gitignored, empty directory
 and showed a blank basemap with no explanation. `_serveTilesFromDisk()` now prefers
 `APP_CONFIG.mode === 'boat'` and excludes localhost.
+
+**"No clamp" is `undefined`, never `null`.** The fix above returned `{minNativeZoom: null, …}` for CDN
+mode, on the belief that null is Leaflet's default. In 1.9.4 the default is `undefined` and
+`_clampZoom` tests `!== undefined`, so `null` passes and `null < 13` clamps every request to **z0**:
+from 2026-08-26 to 2026-10-05 Dark and Street drew one world tile on GitHub Pages and local dev, and
+the test asserted the `null`. The same review's NOAA layer was built `new noaaChart({…})` — but
+`TileLayer` is `(url, options)`, so all its options, including this clamp, were silently dropped and
+the boat's chart went blank past z15. Now `new noaaChart('', {…})`, with `maxNativeZoom` 16 on the
+CDN (NOAA's tile cache stops at lod 14; z17+ 404s). The test runs Leaflet's real `_clampZoom` from
+`static/lib/leaflet.js` against `_nativeZoomOpts`, rather than pattern-matching the literal.
+
+**And the clamp needs a floor.** Below `minNativeZoom`, Leaflet fetches z10 tiles over an area 4×
+larger per level out — 345 at z8, 1,260 at z7, tens of thousands by z4 — which freezes the tab and
+floods the Pi (AIS and own-ship stop updating, no error). Once NOAA's options started applying, the
+default chart had it. Disk mode now sets `minZoom: LOCAL_TILE_MIN_Z - 1`; the map stops zooming out at
+z9 on the boat. The test bounds the gap and asserts every constructor and the `/config.json`
+reconciler apply `_nativeZoomOpts` (11 mutants, all killed).
 
 ## Service Worker quota eviction deleted the app shell [P16]
 
