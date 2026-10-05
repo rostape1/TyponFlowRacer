@@ -170,13 +170,51 @@ section('P15 — local tile zoom range agrees with what is downloaded');
   eq('min zoom matches what the downloader fetches', minZ, Number(range?.[1]));
   eq('max zoom matches what the downloader fetches', maxZ, Number(range?.[2]));
 
-  // The clamp has to be applied, not merely declared: Leaflet's default for
-  // both is null (no clamping), which is what produced the black canvas.
+  // The clamp has to be applied, not merely declared, and "no clamp" has to be
+  // what Leaflet means by it. Run Leaflet's real _clampZoom (from the vendored
+  // build) against the real _nativeZoomOpts: a regex here once *required*
+  // `null`, which Leaflet reads as "clamp to z0" — Dark/Street drew one world tile.
   ok('the clamp is wired into layer options via minNativeZoom/maxNativeZoom',
      /minNativeZoom:\s*LOCAL_TILE_MIN_Z/.test(appJs) && /maxNativeZoom:\s*LOCAL_TILE_MAX_Z/.test(appJs));
   const optsFn = /function _nativeZoomOpts[\s\S]{0,400}?\n}/.exec(appJs)?.[0] || '';
-  ok('_nativeZoomOpts only clamps when serving from disk', /\?/.test(optsFn) && /null/.test(optsFn),
-     'CDN mode must stay unclamped or high zoom breaks on GitHub Pages too');
+  const clampSrc = /_clampZoom:(function\(\w+\)\{[^}]*\})/.exec(read('static/lib/leaflet.js'))?.[1];
+  const noaaZoomSrc = /const NOAA_CDN_ZOOM = (\{[^}]*\});/.exec(appJs)?.[1];
+  ok('found _nativeZoomOpts, NOAA_CDN_ZOOM and Leaflet\'s _clampZoom', !!optsFn && !!clampSrc && !!noaaZoomSrc);
+  const nativeZoomOpts = new Function('LOCAL_TILE_MIN_Z', 'LOCAL_TILE_MAX_Z',
+    `${optsFn}; return _nativeZoomOpts;`)(minZ, maxZ);
+  const NOAA = new Function(`return ${noaaZoomSrc}`)();
+  const clamp = new Function(`return ${clampSrc}`)();
+  const clampWith = (opts, z) => clamp.call({ options: opts }, z);
+  eq('CDN mode leaves z13 at z13', clampWith(nativeZoomOpts(false), 13), 13);
+  eq('CDN mode leaves z18 at z18', clampWith(nativeZoomOpts(false), 18), 18);
+  ok('NOAA_CDN_ZOOM.maxZ is an integer', Number.isInteger(NOAA.maxZ));
+  eq('NOAA on the CDN leaves z13 at z13', clampWith(nativeZoomOpts(false, NOAA), 13), 13);
+  eq('NOAA on the CDN scales z18 from its deepest tiles', clampWith(nativeZoomOpts(false, NOAA), 18), NOAA.maxZ);
+  eq('disk mode scales z17 from the deepest local tiles', clampWith(nativeZoomOpts(true), 17), maxZ);
+  for (const [name, o] of [['disk', nativeZoomOpts(true)], ['NOAA disk', nativeZoomOpts(true, NOAA)]]) {
+    // Below minNativeZoom Leaflet requests minNativeZoom tiles over 4^(gap)
+    // times the viewport; minZoom must cap that gap or the tab freezes.
+    ok(`${name}: minZoom stops at most one level below the local tiles`,
+       Number.isInteger(o.minZoom) && o.minNativeZoom - o.minZoom <= 1,
+       `minZoom=${o.minZoom} minNativeZoom=${o.minNativeZoom}`);
+    eq(`${name}: lowest drawn zoom uses the shallowest local tiles`, clampWith(o, o.minZoom), minZ);
+  }
+  eq('switching back to CDN resets minZoom', nativeZoomOpts(false).minZoom, 0);
+
+  // Every layer has to actually receive the options, at construction and on
+  // reconciliation. TileLayer is (url, options): options passed first are dropped.
+  eq('all four basemap constructors spread _nativeZoomOpts(_tilesFromDisk…)',
+     (appJs.match(/\.\.\._nativeZoomOpts\(_tilesFromDisk[,)]/g) || []).length, 4);
+  ok('the NOAA layer gets its CDN limits',
+     /\.\.\._nativeZoomOpts\(_tilesFromDisk, NOAA_CDN_ZOOM\)/.test(appJs));
+  const reconciler = /_tilesFromDisk = fromDisk;[\s\S]*?\n\}\);/.exec(appJs)?.[0] || '';
+  ok('found the config reconciler', reconciler.length > 0);
+  ok('the reconciler re-applies _nativeZoomOpts to dark/osm/sea',
+     /const nz = _nativeZoomOpts\(fromDisk\);/.test(reconciler) && /Object\.assign\(layer\.options, nz\)/.test(reconciler));
+  ok('the reconciler re-applies NOAA\'s limits',
+     /Object\.assign\(noaaChartLayer\.options, _nativeZoomOpts\(fromDisk, NOAA_CDN_ZOOM\)\)/.test(reconciler));
+  ok('the NOAA layer passes its options as the second argument',
+     /new noaaChart\(\s*(['"`]).*?\1\s*,\s*\{/.test(appJs));
 
   // localhost must NOT be treated as boat mode, or local dev shows a blank map.
   const fromDisk = /function _serveTilesFromDisk\(\)[\s\S]*?\n}/.exec(appJs)?.[0] || '';

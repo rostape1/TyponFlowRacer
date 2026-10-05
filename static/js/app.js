@@ -461,11 +461,17 @@ function _tileTemplates(fromDisk) {
     };
 }
 
-// Leaflet's defaults for both of these are null (= no clamping).
-function _nativeZoomOpts(fromDisk) {
+// "No clamp" must be undefined, Leaflet's default. Its _clampZoom tests
+// `!== undefined`, so null passes and `null < 13` clamps every request to z0:
+// Dark and Street drew one world tile on the web from 0aab17b until this fix.
+// cdn.maxZ: deepest zoom the CDN serves; past it Leaflet scales tiles up.
+// On disk, minZoom stops the layer one level below the local tiles: below
+// minNativeZoom Leaflet fetches z10 tiles over an area 4x larger per level
+// out (~1,300 at z7), which froze the tab and flooded the Pi.
+function _nativeZoomOpts(fromDisk, cdn = {}) {
     return fromDisk
-        ? { minNativeZoom: LOCAL_TILE_MIN_Z, maxNativeZoom: LOCAL_TILE_MAX_Z }
-        : { minNativeZoom: null, maxNativeZoom: null };
+        ? { minNativeZoom: LOCAL_TILE_MIN_Z, maxNativeZoom: LOCAL_TILE_MAX_Z, minZoom: LOCAL_TILE_MIN_Z - 1 }
+        : { minNativeZoom: undefined, maxNativeZoom: cdn.maxZ, minZoom: cdn.minZ ?? 0 };
 }
 
 let _tilesFromDisk = _serveTilesFromDisk();
@@ -503,12 +509,15 @@ const noaaChart = L.TileLayer.extend({
         return `https://gis.charttools.noaa.gov/arcgis/rest/services/MarineChart_Services/NOAACharts/MapServer/tile/${lod}/${coords.y}/${coords.x}`;
     }
 });
-const noaaChartLayer = new noaaChart({
+// NOAA's tile cache is lod = z - 2, and stops at lod 14 (z16); z17+ is 404,
+// so scale z16 up.
+const NOAA_CDN_ZOOM = { minZ: 2, maxZ: 16 };
+// TileLayer's signature is (url, options): passing options first silently
+// dropped all of them, including the offline z10-15 clamp (P15).
+const noaaChartLayer = new noaaChart('', {
     attribution: '&copy; NOAA',
-    minZoom: 2,
-    maxZoom: 16,
-    opacity: 0.9,
-    ..._nativeZoomOpts(_tilesFromDisk),
+    maxZoom: 18,
+    ..._nativeZoomOpts(_tilesFromDisk, NOAA_CDN_ZOOM),
 });
 
 // /config.json lands after the layers above were built from the hostname guess.
@@ -523,7 +532,7 @@ _configPromise.then(() => {
         Object.assign(layer.options, nz);
         layer.setUrl(url);
     }
-    Object.assign(noaaChartLayer.options, nz);
+    Object.assign(noaaChartLayer.options, _nativeZoomOpts(fromDisk, NOAA_CDN_ZOOM));
     noaaChartLayer.redraw();
 });
 
@@ -1590,6 +1599,7 @@ if (typeof TidalFlowOverlay !== 'undefined') {
         useWaterMask: false,
     });
     tidalFlow.start();
+    map.on('baselayerchange', e => tidalFlow.setBasemapLight(e.layer !== darkLayer));
 }
 
 // Load currents on startup and refresh every 60 seconds.
@@ -1605,8 +1615,11 @@ autoRefreshTimers.currents = setInterval(loadCurrents, 60000);
 // Load SFBOFS grid data for high-resolution tidal flow
 function initFlowLegend() {
     const bar = document.getElementById('flow-legend-bar');
-    if (bar) {
-        bar.style.background = 'linear-gradient(to right, rgb(15,40,180), rgb(30,110,220), rgb(40,190,220), rgb(50,200,100), rgb(160,220,50), rgb(240,200,30), rgb(240,130,20), rgb(220,50,30), rgb(180,20,60))';
+    if (bar && tidalFlow) {
+        // Each stop at its real speed on the 0–4 kn bar, so the ticks agree with the map.
+        const stops = tidalFlow.colorStops.map(s =>
+            `rgb(${s.color.join(',')}) ${(Math.min(s.speed, 4) / 4 * 100).toFixed(1)}%`);
+        bar.style.background = `linear-gradient(to right, ${stops.join(', ')})`;
     }
 }
 initFlowLegend();

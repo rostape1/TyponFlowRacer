@@ -99,17 +99,20 @@ class TidalFlowOverlay {
         this.fadeOpacity = options.fadeOpacity || 0.93;
         this.useWaterMask = options.useWaterMask !== undefined ? options.useWaterMask : true;
 
-        // Windy-style color ramp: speed (kn) → color
+        // Speed (kn) → color. Most of the hue change sits in 0.5–2 kn, where
+        // the bay spends most of its time, and every stop is saturated and
+        // mid-dark: the particles are white, and pale yellow-greens hid them.
+        // The flow legend is drawn from these stops (initFlowLegend in app.js).
         this.colorStops = [
-            { speed: 0.0, color: [15, 40, 180] },    // deep blue (slack)
-            { speed: 0.2, color: [30, 110, 220] },   // blue
-            { speed: 0.5, color: [40, 190, 220] },   // cyan
-            { speed: 0.8, color: [50, 200, 100] },   // green
-            { speed: 1.2, color: [160, 220, 50] },   // yellow-green
-            { speed: 1.8, color: [240, 200, 30] },   // yellow
-            { speed: 2.5, color: [240, 130, 20] },   // orange
-            { speed: 3.5, color: [220, 50, 30] },    // red
-            { speed: 5.0, color: [180, 20, 60] },    // dark red
+            { speed: 0.0, color: [20, 30, 120] },    // navy (slack)
+            { speed: 0.3, color: [25, 80, 200] },    // blue
+            { speed: 0.6, color: [0, 140, 190] },    // teal-blue
+            { speed: 0.9, color: [0, 150, 110] },    // teal-green
+            { speed: 1.2, color: [70, 160, 40] },    // green
+            { speed: 1.5, color: [200, 160, 0] },    // amber
+            { speed: 2.0, color: [235, 115, 0] },    // orange
+            { speed: 2.8, color: [210, 40, 25] },    // red
+            { speed: 4.0, color: [150, 10, 80] },    // crimson
         ];
 
         this._initCanvas();
@@ -119,8 +122,13 @@ class TidalFlowOverlay {
     _isWater(lat, lon) {
         // Inside SFBOFS grid: grid cells with zero velocity are land
         if (this.grid) {
-            const b = this.grid.bounds;
-            if (lat >= b.south && lat <= b.north && lon >= b.west && lon <= b.east) return true;
+            const g = this.grid;
+            const b = g.bounds;
+            if (lat >= b.south && lat <= b.north && lon >= b.west && lon <= b.east) {
+                const iy = Math.round((lat - b.south) / (b.north - b.south) * (g.ny - 1));
+                const ix = Math.round((lon - b.west) / (b.east - b.west) * (g.nx - 1));
+                return g.u[iy][ix] !== 0 || g.v[iy][ix] !== 0;
+            }
         }
         // Outside SFBOFS: check HYCOM — only ocean cells have nonzero currents
         if (this.hycomGrid) {
@@ -140,14 +148,15 @@ class TidalFlowOverlay {
         }
         this.heatmapCanvas = document.createElement('canvas');
         this.heatmapCanvas.id = 'tidal-heatmap-canvas';
-        this.heatmapCanvas.style.cssText = 'position:absolute;top:0;left:0;pointer-events:none;opacity:0.4;';
+        this.heatmapCanvas.style.cssText = 'position:absolute;top:0;left:0;pointer-events:none;';
+        this.setBasemapLight(true);  // NOAA chart is the default layer
         this.map.getPane('tidalHeatmap').appendChild(this.heatmapCanvas);
         this.heatmapCtx = this.heatmapCanvas.getContext('2d');
 
         // Particle canvas (above heatmap)
         this.canvas = document.createElement('canvas');
         this.canvas.id = 'tidal-flow-canvas';
-        this.canvas.style.cssText = 'position:absolute;top:0;left:0;pointer-events:none;opacity:0.8;';
+        this.canvas.style.cssText = 'position:absolute;top:0;left:0;pointer-events:none;';
         if (!this.map.getPane('tidalCanvas')) {
             this.map.createPane('tidalCanvas');
             this.map.getPane('tidalCanvas').style.zIndex = 451;
@@ -430,6 +439,11 @@ class TidalFlowOverlay {
         this.heatmapCtx.drawImage(this._heatmapImage, dx, dy, dw, dh);
     }
 
+    /** A pale chart washes a 0.4 heatmap out to pastel; dark tiles don't. */
+    setBasemapLight(light) {
+        this.heatmapCanvas.style.opacity = light ? '0.7' : '0.4';
+    }
+
     setHeatmapEnabled(enabled) {
         this.heatmapEnabled = enabled;
         if (enabled) {
@@ -521,6 +535,7 @@ class TidalFlowOverlay {
         ctx.fillRect(0, 0, W, H);
         ctx.globalCompositeOperation = 'source-over';
 
+        const segs = [];
         for (let i = 0; i < this.particles.length; i++) {
             const p = this.particles[i];
             p.age++;
@@ -552,17 +567,30 @@ class TidalFlowOverlay {
 
             const newPt = this.map.latLngToContainerPoint([p.lat, p.lon]);
 
-            const alpha = 0.85;
             if (this.heatmapEnabled) {
-                ctx.strokeStyle = `rgba(255,255,255,${alpha})`;
-            } else {
-                const [r, g, b] = this._speedToColor(current.speed);
-                ctx.strokeStyle = `rgba(${r},${g},${b},${alpha})`;
+                segs.push(oldPt.x, oldPt.y, newPt.x, newPt.y);
+                continue;
             }
+            const [r, g, b] = this._speedToColor(current.speed);
+            ctx.strokeStyle = `rgba(${r},${g},${b},0.85)`;
             ctx.lineWidth = this.lineWidth;
             ctx.beginPath();
             ctx.moveTo(oldPt.x, oldPt.y);
             ctx.lineTo(newPt.x, newPt.y);
+            ctx.stroke();
+        }
+
+        // Over the heatmap all trails are white, so stroke them as one path.
+        // (A dark casing was tried: each frame's casing overpaints the previous
+        // frame's white, turning the fading trail black.)
+        if (segs.length) {
+            ctx.beginPath();
+            for (let i = 0; i < segs.length; i += 4) {
+                ctx.moveTo(segs[i], segs[i + 1]);
+                ctx.lineTo(segs[i + 2], segs[i + 3]);
+            }
+            ctx.strokeStyle = '#fff';
+            ctx.lineWidth = this.lineWidth;
             ctx.stroke();
         }
 
