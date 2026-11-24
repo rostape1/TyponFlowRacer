@@ -842,6 +842,32 @@ Rules:
 The Pi side still uses a denylist: `_ttl_for_noaa()` gives any unknown NOAA product the 6 h
 prediction TTL. Harmless today, the same trap for the next real-time product.
 
+## A Service Worker on localhost ran old code after every edit, and re-installed itself [P45]
+
+**`ENFORCED`** — `tests/test_invariants.mjs` asserts `index.html` skips `register('sw.js')` on
+localhost unless the URL has `?sw=1`. Verified by mutation: dropping the check fails it.
+
+Browsers allow Service Workers on HTTPS **and on `localhost`**, and `index.html` registered one
+wherever it could. So local dev had one, while the Pi (plain HTTP) did not. Locally `APP_BUILD` is
+always `'dev'`, so `CACHE_NAME` never rotates the way it does per deploy on Pages.
+
+On 2026-11-24 a local check of a new `aisstream.js` function ran the old file: the function was
+undefined in the page, with the new file on disk. After the fix, removing the installed worker took
+three tries. Each time the page that loaded was the **old** `index.html`, which registered the
+worker again. `python3 -m http.server` sends no `Cache-Control`, so Chrome's HTTP cache reused old
+files by heuristic freshness (the `P41` mechanism, on the dev server). Only unregistering, deleting
+the caches **and** refetching `index.html` with `cache: 'reload'` broke the loop.
+
+Rules:
+
+- **No Service Worker in local dev by default.** `?sw=1` opts in, for testing offline behaviour.
+  Without it, the page unregisters any worker and deletes the `ais-*` caches.
+- **A guard in a cached page cannot remove the cache that hides it.** A browser that already has
+  the old worker needs one manual "Clear site data". Expect this whenever a fix ships in the file the
+  cache is serving.
+- When a local check shows old behaviour, first confirm the page is running the edited file
+  (`typeof newFunction`, or the page source), before you debug the code.
+
 ## Adding a pitfall
 
 Writeup goes here under a new `## <one-line title> [Pnn]` heading with the next unused number.

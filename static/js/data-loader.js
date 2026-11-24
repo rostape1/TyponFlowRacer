@@ -621,6 +621,22 @@ function flowConfidenceVerdict(stations) {
     };
 }
 
+// The number a tide-station marker shows. In real-time mode a FRESH gauge
+// reading wins over the prediction — on a king tide or after heavy rain the
+// prediction can be more than a foot wrong. A stale or clock-mismatched reading
+// never takes over: it falls back to the prediction, labelled as such, rather
+// than drawing an old measurement as current (P44). In forecast mode there is
+// no measurement of the future, so it is always the prediction.
+//   returns { value: number|null, source: 'measured'|'predicted', ageMin? }
+function tideMarkerReading(station, forecastMinutes) {
+    const g = station && station.gauge;
+    if (forecastMinutes === 0 && g && g.fresh && Number.isFinite(g.observed)) {
+        return { value: g.observed, source: 'measured', ageMin: g.ageMin };
+    }
+    const h = station ? station.height_ft : null;
+    return { value: Number.isFinite(h) ? h : null, source: 'predicted' };
+}
+
 // --- Tidal Current Interpolation ---
 
 function _interpolateCurrent(predictions, targetTime) {

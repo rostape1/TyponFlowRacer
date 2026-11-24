@@ -28,6 +28,7 @@
     <!-- Map view -->
     <div id="map-view" class="view-container">
     <div id="map"></div>
+    <div id="ais-feed-banner" class="ais-feed-banner hidden" role="status"></div>
 
     <!-- Offline banner -->
     <!-- Environmental layers are present-day, not from the recording. SFBOFS
@@ -91,7 +92,7 @@
         <button id="flow-toggle" title="Toggle tidal flow animation and heatmap">Tide Flow: ON</button>
         <button id="wind-toggle" title="Toggle wind overlay">Wind: OFF</button>
         <button id="tide-toggle" title="Toggle tide height stations">Tide: OFF</button>
-        <button id="vessels-toggle" title="Toggle vessel list">Vessels: OFF</button>
+        <button id="vessels-toggle" title="Show the list of nearby vessels (does not hide vessels on the map)">Vessel list</button>
         <button id="labels-toggle" class="labels-off" title="Toggle competitor labels">Labels: OFF</button>
         <button id="route-toggle" class="route-off" title="Plan optimal route">Route</button>
         <button id="replay-toggle" class="replay-off" title="Replay a saved recording">Replay</button>
@@ -448,9 +449,21 @@
             .then(() => loadScript('js/race-tracks.js'))
             .then(() => loadScript('js/app.js'));
 
-        // Register service worker for PWA
+        // Register service worker for PWA. Not on localhost: there APP_BUILD is
+        // always 'dev', so the app-shell cache never changes name and edits can
+        // run as last week's code; the Pi (plain HTTP) has no SW either, so local
+        // dev should match it. Add ?sw=1 to test the SW locally (P45).
         if ('serviceWorker' in navigator) {
-            navigator.serviceWorker.register('sw.js');
+            const isLocalDev = ['localhost', '127.0.0.1', '[::1]'].includes(location.hostname);
+            if (!isLocalDev || new URLSearchParams(location.search).has('sw')) {
+                navigator.serviceWorker.register('sw.js');
+            } else {
+                // Remove one installed before this rule existed, and its caches.
+                navigator.serviceWorker.getRegistrations()
+                    .then(regs => regs.forEach(r => r.unregister()));
+                if (window.caches) caches.keys()
+                    .then(keys => keys.filter(k => k.startsWith('ais-')).forEach(k => caches.delete(k)));
+            }
         }
     </script>
 </body>

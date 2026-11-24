@@ -218,3 +218,39 @@ class AISStreamClient {
         this._reconnectTimer = setTimeout(() => this._doConnect(), 5000);
     }
 }
+
+// --- Is the cloud AIS feed live? ---------------------------------------------
+// The map keeps drawing vessels from saved history while AISstream is down, so
+// an empty or frozen feed looks like a quiet bay. This decides the note the map
+// shows in that case. Pure function, so it is testable without a socket.
+//   status:         last onStatus value ('connected' | 'disconnected' | 'error' | null)
+//   startedAt:      when the client was started (ms)
+//   lastMsgAt:      when the last vessel message arrived (ms), or 0
+//   newestVesselAt: newest _lastUpdate among the vessels shown (ms), or 0
+//   vesselCount:    vessels the map is drawing
+// Returns null while the feed is live (or still in its first connect window),
+// else the text to show.
+const AIS_CONNECT_GRACE_MS = 15000;
+const AIS_SILENT_MS = 2 * 60000;
+
+function _aisAge(ms) {
+    const min = Math.round(ms / 60000);
+    if (min < 1) return 'under a minute';
+    if (min < 90) return `${min} min`;
+    return `${(ms / 3600000).toFixed(1)} h`;
+}
+
+function aisFeedNotice({ status, startedAt, lastMsgAt, newestVesselAt, vesselCount, now = Date.now() }) {
+    if (now - startedAt < AIS_CONNECT_GRACE_MS) return null;
+    const connected = status === 'connected';
+    const sinceMsg = lastMsgAt ? now - lastMsgAt : now - startedAt;
+    if (connected && sinceMsg <= AIS_SILENT_MS) return null;
+
+    const head = connected
+        ? `AIS feed silent for ${_aisAge(sinceMsg)}`
+        : 'AIS feed not connected';
+    const tail = vesselCount > 0 && newestVesselAt
+        ? `vessel positions are from ${_aisAge(now - newestVesselAt)} ago`
+        : 'no vessels to show';
+    return `${head} — ${tail}`;
+}

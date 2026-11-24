@@ -150,7 +150,7 @@ known-good code. Prefer that when you're not at the boat (`P25`). Python changes
 - **Data pipeline:** GitHub Actions (SFBOFS + NDBC only); tides, currents and wind are fetched
   directly from APIs in the browser, or via the Pi reverse proxy on the boat
 - **AIS:** direct browser WebSocket to AISstream.io on the internet; local NMEA/VHF on the boat
-- **PWA:** `sw.js` registers only over HTTPS, i.e. only on GitHub Pages — see
+- **PWA:** `sw.js` registers only on GitHub Pages: the Pi is plain HTTP, and localhost skips it unless `?sw=1` — see
   [docs/offline-cache.md](docs/offline-cache.md)
 
 ## Deployment
@@ -305,6 +305,7 @@ safely. Look up your group's IDs in [docs/pitfalls.md](docs/pitfalls.md), by ID,
 ### Touching static serving, the browser cache or the boot script chain
 - Unversioned JS with no `Cache-Control` let Chrome run last week's app against today's Pi `P41`
 - An untracked file in `sw.js`'s `ASSETS` makes `addAll` reject and kills ALL offline caching `P43`
+- A Service Worker on localhost ran old code after edits and re-installed itself; `?sw=1` only `P45`
 
 ---
 
@@ -408,8 +409,8 @@ node tests/test_helm.mjs           # Helm tab rules + Python parity
 CI runs all eight in `deploy.yml`'s `test` job, plus `py_compile` on the Pi/root Python and `bash -n`
 on the boat shell scripts.
 
-**23 of the 44 pitfalls are mechanically enforced** — a test fails if you undo the fix. Those are
-`P01` `P03` `P06` `P07` `P08` `P10` `P11` `P15` `P16` `P18` `P20` `P21` `P22` `P24` `P33` `P34` `P36` `P37` `P40` `P41` `P42` `P43` `P44`. The rest are
+**24 of the 45 pitfalls are mechanically enforced** — a test fails if you undo the fix. Those are
+`P01` `P03` `P06` `P07` `P08` `P10` `P11` `P15` `P16` `P18` `P20` `P21` `P22` `P24` `P33` `P34` `P36` `P37` `P40` `P41` `P42` `P43` `P44` `P45`. The rest are
 documentation-only: the index is the only thing standing between you and re-introducing them. If you
 fix a doc-only pitfall's code area, consider whether an assertion could move it into the enforced set.
 
