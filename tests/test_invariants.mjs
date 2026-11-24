@@ -20,8 +20,12 @@
  *        cache.addAll(ASSETS), which rejects as a UNIT, so one missing file means
  *        the Service Worker never activates and ALL offline capability is lost —
  *        silently, because everything looks normal while online.
+ *   P44  sw.js may serve an env-API request cache-first only if its answer is
+ *        fixed for that URL. `date=latest` water levels have one URL and a new
+ *        answer every 6 minutes; served cache-first they showed hours-old gauge
+ *        readings as live and inverted the flow-confidence verdict.
  *
- * P16 and P18 are functional: sw.js is loaded in a sandbox with a fake Cache API
+ * P16, P18 and P44 are functional: sw.js is loaded in a sandbox with a fake Cache API
  * and its real functions are called. P15 and P24 are source assertions, because
  * the thing being checked IS agreement between two files' literals.
  *
@@ -62,23 +66,26 @@ class FakeCache {
   urls() { return this.entries.map((e) => e.url); }
 }
 
-function loadSw(caches) {
+function loadSw(caches, fetchImpl = () => {}) {
   const src = read('static/sw.js');
+  const listeners = {};
   const self = {
-    addEventListener() {},
+    addEventListener(type, fn) { listeners[type] = fn; },
     skipWaiting() {},
     clients: { claim() {}, async matchAll() { return []; } },
   };
   // Expose the internals under test. sw.js is a classic script, not a module.
   const exportList = [
-    'isTileHost', 'isEnvApiHost', 'evictForQuota', 'evictOldestTiles',
+    'isTileHost', 'isEnvApiHost', 'isCacheFirstSafe', 'evictForQuota', 'evictOldestTiles',
     'evictFarthestForecast', 'CACHE_NAME', 'DATA_CACHE', 'TILE_CACHE', 'TILE_HOSTS',
   ];
   const factory = new Function(
     'self', 'caches', 'Response', 'fetch', 'URL',
     `${src}\n;return {${exportList.join(',')}};`
   );
-  return factory(self, caches, class {}, () => {}, URL);
+  const sw = factory(self, caches, class { constructor(body, init) { this.body = body; Object.assign(this, init); } }, fetchImpl, URL);
+  sw.listeners = listeners;
+  return sw;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -343,6 +350,80 @@ section('sw.js precache manifest (P43)');
         'a fresh deploy checkout would 404 this and the Service Worker would never install');
     }
   }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+section('P44 — real-time env-API answers are never served cache-first');
+// ─────────────────────────────────────────────────────────────────────────────
+{
+  const NOAA = 'https://api.tidesandcurrents.noaa.gov/api/prod/datagetter';
+  const q = (s) => new URL(`${NOAA}?${s}&datum=MLLW&units=english&time_zone=gmt&format=json`);
+  const swPlain = loadSw({ async open() { return new FakeCache(); } });
+
+  // Unit: the classifier is an allowlist, so anything unlisted goes to the network.
+  ok('tide predictions are cache-first safe',
+    swPlain.isCacheFirstSafe(q('begin_date=20261124&end_date=20261127&station=9414290&product=predictions&interval=6')));
+  ok('current predictions are cache-first safe',
+    swPlain.isCacheFirstSafe(q('begin_date=20261124&end_date=20261127&station=SFB1201&product=currents_predictions&interval=6')));
+  ok('the Open-Meteo forecast is cache-first safe',
+    swPlain.isCacheFirstSafe(new URL('https://api.open-meteo.com/v1/forecast?latitude=37.8&longitude=-122.4')));
+  ok('date=latest water level is NOT cache-first safe',
+    !swPlain.isCacheFirstSafe(q('date=latest&station=9414290&product=water_level')));
+  ok('date=latest is unsafe whatever the product',
+    !swPlain.isCacheFirstSafe(q('date=latest&station=9414290&product=predictions')));
+  ok('an unlisted NOAA product is NOT cache-first safe (allowlist, not denylist)',
+    !swPlain.isCacheFirstSafe(q('date=today&station=9414290&product=air_pressure')));
+  ok('a NOAA request with no product is NOT cache-first safe',
+    !swPlain.isCacheFirstSafe(q('station=9414290')));
+
+  // Cross-file: every NOAA product data-loader.js requests must have a decided
+  // answer here. A new product fails CI until someone says which kind it is.
+  const DECIDED = { predictions: true, currents_predictions: true, water_level: false };
+  const products = [...new Set([...read('static/js/data-loader.js').matchAll(/product=([a-z_]+)/g)].map((m) => m[1]))];
+  ok('data-loader.js requests at least the three known products', products.length >= 3, products.join(','));
+  for (const p of products) {
+    ok(`product=${p} has a decided cache-first answer in this test`, p in DECIDED,
+      'classify it in DECIDED and in sw.js isCacheFirstSafe()');
+    if (p in DECIDED) eq(`sw.js agrees on product=${p}`,
+      swPlain.isCacheFirstSafe(q(`date=today&station=1&product=${p}`)), DECIDED[p]);
+  }
+
+  // Functional: the real fetch handler, after an offline download, with an old
+  // reading in the cache and the network up. The bug served the cached copy.
+  const cachedResp = { tag: 'cached-3h-old', ok: true, clone() { return this; } };
+  const netResp = { tag: 'network-now', ok: true, clone() { return this; } };
+  const data = new FakeCache();
+  data.match = async () => cachedResp;
+  const sw = loadSw({ async open() { return data; } }, async () => netResp);
+  sw.listeners.message({ data: { type: 'ENV_CACHE_READY' }, ports: [] });
+
+  const respond = async (url) => {
+    let p;
+    sw.listeners.fetch({ request: { url: url.href }, respondWith(x) { p = x; } });
+    return p && (await p);
+  };
+  const wl = await respond(q('date=latest&station=9414290&product=water_level'));
+  eq('water level after offline download comes from the network', wl && wl.tag, 'network-now');
+  const pred = await respond(q('begin_date=20261124&end_date=20261127&station=9414290&product=predictions&interval=6'));
+  eq('predictions after offline download still come from the cache', pred && pred.tag, 'cached-3h-old');
+
+  // Offline: the cached reading is still served; the app's age check rejects it.
+  const swOff = loadSw({ async open() { return data; } }, async () => { throw new TypeError('offline'); });
+  swOff.listeners.message({ data: { type: 'ENV_CACHE_READY' }, ports: [] });
+  let offP;
+  swOff.listeners.fetch({ request: { url: q('date=latest&station=9414290&product=water_level').href }, respondWith(x) { offP = x; } });
+  eq('offline, the last water level is the fallback', (await offP).tag, 'cached-3h-old');
+
+  // The legend must render the tested verdict, not recompute one. The original
+  // bug lived here: observed_ft - height_ft compared an old reading with NOW.
+  const app = read('static/js/app.js');
+  const body = (app.match(/function updateFlowConfidence\(\) \{([\s\S]*?)\n\}/) || [])[1] || '';
+  ok('updateFlowConfidence() exists', body.length > 0);
+  ok('updateFlowConfidence() uses flowConfidenceVerdict()', /flowConfidenceVerdict\(/.test(body));
+  ok('updateFlowConfidence() never touches observed_ft / height_ft itself',
+    !/observed_ft|height_ft/.test(body), 'compute the verdict in data-loader.js, where it is tested');
+  ok('updateFlowConfidence() never blanks the line in real-time mode',
+    (body.match(/innerHTML\s*=\s*''/g) || []).length <= 1, 'only the forecast-mode branch may clear it');
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

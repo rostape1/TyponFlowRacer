@@ -129,7 +129,12 @@ Three caches: `CACHE_NAME` (`ais-tracker-<build hash>`, the app shell), `DATA_CA
 - **HTML/JS** — network-first. `APP_BUILD` is stamped with the commit hash at deploy time by
   `deploy.yml`, so `CACHE_NAME` rotates per deploy and `activate` deletes the old one.
 - **Env APIs and static data JSON** — network-first with cache fallback, switching to
-  stale-while-revalidate after an explicit offline download.
+  stale-while-revalidate after an explicit offline download. For env APIs that switch applies
+  only to requests on the `isCacheFirstSafe()` allowlist: NOAA `predictions` and
+  `currents_predictions`, and the Open-Meteo forecast. Their answer is fixed for their URL.
+  Everything else, notably `date=latest` water levels, stays network-first, and the cached copy
+  is used only when the network fails. The app then rejects a reading older than 30 minutes
+  (`WATER_LEVEL_MAX_AGE_MS`) rather than drawing a verdict from it (`P44`).
 - **`/config.json` bypasses the SW entirely** — it must always reflect the serving origin's truth.
 
 ### Quota eviction

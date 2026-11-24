@@ -83,6 +83,11 @@ split by subsystem rather than dispatching agents who will skim.
 
 ## Step 3 — two passes, in parallel, read-only
 
+**Tier by diff size first.** Under ~150 inserted lines (`git diff --shortstat <range>`), run **one**
+pass that combines both lenses and both pitfall groups below, even on a mandated file. Measured in
+the QBR dashboard repo on 2026-09-14: a 92-line diff bought one unique finding for its second pass.
+At ~150 lines or more, run both.
+
 One message, two `Agent` calls, `subagent_type: general-purpose`.
 
 | Pass | Lens | Pitfall groups to inject |
