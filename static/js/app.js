@@ -962,12 +962,14 @@ function connectAISStream() {
         return;
     }
 
+    _aisFeed.startedAt = Date.now();
     aisClient = new AISStreamClient({
         apiKey: apiKey,
         bbox: [[36.4, -122.8], [38.2, -121.8]],
         ownMmsi: OWN_MMSI,
         onMessage: (data) => {
             messageCount++;
+            _aisFeed.lastMsgAt = Date.now();
             const merged = vesselStore.upsert(data);
             vessels.set(data.mmsi, merged);
 
@@ -1004,6 +1006,7 @@ function connectAISStream() {
             updatePanel();
         },
         onStatus: (status) => {
+            _aisFeed.status = status;
             const el = document.getElementById('connection-status');
             if (status === 'connected') {
                 el.textContent = 'Connected';
@@ -1015,6 +1018,27 @@ function connectAISStream() {
         },
     });
     aisClient.connect();
+    setInterval(updateAisFeedBanner, 5000);
+}
+
+// Cloud AIS liveness, for the map note. Web mode only: in boat mode AIS comes
+// from the local NMEA feed, which has its own status.
+const _aisFeed = { status: null, startedAt: 0, lastMsgAt: 0 };
+
+// Say on the map when the vessels drawn are not live. Without this a dead
+// AISstream connection looks like a quiet bay (CLAUDE.md: fail visibly).
+function updateAisFeedBanner() {
+    const el = document.getElementById('ais-feed-banner');
+    if (!el) return;
+    let newest = 0, count = 0;
+    for (const v of vessels.values()) {
+        if (v.lat == null) continue;
+        count++;
+        if ((v._lastUpdate || 0) > newest) newest = v._lastUpdate;
+    }
+    const text = aisFeedNotice({ ..._aisFeed, newestVesselAt: newest, vesselCount: count });
+    el.textContent = text || '';
+    el.classList.toggle('hidden', !text);
 }
 
 // Periodically save vessel store and prune stale vessels/markers
@@ -1099,7 +1123,7 @@ if (_layersBtn && _layersTray) {
         if (!isOpen && _mobileVesselsOn) {
             _mobileVesselsOn = false;
             if (_vesselsBtn) {
-                _vesselsBtn.textContent = 'Vessels: OFF';
+                _vesselsBtn.textContent = 'Vessel list';
                 _vesselsBtn.classList.add('vessels-off');
             }
             if (_mobileVesselList) _mobileVesselList.classList.add('hidden');
@@ -1134,7 +1158,7 @@ window.addEventListener('resize', () => {
         // Went desktop: hide mobile vessel list to avoid duplicate
         if (_mobileVesselsOn) {
             _mobileVesselsOn = false;
-            if (_vesselsBtn) { _vesselsBtn.textContent = 'Vessels: OFF'; _vesselsBtn.classList.add('vessels-off'); }
+            if (_vesselsBtn) { _vesselsBtn.textContent = 'Vessel list'; _vesselsBtn.classList.add('vessels-off'); }
             if (_mobileVesselList) _mobileVesselList.classList.add('hidden');
         }
     }
@@ -1190,7 +1214,7 @@ function updateMobileVesselList() {
 function closeMobileVesselList() {
     _mobileVesselsOn = false;
     if (_vesselsBtn) {
-        _vesselsBtn.textContent = 'Vessels: OFF';
+        _vesselsBtn.textContent = 'Vessel list';
         _vesselsBtn.classList.add('vessels-off');
     }
     if (_mobileVesselList) _mobileVesselList.classList.add('hidden');
@@ -1202,7 +1226,7 @@ if (_vesselsBtn) {
     _vesselsBtn.classList.add('vessels-off');
     _vesselsBtn.addEventListener('click', () => {
         _mobileVesselsOn = !_mobileVesselsOn;
-        _vesselsBtn.textContent = _mobileVesselsOn ? 'Vessels: ON' : 'Vessels: OFF';
+        _vesselsBtn.textContent = 'Vessel list';
         _vesselsBtn.classList.toggle('vessels-off', !_mobileVesselsOn);
         if (_mobileVesselList) {
             _mobileVesselList.classList.toggle('hidden', !_mobileVesselsOn);
@@ -1233,9 +1257,8 @@ map.on('click', (e) => {
     if (_mobileVesselsOn) closeMobileVesselList();
     if (_routeMode) { _handleRouteClick(e); return; }
 });
-map.on('dragstart', () => {
-    if (_mobileVesselsOn) closeMobileVesselList();
-});
+// Dragging the map does NOT close the list: it is a list, not a map layer,
+// and closing it on drag made the button look like it switched vessels off.
 
 // --- Competitor Labels Toggle ---
 const _labelsToggle = document.getElementById('labels-toggle');
@@ -1954,7 +1977,10 @@ function updateTideMarkers() {
     console.log('Updating tide markers:', tideStations.length, 'stations');
 
     for (const s of tideStations) {
-        const h = s.height_ft;
+        // Fresh gauge reading if we have one, else the prediction (P44).
+        const reading = tideMarkerReading(s, forecastMinutes);
+        const measured = reading.source === 'measured';
+        const h = reading.value;
         const hasData = h != null;
         const sign = hasData && h >= 0 ? '+' : '';
         const color = !hasData ? '#888' : (h >= 0 ? '#5dade2' : '#e74c3c');
@@ -1963,8 +1989,10 @@ function updateTideMarkers() {
         const label = hasData ? `${sign}${h.toFixed(1)}` : 'N/A';
         const textY = size / 2 + (hasData ? 1 : 5);
         const fontSize = hasData ? 11 : 12;
-        const ftLine = hasData ? `<text x="${size/2}" y="${size/2 + 13}" text-anchor="middle" fill="${color}" font-size="8">ft</text>` : '';
-        const hasGauge = s.gauge != null && s.gauge.fresh;
+        // "ft" under a prediction, "meas" under a gauge reading, so the two can't be confused.
+        const unit = measured ? 'meas' : 'ft';
+        const ftLine = hasData ? `<text x="${size/2}" y="${size/2 + 13}" text-anchor="middle" fill="${color}" font-size="8">${unit}</text>` : '';
+        const hasGauge = measured;
         const gaugeRing = hasGauge ? `<circle cx="${size/2}" cy="${size/2}" r="${size/2 - 0.5}" fill="none" stroke="#2ecc71" stroke-width="1.5" stroke-dasharray="3,2"/>` : '';
         const svg = `<svg width="${size}" height="${size}" viewBox="0 0 ${size} ${size}" xmlns="http://www.w3.org/2000/svg">
             <circle cx="${size/2}" cy="${size/2}" r="${size/2 - 2}" fill="rgba(10,22,40,0.9)" stroke="${color}" stroke-width="2.5"/>
@@ -1985,14 +2013,17 @@ function updateTideMarkers() {
         if (!hasData) {
             popupRows = `<div class="popup-row"><span class="popup-label">Tide Height</span><span class="popup-value" style="color:#888">Data unavailable</span></div>`;
         } else {
-            popupRows = `<div class="popup-row"><span class="popup-label">Predicted</span><span class="popup-value" style="color:${color}">${sign}${h.toFixed(2)} ft</span></div>`;
+            // A measured marker leads with the measurement; the comparison rows
+            // below then give the prediction it was checked against.
+            popupRows = measured ? ''
+                : `<div class="popup-row"><span class="popup-label">Predicted</span><span class="popup-value" style="color:${color}">${sign}${h.toFixed(2)} ft</span></div>`;
             if (s.observed_ft != null && s.gauge) {
                 const g = s.gauge;
                 const obsSign = s.observed_ft >= 0 ? '+' : '';
                 const obsColor = !g.fresh ? '#888' : (s.observed_ft >= 0 ? '#5dade2' : '#e74c3c');
                 const age = g.clockMismatch ? 'time ahead of this device'
                     : g.ageMin < 90 ? `${g.ageMin} min ago` : `${(g.ageMin / 60).toFixed(1)} h ago`;
-                popupRows += `<div class="popup-row"><span class="popup-label">Observed</span><span class="popup-value" style="color:${obsColor}">${obsSign}${s.observed_ft.toFixed(2)} ft · ${age}</span></div>`;
+                popupRows += `<div class="popup-row"><span class="popup-label">${measured ? 'Measured' : 'Observed'}</span><span class="popup-value" style="color:${obsColor}">${obsSign}${s.observed_ft.toFixed(2)} ft · ${age}</span></div>`;
                 if (g.clockMismatch) {
                     popupRows += `<div class="popup-row"><span class="popup-label">Difference</span><span class="popup-value" style="color:#e74c3c">device clock wrong — not compared</span></div>`;
                 } else if (!g.fresh) {

@@ -332,5 +332,35 @@ console.log('Water-level refresh failure (P44):');
     check('HTTP 503: last reading is kept', !!r.get('9414290'));
 }
 
+// --- Tide marker: show the measurement when we have a fresh one (P44) ---
+console.log('Tide marker reading (P44):');
+{
+    const sb = {
+        localStorage: { getItem: () => '{}' },
+        console, Date, Math, JSON, Map, Set, Array, Number, String, Object,
+        parseInt, parseFloat, isNaN, AbortController, setTimeout, clearTimeout, Promise,
+        window: undefined, fetch: async () => { throw new Error('no network'); },
+    };
+    const keys = Object.keys(sb);
+    const { tideMarkerReading } = new Function(...keys,
+        src + '\n; return { tideMarkerReading };')(...keys.map(k => sb[k]));
+    const gauge = (extra = {}) => ({ observed: 10.42, predicted: 9.18, delta: 1.24, ageMin: 6, fresh: true, clockMismatch: false, ...extra });
+
+    let r = tideMarkerReading({ height_ft: 9.18, gauge: gauge() }, 0);
+    check('fresh gauge, real time: marker shows the measurement', r.source === 'measured' && r.value === 10.42, JSON.stringify(r));
+    r = tideMarkerReading({ height_ft: 9.18, gauge: gauge({ fresh: false, ageMin: 190 }) }, 0);
+    check('stale gauge: falls back to the prediction, never the old measurement', r.source === 'predicted' && r.value === 9.18, JSON.stringify(r));
+    r = tideMarkerReading({ height_ft: 9.18, gauge: gauge({ fresh: false, clockMismatch: true }) }, 0);
+    check('clock mismatch: falls back to the prediction', r.source === 'predicted' && r.value === 9.18, JSON.stringify(r));
+    r = tideMarkerReading({ height_ft: 7.5, gauge: gauge() }, 120);
+    check('forecast mode: always the prediction, even with a fresh gauge', r.source === 'predicted' && r.value === 7.5, JSON.stringify(r));
+    r = tideMarkerReading({ height_ft: 9.18 }, 0);
+    check('no gauge: the prediction', r.source === 'predicted' && r.value === 9.18, JSON.stringify(r));
+    r = tideMarkerReading({ height_ft: null }, 0);
+    check('no data at all: null value', r.value === null, JSON.stringify(r));
+    r = tideMarkerReading({ height_ft: 9.18, gauge: gauge({ observed: NaN }) }, 0);
+    check('unparseable measurement: the prediction', r.source === 'predicted', JSON.stringify(r));
+}
+
 console.log(`\n${pass + fail} tests: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

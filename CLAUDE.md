@@ -150,7 +150,7 @@ known-good code. Prefer that when you're not at the boat (`P25`). Python changes
 - **Data pipeline:** GitHub Actions (SFBOFS + NDBC only); tides, currents and wind are fetched
   directly from APIs in the browser, or via the Pi reverse proxy on the boat
 - **AIS:** direct browser WebSocket to AISstream.io on the internet; local NMEA/VHF on the boat
-- **PWA:** `sw.js` registers only over HTTPS, i.e. only on GitHub Pages — see
+- **PWA:** `sw.js` registers only on GitHub Pages: the Pi is plain HTTP, and localhost skips it unless `?sw=1` — see
   [docs/offline-cache.md](docs/offline-cache.md)
 
 ## Deployment

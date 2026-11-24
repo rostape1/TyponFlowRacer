@@ -1270,6 +1270,30 @@ body.panel-collapsed #panel-toggle {
     display: none;
 }
 
+.ais-feed-banner {
+    /* Below .replay-env-banner (top 48px) so the two never overlap. */
+    position: fixed;
+    top: 84px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 1098;
+    max-width: calc(100vw - 24px);
+    padding: 6px 14px;
+    border-radius: 8px;
+    background: rgba(10, 22, 40, 0.88);
+    border: 1px solid #e74c3c;
+    backdrop-filter: blur(10px);
+    color: #ff7b6b;
+    font-size: 11.5px;
+    font-weight: 600;
+    text-align: center;
+    pointer-events: none;
+}
+
+.ais-feed-banner.hidden {
+    display: none;
+}
+
 #layers-tray button:disabled {
     opacity: 0.35;
     cursor: not-allowed;

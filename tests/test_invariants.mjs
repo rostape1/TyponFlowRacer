@@ -427,6 +427,51 @@ section('P44 — real-time env-API answers are never served cache-first');
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+section('Cloud AIS feed — the map says when vessels are not live');
+{
+  const { aisFeedNotice } = new Function(read('static/js/aisstream.js') + '\n; return { aisFeedNotice };')();
+  const now = 10 * 3600000, min = 60000;
+  const base = { startedAt: now - 30 * min, newestVesselAt: now - 25 * min, vesselCount: 107, now };
+
+  eq('first 15 s after start: no note (still connecting)',
+    aisFeedNotice({ ...base, startedAt: now - 10000, status: null, lastMsgAt: 0 }), null);
+  eq('connected and messages flowing: no note',
+    aisFeedNotice({ ...base, status: 'connected', lastMsgAt: now - 20000 }), null);
+  eq('disconnected with saved vessels: says so, with their age',
+    aisFeedNotice({ ...base, status: 'disconnected', lastMsgAt: 0 }),
+    'AIS feed not connected — vessel positions are from 25 min ago');
+  eq('error status counts as not connected',
+    aisFeedNotice({ ...base, status: 'error', lastMsgAt: 0 }),
+    'AIS feed not connected — vessel positions are from 25 min ago');
+  eq('connected but silent past 2 min: says so',
+    aisFeedNotice({ ...base, status: 'connected', lastMsgAt: now - 5 * min }),
+    'AIS feed silent for 5 min — vessel positions are from 25 min ago');
+  eq('connected, never a message, 30 min in: silent since start',
+    aisFeedNotice({ ...base, status: 'connected', lastMsgAt: 0 }),
+    'AIS feed silent for 30 min — vessel positions are from 25 min ago');
+  eq('no vessels at all: says there is nothing to show',
+    aisFeedNotice({ ...base, status: 'disconnected', lastMsgAt: 0, vesselCount: 0, newestVesselAt: 0 }),
+    'AIS feed not connected — no vessels to show');
+  eq('old history is given in hours',
+    aisFeedNotice({ ...base, status: 'disconnected', lastMsgAt: 0, newestVesselAt: now - 3 * 3600000 }),
+    'AIS feed not connected — vessel positions are from 3.0 h ago');
+
+  // The button is a list, not a map layer: it must not read as "vessels off",
+  // and dragging the map must not close it.
+  const app = read('static/js/app.js');
+  ok('no "Vessels: OFF/ON" label left in app.js', !/Vessels: (OFF|ON)/.test(app));
+  ok('no "Vessels: OFF/ON" label left in index.html', !/Vessels: (OFF|ON)/.test(read('static/index.html')));
+  ok("map dragstart does not close the vessel list",
+    !/map\.on\('dragstart'[^}]*closeMobileVesselList/.test(app));
+  // Local dev must not run a Service Worker by default: APP_BUILD is 'dev' there,
+  // so its cache never changes name and edits run as stale code.
+  const html = read('static/index.html');
+  ok('SW registration is skipped on localhost unless ?sw=1',
+    /isLocalDev[\s\S]{0,200}has\('sw'\)[\s\S]{0,80}register\('sw\.js'\)/.test(html));
+  ok('index.html has the #ais-feed-banner element', /id="ais-feed-banner"/.test(read('static/index.html')));
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 console.log();
 console.log(failed ? `${failed} failed` : 'all passed');
 if (failed) process.exit(1);
