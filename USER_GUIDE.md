@@ -104,6 +104,9 @@ Click the **<** arrow to expand the vessel list panel:
 - **Vessel cards** — Each shows name, type, distance, bearing, speed, and CPA status
 - **Eye icon** — Hide/show individual vessels on the map
 - Vessels fade out after 10 minutes without an AIS update
+- If the cloud AIS feed is down, a red note at the top of the map says so, and how old the vessel positions are
+
+On a phone, the **Vessel list** button opens the same list. It does not show or hide vessels on the map.
 
 ### Map Click
 
@@ -251,14 +254,17 @@ Wind forecast data is available up to **48 hours** ahead. Beyond that, the wind 
 Toggle with **Tide: OFF/ON** in the status bar.
 
 ### What You See
-14 circular markers across SF Bay, each showing the current water level in feet above MLLW (Mean Lower Low Water).
+Circular markers across SF Bay, each showing the water level in feet above MLLW (Mean Lower Low Water).
+
+- **ft** under the number = the predicted level
+- **meas** under the number, with a dashed green ring = a real gauge reading, 30 minutes old or less. Six stations have gauges. An older reading is not shown on the marker; it falls back to the prediction.
 
 - **Blue numbers** = water above MLLW (positive)
 - **Red numbers** = water below MLLW (negative)
 
 ### Station Popups
 Click any tide station to see:
-- **Tide Height** — Current water level (e.g., +4.23 ft MLLW)
+- **Predicted** — or, at a gauge station, **Measured** with its age, the prediction at that time, and the difference
 - **Next High/Low** — Time and height of the next tidal extreme
 - **Datum** — MLLW reference
 

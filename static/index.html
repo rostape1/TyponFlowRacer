@@ -452,7 +452,7 @@
         // Register service worker for PWA. Not on localhost: there APP_BUILD is
         // always 'dev', so the app-shell cache never changes name and edits can
         // run as last week's code; the Pi (plain HTTP) has no SW either, so local
-        // dev should match it. Add ?sw=1 to test the SW locally.
+        // dev should match it. Add ?sw=1 to test the SW locally (P45).
         if ('serviceWorker' in navigator) {
             const isLocalDev = ['localhost', '127.0.0.1', '[::1]'].includes(location.hostname);
             if (!isLocalDev || new URLSearchParams(location.search).has('sw')) {

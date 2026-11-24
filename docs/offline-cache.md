@@ -122,6 +122,9 @@ stale branch resolves the alias and sets `X-Cache-Reason: upstream-error-date-sh
 
 ## The Service Worker (GitHub Pages only)
 
+The Pi is plain HTTP, so browsers refuse it a Service Worker. Localhost would allow one, but
+`index.html` skips it there unless the URL has `?sw=1`, and removes an installed one (`P45`).
+
 Three caches: `CACHE_NAME` (`ais-tracker-<build hash>`, the app shell), `DATA_CACHE`
 (`ais-data-v10`), `TILE_CACHE` (`ais-tiles-v2`).
 
