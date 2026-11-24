@@ -36,7 +36,8 @@ it had.
 
 - **Planning → the superpowers chain.** `brainstorming` first; let its classification pick the
   ceremony. Most work here is *Bounded* (a scoped change to code that already exists) → short design
-  in chat, then build. Reserve spec + `writing-plans` for genuinely new subsystems.
+  in chat, then build. Reserve spec + `writing-plans` for genuinely new subsystems. Plan mode is
+  the gate and `brainstorming` is the content; `ExitPlanMode` *is* its approval. One gate, not two.
 - **Debugging → grep the pitfall index FIRST, then `superpowers:systematic-debugging`.** Look up
   your area's `[Pnn]` entries before forming a hypothesis. The expensive failure here is
   re-investigating something already solved. Use **one** debugging skill — gstack `investigate` has
@@ -45,7 +46,7 @@ it had.
   family (`autoplan`, `review`, `devex-review`, `health`, `cso`), and do not run bare
   `5-pass-review`. The gate **starts with a script, not a reviewer**:
   `.claude/skills/pre-ship-review/bin/smoke.sh` runs the whole mechanical class in ~5s with no LLM,
-  and `SMOKE_FINDINGS` must be 0 before any agent is dispatched. Then **two** passes, not five, each
+  and `SMOKE_FINDINGS` must be 0 before any agent is dispatched. Then **two** passes, not five (one under ~150 inserted lines), each
   capped at 5 findings, with **a measurement as the admission ticket**. Rebuilt 2026-09-24 from a
   measured run: three of five passes found the same four defects, the worst was reachable by one
   `git ls-files` call, and the readability pass had the lowest action rate — that is `/simplify`'s
@@ -67,6 +68,11 @@ it had.
 ---
 
 ## ⚠️ MANDATORY rules
+
+### At the start of every session — load `english-not-claudish`
+
+Invoke `english-not-claudish:english-not-claudish` before the first substantive response, and
+follow it for everything written here: chat replies, docs, commit messages.
 
 ### Verify visual changes in a browser — code reading proves nothing
 
@@ -91,6 +97,22 @@ sides silently never pre-warms (`P20`). When adding one, update **all five**:
 4. The [coverage matrix](#data-source--offline-coverage-matrix) below — the row is the audit trail.
 5. `tests/test_boat_server.py` — add it to the parity assertions, so drift fails CI instead of
    surfacing as "no data at sea" weeks later.
+
+### After each risky edit — the 30-second check, at the keyboard
+
+The cheapest defect is the one caught before a reviewer exists. Immediately after one of these
+edits, before moving to the next file:
+
+- **Edited one side of a mirror** (station lists, wind grid, polar, helm calibration)? Run the parity
+  suite now: `python3 tests/test_boat_server.py` or `node tests/test_helm.mjs` — `P20`.
+- **Added or changed a request to a host `sw.js` already handles** (NOAA, Open-Meteo, `/data/`)?
+  Read what `sw.js` does to that exact URL today. Its rules match by host, so a real-time endpoint
+  inherits cache-first and serves hours-old readings as live.
+- **Touched `sw.js`'s `ASSETS`?** `node tests/test_invariants.mjs` — `P43`.
+- **Touched a port, scheme or Pi URL?** Check the [ports table](#ports-and-who-owns-them) — `P24`.
+
+These are edit-time checks, not a self-review pass; the no-extra-verification rule above still holds.
+When one of them catches something, make it a `smoke.sh` check so nobody has to remember it.
 
 ### Before shipping a change to an offline or data path — run `/pre-ship-review`
 
@@ -536,6 +558,13 @@ maintenance. Rough tripwire: past ~30 KB, go looking.
 **Adding a pitfall.** Writeup in [docs/pitfalls.md](docs/pitfalls.md) under a new heading with the
 next unused `[Pnn]` (never renumber). CLAUDE.md gets **at most one ~15-word line** ending in that ID,
 filed under the "Touching …" group for the area it traps. State the cost, not just the rule.
+**When:** every bug fix, revert or regression fix that reveals a new trap — not only review
+findings. A `PostToolUse` hook in `.claude/settings.local.json` prompts for this, and for the doc
+reconciliation below, after every `git commit`. **Index budget:** when a group passes ~15 lines,
+merge overlapping entries in the same commit; the index must not grow without bound.
+
+**Splitting a doc** breaks inbound `file.md#anchor` links and bare relative paths silently. Before
+committing a split, grep for `<file>.md#`, and diff the substantive lines old-vs-new.
 
 **When you change behavior**, put the detail in the doc and adjust the one-liner + pointer here. A
 new topic doc gets a row in the map below.
