@@ -93,7 +93,9 @@ sides silently never pre-warms (`P20`). When adding one, update **all five**:
 1. `static/js/data-loader.js` — the fetcher, its in-memory TTL, and the URL builder.
 2. `pi/boat_server.py` — the proxy route, its `_ttl_for_*`, its `MAX_STALE_*` ceiling, **and** the
    pre-warm loop. Its generated URL must be byte-identical to (1).
-3. `static/sw.js` — the fetch handler branch, if it should work offline on GitHub Pages.
+3. `static/sw.js` — **always check it**, even for an online-only layer: its rules match by host, so it
+   already catches your request. Add the request to `isCacheFirstSafe()` only if its answer is fixed
+   for that URL (`P44`).
 4. The [coverage matrix](#data-source--offline-coverage-matrix) below — the row is the audit trail.
 5. `tests/test_boat_server.py` — add it to the parity assertions, so drift fails CI instead of
    surfacing as "no data at sea" weeks later.
@@ -107,7 +109,7 @@ edits, before moving to the next file:
   suite now: `python3 tests/test_boat_server.py` or `node tests/test_helm.mjs` — `P20`.
 - **Added or changed a request to a host `sw.js` already handles** (NOAA, Open-Meteo, `/data/`)?
   Read what `sw.js` does to that exact URL today. Its rules match by host, so a real-time endpoint
-  inherits cache-first and serves hours-old readings as live.
+  inherits cache-first and serves hours-old readings as live — `P44`.
 - **Touched `sw.js`'s `ASSETS`?** `node tests/test_invariants.mjs` — `P43`.
 - **Touched a port, scheme or Pi URL?** Check the [ports table](#ports-and-who-owns-them) — `P24`.
 
@@ -228,7 +230,7 @@ its freshness. **Audit before changing offline behavior.** Mechanics and rationa
 | Wind stations (NDBC) | `/data/wind/stations.json` | ✓ | ✗ | static JSON |
 | Tide predictions | `/api/noaa/api/prod/datagetter` | ✓ `env_prewarm_loop` | ✗ ← **gap** | 16 stations |
 | Currents predictions | `/api/noaa/api/prod/datagetter` | ✓ `env_prewarm_loop` | ✗ ← **gap** | 6 stations |
-| Water levels (real-time) | `/api/noaa/api/prod/datagetter` | ✗ (intentional, 10-min TTL) | partial | 6 stations |
+| Water levels (real-time) | `/api/noaa/api/prod/datagetter` | ✗ (intentional, 10-min TTL) | ✓ popup + legend; >30 min = stale, no verdict | 6 stations. SW: network-first, never cache-first (`P44`) |
 | Land mask | `/data/land_mask.json` | ✓ | n/a | [docs/land-mask.md](docs/land-mask.md) |
 | Meta JSON | `/data/meta.json` | ✓ | n/a | 60s TTL |
 | **NOAA chart tiles** | filesystem `/tiles/noaa/{z}/{x}/{y}.png` | `download_offline.py` | n/a | **default layer**; ArcGIS REST upstream |
@@ -266,6 +268,7 @@ safely. Look up your group's IDs in [docs/pitfalls.md](docs/pitfalls.md), by ID,
 - The `/config.json` fetch gates AIS *and* NMEA — without a timeout it wedges both `P14`
 - Local tiles exist only at z10-15, and "not github.io" wrongly captured localhost `P15`
 - SW quota eviction deleted the app shell, and the forecast hours being sailed `P16`
+- SW cache-first by host served 3-hour-old tide gauges as live, inverting the verdict `P44`
 - Bump `TILE_CACHE`'s version when the tile CDN changes, or dead tiles serve forever `P17`
 - `hostname.endsWith(host)` also matches `evil<host>` — use exact or `'.'+host` `P18`
 - Legend text interpolates fetched JSON, so `innerHTML` there is an injection sink `P19`
@@ -405,8 +408,8 @@ node tests/test_helm.mjs           # Helm tab rules + Python parity
 CI runs all eight in `deploy.yml`'s `test` job, plus `py_compile` on the Pi/root Python and `bash -n`
 on the boat shell scripts.
 
-**22 of the 43 pitfalls are mechanically enforced** — a test fails if you undo the fix. Those are
-`P01` `P03` `P06` `P07` `P08` `P10` `P11` `P15` `P16` `P18` `P20` `P21` `P22` `P24` `P33` `P34` `P36` `P37` `P40` `P41` `P42` `P43`. The rest are
+**23 of the 44 pitfalls are mechanically enforced** — a test fails if you undo the fix. Those are
+`P01` `P03` `P06` `P07` `P08` `P10` `P11` `P15` `P16` `P18` `P20` `P21` `P22` `P24` `P33` `P34` `P36` `P37` `P40` `P41` `P42` `P43` `P44`. The rest are
 documentation-only: the index is the only thing standing between you and re-introducing them. If you
 fix a doc-only pitfall's code area, consider whether an assertion could move it into the enforced set.
 

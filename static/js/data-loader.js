@@ -513,17 +513,21 @@ async function fetchTideHeights(minutesOffset = 0) {
 
 async function fetchWaterLevels() {
     const fetches = [...WATER_LEVEL_STATIONS].map(async (stationId) => {
+        const cached = _waterLevelCache.get(stationId);
+        // On a failed refresh keep the last reading: compareGaugeToPrediction()
+        // marks it stale by its own timestamp, so the legend says "stale"
+        // instead of going blank (P44).
+        const fallback = cached ? { station_id: stationId, ...cached } : null;
         try {
-            let cached = _waterLevelCache.get(stationId);
             if (cached && Date.now() - cached.fetchedAt < 10 * 60000) {
                 return { station_id: stationId, ...cached };
             }
 
             const url = `${noaaApi()}?date=latest&station=${stationId}&product=water_level&datum=MLLW&units=english&time_zone=gmt&format=json`;
             const res = await _fetchWithTimeout(url, 10000);
-            if (!res.ok) return null;
+            if (!res.ok) return fallback;
             const json = await res.json();
-            if (json.error || !json.data || !json.data.length) return null;
+            if (json.error || !json.data || !json.data.length) return fallback;
 
             const d = json.data[0];
             const entry = {
@@ -537,7 +541,7 @@ async function fetchWaterLevels() {
             _waterLevelCache.set(stationId, entry);
             return entry;
         } catch (e) {
-            return null;
+            return fallback;
         }
     });
 
@@ -547,6 +551,74 @@ async function fetchWaterLevels() {
         if (r && !isNaN(r.value)) result.set(r.station_id, r);
     }
     return result;
+}
+
+// A gauge reading older than this is not "real-time" and must not drive the
+// flow-confidence verdict (P44). A reading stamped further than
+// WATER_LEVEL_MAX_FUTURE_MS ahead of this device's clock means the clock is
+// wrong, so its age is unknowable and it is not fresh either.
+const WATER_LEVEL_MAX_AGE_MS = 30 * 60000;
+const WATER_LEVEL_MAX_FUTURE_MS = 5 * 60000;
+
+// Compare a gauge reading with the tide prediction AT THE READING'S OWN TIME.
+// Comparing an old reading with the prediction for now inverts the answer on a
+// moving tide: a 3-hour-old reading on a rising king tide read "1.8 ft lower"
+// while the gauges were 1.2 ft higher (P44). Returns null for an unparseable
+// time; predicted/delta are null when the reading falls outside the prediction
+// window (no nearest-value guess).
+function compareGaugeToPrediction(stationId, obs, now = Date.now()) {
+    const t = new Date(String(obs.time).replace(' ', 'T') + 'Z');
+    if (isNaN(t.getTime())) return null;
+    const ageMs = now - t.getTime();
+
+    let predicted = null;
+    const data = _tideCache.get(stationId);
+    if (data) {
+        const parsed = _parsePredictions(data.predictions);
+        if (parsed.length && t >= parsed[0].time && t <= parsed[parsed.length - 1].time) {
+            predicted = _interpolateHeight(data.predictions, t);
+        }
+    }
+    const clockMismatch = ageMs < -WATER_LEVEL_MAX_FUTURE_MS;
+    return {
+        observed: obs.value,
+        predicted,
+        delta: predicted == null ? null : Math.round((obs.value - predicted) * 100) / 100,
+        ageMin: Math.round(ageMs / 60000),
+        fresh: !clockMismatch && ageMs <= WATER_LEVEL_MAX_AGE_MS,
+        clockMismatch,
+    };
+}
+
+// The flow-legend verdict from stations carrying .gauge (compareGaugeToPrediction).
+// Only fresh readings with a delta vote. Never returns "nothing": when no
+// reading can vote it returns level 'unavailable' with the reason, so the
+// legend says why instead of going blank (P44).
+//   level:  'high' | 'moderate' | 'low' | 'unavailable'
+//   reason: 'no-readings' | 'stale' | 'clock' | 'no-prediction'  (unavailable only)
+function flowConfidenceVerdict(stations) {
+    const withReading = (stations || []).filter(s => s && s.gauge);
+    if (!withReading.length) return { level: 'unavailable', reason: 'no-readings' };
+
+    const voting = withReading.filter(s => s.gauge.fresh && s.gauge.delta != null);
+    if (!voting.length) {
+        if (withReading.some(s => s.gauge.fresh)) return { level: 'unavailable', reason: 'no-prediction' };
+        const aged = withReading.filter(s => !s.gauge.clockMismatch);
+        if (!aged.length) return { level: 'unavailable', reason: 'clock' };
+        return {
+            level: 'unavailable', reason: 'stale',
+            newestAgeMin: Math.min(...aged.map(s => s.gauge.ageMin)),
+        };
+    }
+
+    const sum = voting.reduce((a, s) => a + s.gauge.delta, 0);
+    const avgDelta = voting.reduce((a, s) => a + Math.abs(s.gauge.delta), 0) / voting.length;
+    return {
+        level: avgDelta <= 0.3 ? 'high' : avgDelta <= 0.5 ? 'moderate' : 'low',
+        avgDelta,
+        sign: sum > 0 ? 'higher' : 'lower',
+        used: voting.length,
+    };
 }
 
 // --- Tidal Current Interpolation ---

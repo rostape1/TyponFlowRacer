@@ -193,5 +193,144 @@ console.log('Download sweep (P03):');
     check('total failure reports false, not success-with-gaps', flow === false);
 }
 
+// --- Gauge vs prediction: compare at the reading's time, reject old readings (P44) ---
+// The bug: a 3-hour-old reading (served by the SW) was compared with the
+// prediction for NOW. On a rising king tide that said "1.8 ft lower" when the
+// gauges were 1.2 ft higher.
+console.log('Gauge vs prediction (P44):');
+{
+    const sb = {
+        localStorage: { getItem: () => '{}' },
+        console, Date, Math, JSON, Map, Set, Array, Number, String, Object,
+        parseInt, parseFloat, isNaN, AbortController, setTimeout, clearTimeout, Promise,
+        window: undefined, fetch: async () => { throw new Error('no network in this test'); },
+    };
+    const keys = Object.keys(sb);
+    const { compareGaugeToPrediction, _tideCache, WATER_LEVEL_MAX_AGE_MS } = new Function(...keys,
+        src + '\n; return { compareGaugeToPrediction, _tideCache, WATER_LEVEL_MAX_AGE_MS };'
+    )(...keys.map(k => sb[k]));
+
+    // A tide rising 1 ft/hour: 2.0 ft at 16:00Z up to 6.0 ft at 20:00Z, every 6 min.
+    const predictions = [];
+    for (let m = 0; m <= 240; m += 6) {
+        const t = new Date(Date.UTC(2026, 10, 24, 16, m));
+        predictions.push({ t: t.toISOString().slice(0, 16).replace('T', ' '), v: (2 + m / 60).toFixed(3) });
+    }
+    _tideCache.set('9414290', { predictions, fetchedAt: Date.now() });
+    const now = Date.UTC(2026, 10, 24, 19, 48);
+
+    // Fresh reading, 1.2 ft above its own-time prediction (5.7 at 19:42).
+    const fresh = compareGaugeToPrediction('9414290', { value: 6.9, time: '2026-11-24 19:42' }, now);
+    check('fresh reading is compared with the prediction at its own time',
+        fresh && Math.abs(fresh.predicted - 5.7) < 0.01, JSON.stringify(fresh));
+    check('fresh reading: delta is +1.2 (higher)', fresh && Math.abs(fresh.delta - 1.2) < 0.01, JSON.stringify(fresh));
+    check('fresh reading is marked fresh', fresh && fresh.fresh === true);
+    check('age is reported in minutes', fresh && fresh.ageMin === 6, JSON.stringify(fresh));
+
+    // The bug's input: a reading from 16:42, also 1.2 ft above ITS prediction (2.7).
+    // Against NOW's prediction (5.8) it would read 3.1 ft "lower".
+    const old = compareGaugeToPrediction('9414290', { value: 3.9, time: '2026-11-24 16:42' }, now);
+    check('3-hour-old reading is marked stale', old && old.fresh === false, JSON.stringify(old));
+    check('stale reading still compares at its own time, never at now',
+        old && Math.abs(old.delta - 1.2) < 0.01, JSON.stringify(old));
+
+    check('limit is 30 minutes', WATER_LEVEL_MAX_AGE_MS === 30 * 60000);
+    const edge = compareGaugeToPrediction('9414290', { value: 5, time: '2026-11-24 19:18' }, now);
+    check('exactly 30 min old is still fresh', edge && edge.fresh === true, JSON.stringify(edge));
+    const over = compareGaugeToPrediction('9414290', { value: 5, time: '2026-11-24 19:17' }, now);
+    check('31 min old is stale', over && over.fresh === false, JSON.stringify(over));
+
+    const before = compareGaugeToPrediction('9414290', { value: 5, time: '2026-11-24 15:30' }, now);
+    check('reading outside the prediction window has no delta (no nearest-value guess)',
+        before && before.predicted === null && before.delta === null, JSON.stringify(before));
+    check('a station with no predictions has no delta',
+        (compareGaugeToPrediction('9999999', { value: 5, time: '2026-11-24 19:42' }, now) || {}).delta === null);
+    check('an unparseable time returns null',
+        compareGaugeToPrediction('9414290', { value: 5, time: 'garbage' }, now) === null);
+
+    // Device clock behind the gauge: an old cached reading must not pass as live.
+    const ahead5 = compareGaugeToPrediction('9414290', { value: 5, time: '2026-11-24 19:53' }, now);
+    check('5 min in the future is still fresh (clock jitter)', ahead5 && ahead5.fresh === true && !ahead5.clockMismatch, JSON.stringify(ahead5));
+    const ahead40 = compareGaugeToPrediction('9414290', { value: 5, time: '2026-11-24 20:28' }, now);
+    check('40 min in the future is NOT fresh', ahead40 && ahead40.fresh === false, JSON.stringify(ahead40));
+    check('40 min in the future is flagged as a clock mismatch', ahead40 && ahead40.clockMismatch === true, JSON.stringify(ahead40));
+}
+
+// --- The legend verdict (P44): only fresh readings, compared at their own time ---
+console.log('Flow-confidence verdict (P44):');
+{
+    const sb = {
+        localStorage: { getItem: () => '{}' },
+        console, Date, Math, JSON, Map, Set, Array, Number, String, Object,
+        parseInt, parseFloat, isNaN, AbortController, setTimeout, clearTimeout, Promise,
+        window: undefined, fetch: async () => { throw new Error('no network'); },
+    };
+    const keys = Object.keys(sb);
+    const { flowConfidenceVerdict } = new Function(...keys,
+        src + '\n; return { flowConfidenceVerdict };')(...keys.map(k => sb[k]));
+    const G = (delta, extra = {}) => ({ gauge: { delta, fresh: true, ageMin: 6, clockMismatch: false, ...extra } });
+
+    // The king-tide case: fresh gauges 0.5..1.2 ft higher.
+    let v = flowConfidenceVerdict([G(1.23), G(1.13), G(1.17), G(0.70), G(0.53)]);
+    check('king tide: says HIGHER', v.sign === 'higher', JSON.stringify(v));
+    check('king tide: low confidence (avg > 0.5)', v.level === 'low' && Math.abs(v.avgDelta - 0.952) < 0.01, JSON.stringify(v));
+
+    v = flowConfidenceVerdict([G(-0.4), G(-0.4)]);
+    check('lower, moderate band', v.level === 'moderate' && v.sign === 'lower', JSON.stringify(v));
+    v = flowConfidenceVerdict([G(0.1), G(-0.2)]);
+    check('within 0.3 is high confidence', v.level === 'high', JSON.stringify(v));
+
+    // Stale readings never vote — the bug's shape: an old reading that looks very low.
+    v = flowConfidenceVerdict([G(0.2), G(-3.0, { fresh: false, ageMin: 190 })]);
+    check('a stale reading is excluded from the verdict', v.level === 'high' && v.used === 1, JSON.stringify(v));
+
+    v = flowConfidenceVerdict([G(-3.0, { fresh: false, ageMin: 190 }), G(-2.0, { fresh: false, ageMin: 185 })]);
+    check('all stale: unavailable, reason stale', v.level === 'unavailable' && v.reason === 'stale', JSON.stringify(v));
+    check('all stale: reports the newest age', v.newestAgeMin === 185, JSON.stringify(v));
+
+    v = flowConfidenceVerdict([{ name: 'no gauge' }, { name: 'none either' }]);
+    check('no readings at all: unavailable, reason no-readings (never blank)', v.level === 'unavailable' && v.reason === 'no-readings', JSON.stringify(v));
+    v = flowConfidenceVerdict([]);
+    check('no stations at all: unavailable, reason no-readings', v.level === 'unavailable' && v.reason === 'no-readings', JSON.stringify(v));
+
+    v = flowConfidenceVerdict([G(null), G(null)]);
+    check('fresh but outside the prediction window: reason no-prediction, not stale', v.level === 'unavailable' && v.reason === 'no-prediction', JSON.stringify(v));
+
+    v = flowConfidenceVerdict([G(1.0, { fresh: false, clockMismatch: true, ageMin: -40 })]);
+    check('clock mismatch only: reason clock', v.level === 'unavailable' && v.reason === 'clock', JSON.stringify(v));
+}
+
+// --- fetchWaterLevels keeps the last reading when a refresh fails (P44) ---
+// Dropping it turned "verdict" into a blank legend; kept, it shows as stale.
+console.log('Water-level refresh failure (P44):');
+{
+    let mode = 'ok';
+    const sb = {
+        localStorage: { getItem: () => '{}' },
+        console, Date, Math, JSON, Map, Set, Array, Number, String, Object,
+        parseInt, parseFloat, isNaN, AbortController, setTimeout, clearTimeout, Promise,
+        window: undefined,
+        fetch: async () => {
+            if (mode === 'throw') throw new TypeError('offline');
+            if (mode === '503') return { ok: false, status: 503, json: async () => ({}) };
+            return { ok: true, json: async () => ({ data: [{ t: '2026-11-24 19:42', v: '7.239', s: '0.1', q: 'p' }] }) };
+        },
+    };
+    const keys = Object.keys(sb);
+    const { fetchWaterLevels, _waterLevelCache } = new Function(...keys,
+        src + '\n; return { fetchWaterLevels, _waterLevelCache };')(...keys.map(k => sb[k]));
+
+    let r = await fetchWaterLevels();
+    check('first fetch returns readings', r.size > 0 && r.get('9414290').value === 7.239);
+    for (const e of _waterLevelCache.values()) e.fetchedAt -= 11 * 60000;   // expire the 10-min memo
+    mode = 'throw';
+    r = await fetchWaterLevels();
+    check('network error: last reading is kept (with its original time)',
+        r.get('9414290') && r.get('9414290').time === '2026-11-24 19:42', JSON.stringify([...r.keys()]));
+    mode = '503';
+    r = await fetchWaterLevels();
+    check('HTTP 503: last reading is kept', !!r.get('9414290'));
+}
+
 console.log(`\n${pass + fail} tests: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

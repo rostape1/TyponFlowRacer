@@ -787,6 +787,61 @@ Two rules follow:
 Five zero-context review agents found this. The assertion finds it in 0.2 seconds. Prefer the
 assertion — that is the whole argument for the smoke-prepass model.
 
+## The Service Worker served hours-old gauge readings as live, and inverted the verdict [P44]
+
+**`ENFORCED`** — `tests/test_invariants.mjs` calls `sw.js`'s real fetch handler after an offline
+download and asserts a `water_level` request goes to the network; it also fails if `data-loader.js`
+requests a NOAA product that `isCacheFirstSafe()` has no decided answer for.
+`tests/test_staleness.mjs` asserts `compareGaugeToPrediction()` compares at the reading's own time,
+marks readings over 30 minutes old (or over 5 minutes in the future) as not fresh, and that
+`flowConfidenceVerdict()` lets only fresh readings vote and never returns "nothing";
+`fetchWaterLevels()` keeps the last reading on a failed refresh. `test_invariants.mjs` also asserts
+`updateFlowConfidence()` renders that verdict instead of computing its own. Verified by mutation:
+host-only cache-first, a denylist, comparing against now, no age check, stale readings voting,
+future timestamps, a blank legend, and recomputing in `app.js` each fail.
+
+On 2026-11-24, during a king tide with heavy rain, the flow legend said "🔴 Low confidence (avg
+Δ1.8ft lower) — water much lower, expect weaker currents & later slack". The gauges were
+0.5–1.2 ft **higher** than predicted. A crew acting on it would expect the opposite of what the
+water was doing.
+
+Two decisions a week apart, each reasonable alone:
+
+1. **2026-04-19** — `sw.js` began caching env-API responses, and after an offline download served
+   them **cache-first, matched by host**. Every NOAA request then was a *prediction*, which is fixed
+   for its URL, so this was safe.
+2. **2026-04-26** — real-time water levels were added on the **same host**, as `date=latest`. That
+   URL never changes while its answer changes every 6 minutes. It inherited cache-first, so a page
+   reopened hours later got the reading from its last visit. The confidence check then compared
+   that reading with the prediction for **now**, never with the prediction at the reading's own
+   time. It stored `obs_time` and never used it. On a rising tide an old reading always looks low.
+
+A reading ~3 h old reproduces the reported −1.8 ft against live NOAA data.
+
+Why nothing caught it: the Pi got the right rule (10-min TTL, a 24 h stale ceiling, "a stale
+real-time gauge reading is worse than none") and the browser did not. The 5-file checklist said
+"`sw.js` — if it should work offline", so a layer meant to be online-only skipped it. But `sw.js`
+matches by host and catches the request anyway. Local dev and the Pi run no Service Worker, so it
+appeared only on GitHub Pages, after a download, hours later, on a moving tide.
+
+Rules:
+
+- **`sw.js` cache-first is an allowlist of requests whose answer is fixed per URL**
+  (`isCacheFirstSafe()`), never a host match. Anything unlisted is network-first, so a new
+  real-time endpoint fails visibly offline instead of serving an old answer as live.
+- **Compare a reading with the prediction at the reading's own time, and check its age.** A reading
+  past `WATER_LEVEL_MAX_AGE_MS`, or stamped ahead of the device clock, gives no verdict. The legend
+  then says *why* the gauge check is unavailable (stale, no readings, device clock, no prediction
+  covering the reading time); it never goes blank, and the popup shows the prediction the
+  difference was taken against.
+- **The verdict lives in `data-loader.js` (`flowConfidenceVerdict()`), where it is tested.**
+  `app.js` only renders it. The original inversion was in untested legend code.
+- **A new layer on a host `sw.js` already handles must check what `sw.js` does to its URL**, even if
+  the layer is not meant to work offline.
+
+The Pi side still uses a denylist: `_ttl_for_noaa()` gives any unknown NOAA product the 6 h
+prediction TTL. Harmless today, the same trap for the next real-time product.
+
 ## Adding a pitfall
 
 Writeup goes here under a new `## <one-line title> [Pnn]` heading with the next unused number.

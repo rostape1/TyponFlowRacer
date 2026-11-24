@@ -32,6 +32,25 @@ function isEnvApiHost(hostname) {
   return ENV_API_HOSTS.some((h) => hostname === h);
 }
 
+// May this env-API request be served cache-first after an offline download?
+// Only if the answer is fixed for its URL. This is an ALLOWLIST: an unlisted
+// request goes network-first, so a new real-time endpoint on a shared host
+// fails visibly offline instead of serving an old answer as live. `date=latest`
+// water levels have one URL and a new answer every 6 minutes; matched by host
+// alone they were served hours old, and the flow-confidence check said "water
+// much lower" during a king tide (P44).
+const CACHE_FIRST_NOAA_PRODUCTS = ['predictions', 'currents_predictions'];
+
+function isCacheFirstSafe(url) {
+  const date = url.searchParams.get('date');
+  if (date === 'latest' || date === 'recent') return false;
+  if (url.hostname === 'api.open-meteo.com') return url.pathname === '/v1/forecast';
+  if (url.hostname === 'api.tidesandcurrents.noaa.gov') {
+    return CACHE_FIRST_NOAA_PRODUCTS.includes(url.searchParams.get('product'));
+  }
+  return false;
+}
+
 const ASSETS = [
   './',
   'css/style.css',
@@ -212,9 +231,10 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // External environmental APIs — network-first, never cache errors
+  // External environmental APIs — network-first, never cache errors.
+  // Cache-first after an offline download only for answers fixed per URL (P44).
   if (isEnvApiHost(url.hostname)) {
-    if (_dataCacheFirst) {
+    if (_dataCacheFirst && isCacheFirstSafe(url)) {
       event.respondWith(
         caches.open(DATA_CACHE).then((cache) =>
           cache.match(event.request).then((cached) => {

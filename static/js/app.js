@@ -1911,7 +1911,7 @@ async function loadWindField() {
 _configPromise.then(() => loadWindField());
 
 // --- Tide Height Stations ---
-let tideStations = [];  // array of {station_id, name, lat, lon, height_ft, next_extreme, observed_ft?, obs_time?}
+let tideStations = [];  // array of {station_id, name, lat, lon, height_ft, next_extreme, observed_ft?, obs_time?, gauge? (compareGaugeToPrediction)}
 let tideStationMarkers = null;  // L.layerGroup
 let tideMarkersVisible = false;
 
@@ -1929,6 +1929,9 @@ async function loadTideHeight() {
                         if (wl) {
                             s.observed_ft = wl.value;
                             s.obs_time = wl.time;
+                            // Against the prediction at the reading's own time,
+                            // with its age — never against now's prediction (P44).
+                            s.gauge = compareGaugeToPrediction(s.station_id, wl);
                         }
                     }
                 } catch (e) {
@@ -1961,7 +1964,7 @@ function updateTideMarkers() {
         const textY = size / 2 + (hasData ? 1 : 5);
         const fontSize = hasData ? 11 : 12;
         const ftLine = hasData ? `<text x="${size/2}" y="${size/2 + 13}" text-anchor="middle" fill="${color}" font-size="8">ft</text>` : '';
-        const hasGauge = s.observed_ft != null;
+        const hasGauge = s.gauge != null && s.gauge.fresh;
         const gaugeRing = hasGauge ? `<circle cx="${size/2}" cy="${size/2}" r="${size/2 - 0.5}" fill="none" stroke="#2ecc71" stroke-width="1.5" stroke-dasharray="3,2"/>` : '';
         const svg = `<svg width="${size}" height="${size}" viewBox="0 0 ${size} ${size}" xmlns="http://www.w3.org/2000/svg">
             <circle cx="${size/2}" cy="${size/2}" r="${size/2 - 2}" fill="rgba(10,22,40,0.9)" stroke="${color}" stroke-width="2.5"/>
@@ -1983,14 +1986,26 @@ function updateTideMarkers() {
             popupRows = `<div class="popup-row"><span class="popup-label">Tide Height</span><span class="popup-value" style="color:#888">Data unavailable</span></div>`;
         } else {
             popupRows = `<div class="popup-row"><span class="popup-label">Predicted</span><span class="popup-value" style="color:${color}">${sign}${h.toFixed(2)} ft</span></div>`;
-            if (s.observed_ft != null) {
+            if (s.observed_ft != null && s.gauge) {
+                const g = s.gauge;
                 const obsSign = s.observed_ft >= 0 ? '+' : '';
-                const obsColor = s.observed_ft >= 0 ? '#5dade2' : '#e74c3c';
-                const delta = s.observed_ft - h;
-                const deltaSign = delta >= 0 ? '+' : '';
-                const deltaColor = Math.abs(delta) <= 0.3 ? '#2ecc71' : '#f39c12';
-                popupRows += `<div class="popup-row"><span class="popup-label">Observed</span><span class="popup-value" style="color:${obsColor}">${obsSign}${s.observed_ft.toFixed(2)} ft</span></div>`;
-                popupRows += `<div class="popup-row"><span class="popup-label">Difference</span><span class="popup-value" style="color:${deltaColor}">${deltaSign}${delta.toFixed(2)} ft</span></div>`;
+                const obsColor = !g.fresh ? '#888' : (s.observed_ft >= 0 ? '#5dade2' : '#e74c3c');
+                const age = g.clockMismatch ? 'time ahead of this device'
+                    : g.ageMin < 90 ? `${g.ageMin} min ago` : `${(g.ageMin / 60).toFixed(1)} h ago`;
+                popupRows += `<div class="popup-row"><span class="popup-label">Observed</span><span class="popup-value" style="color:${obsColor}">${obsSign}${s.observed_ft.toFixed(2)} ft · ${age}</span></div>`;
+                if (g.clockMismatch) {
+                    popupRows += `<div class="popup-row"><span class="popup-label">Difference</span><span class="popup-value" style="color:#e74c3c">device clock wrong — not compared</span></div>`;
+                } else if (!g.fresh) {
+                    popupRows += `<div class="popup-row"><span class="popup-label">Difference</span><span class="popup-value" style="color:#e74c3c">stale reading — not compared</span></div>`;
+                } else if (g.delta != null) {
+                    // Difference is against the prediction at the reading's time,
+                    // so show that prediction too or the rows don't add up (P44).
+                    const pSign = g.predicted >= 0 ? '+' : '';
+                    const deltaSign = g.delta >= 0 ? '+' : '';
+                    const deltaColor = Math.abs(g.delta) <= 0.3 ? '#2ecc71' : '#f39c12';
+                    popupRows += `<div class="popup-row"><span class="popup-label">Predicted @ reading</span><span class="popup-value">${pSign}${g.predicted.toFixed(2)} ft</span></div>`;
+                    popupRows += `<div class="popup-row"><span class="popup-label">Difference</span><span class="popup-value" style="color:${deltaColor}">${deltaSign}${g.delta.toFixed(2)} ft</span></div>`;
+                }
             }
             if (s.next_extreme) {
                 const ex = s.next_extreme;
@@ -2034,24 +2049,40 @@ function updateFlowConfidence() {
         return;
     }
 
-    const gauged = tideStations.filter(s => s.observed_ft != null && s.height_ft != null);
-    if (!gauged.length) {
-        el.innerHTML = '';
+    // The verdict lives in data-loader.js's flowConfidenceVerdict() so it is
+    // tested; this only renders it. It never returns "nothing" (P44).
+    const v = flowConfidenceVerdict(tideStations);
+    const dim = (t) => `<span style="color:#4a6a8a">${t}</span>`;
+
+    if (v.level === 'unavailable') {
+        let why, detail;
+        if (v.reason === 'stale') {
+            const a = v.newestAgeMin;
+            why = `(newest reading ${a < 90 ? `${a} min` : `${(a / 60).toFixed(1)} h`} old)`;
+            detail = 'No live gauge data — can\'t confirm current predictions';
+        } else if (v.reason === 'clock') {
+            why = '(gauge times ahead of this device)';
+            detail = 'Check this device\'s clock — readings can\'t be aged';
+        } else if (v.reason === 'no-prediction') {
+            why = '(readings are live)';
+            detail = 'No tide prediction covers the reading time yet — retrying';
+        } else {
+            why = '(no gauge readings)';
+            detail = 'Gauges unreachable — can\'t confirm current predictions';
+        }
+        el.innerHTML = `<span>⚪ Gauge check unavailable</span> ${dim(why)}<br>${dim(detail)}`;
         return;
     }
 
-    const deltas = gauged.map(s => Math.abs(s.observed_ft - s.height_ft));
-    const maxDelta = Math.max(...deltas);
-    const avgDelta = deltas.reduce((a, b) => a + b, 0) / deltas.length;
-
-    const avgSign = gauged.reduce((a, s) => a + (s.observed_ft - s.height_ft), 0) > 0 ? 'higher' : 'lower';
+    const avgDelta = v.avgDelta;
+    const avgSign = v.sign;
 
     let dot, label, detail;
-    if (avgDelta <= 0.3) {
+    if (v.level === 'high') {
         dot = '🟢';
         label = 'High confidence';
         detail = 'Gauges match predictions — current speed & timing reliable';
-    } else if (avgDelta <= 0.5) {
+    } else if (v.level === 'moderate') {
         dot = '🟡';
         label = 'Moderate confidence';
         detail = avgSign === 'higher'
